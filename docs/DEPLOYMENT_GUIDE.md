@@ -664,6 +664,115 @@ Bedrock Knowledge Base가 생성되었지만 문서 인덱싱이 실패
 **해결:**
 위의 "Step 5: OpenSearch Index Manual Creation" 참조
 
+### Issue 8: S3 Replication Role Missing KMS Permissions
+
+**증상:**
+```
+ReplicationStatus: FAILED
+```
+
+**원인:** S3 Replication Role에 KMS 복호화/암호화 권한 누락
+
+**해결:**
+```bash
+# Replication Role에 KMS 권한 추가
+aws iam put-role-policy \
+  --role-name bos-ai-s3-replication-role-dev \
+  --policy-name s3-replication-kms-policy \
+  --policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": [
+          "s3:GetReplicationConfiguration",
+          "s3:ListBucket"
+        ],
+        "Resource": "arn:aws:s3:::bos-ai-documents-seoul"
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "s3:GetObjectVersionForReplication",
+          "s3:GetObjectVersionAcl",
+          "s3:GetObjectVersionTagging"
+        ],
+        "Resource": "arn:aws:s3:::bos-ai-documents-seoul/*"
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "s3:ReplicateObject",
+          "s3:ReplicateDelete",
+          "s3:ReplicateTags"
+        ],
+        "Resource": "arn:aws:s3:::bos-ai-documents-us/*"
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "kms:Decrypt",
+          "kms:DescribeKey",
+          "kms:GenerateDataKey"
+        ],
+        "Resource": "arn:aws:kms:us-east-1:533335672315:key/2e99e4c4-c341-440d-b3e1-ae2bdd152825"
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "kms:Encrypt",
+          "kms:GenerateDataKey",
+          "kms:DescribeKey"
+        ],
+        "Resource": "arn:aws:kms:us-east-1:533335672315:key/2e99e4c4-c341-440d-b3e1-ae2bdd152825"
+      }
+    ]
+  }'
+```
+
+### Issue 9: Bedrock Knowledge Base Missing S3 Permissions
+
+**증상:**
+```
+Ingestion Job Status: FAILED
+Error: User is not authorized to perform s3:ListBucket on resource
+```
+
+**원인:** Bedrock Knowledge Base Role에 S3 ListBucket 및 GetObject 권한 누락
+
+**해결:**
+```bash
+# Bedrock KB Role에 S3 권한 추가
+aws iam put-role-policy \
+  --role-name bos-ai-bedrock-kb-role-dev \
+  --policy-name bedrock-kb-s3-access \
+  --policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": [
+          "s3:ListBucket",
+          "s3:GetObject"
+        ],
+        "Resource": [
+          "arn:aws:s3:::bos-ai-documents-us",
+          "arn:aws:s3:::bos-ai-documents-us/*"
+        ]
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "kms:Decrypt",
+          "kms:DescribeKey",
+          "kms:GenerateDataKey"
+        ],
+        "Resource": "arn:aws:kms:us-east-1:533335672315:key/2e99e4c4-c341-440d-b3e1-ae2bdd152825"
+      }
+    ]
+  }'
+```
+
 ## Troubleshooting
 
 ### Common Issues

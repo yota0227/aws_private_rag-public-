@@ -26,38 +26,54 @@
 ```bash
 # 단일 파일 업로드
 aws s3 cp document.pdf s3://bos-ai-documents-seoul/documents/ \
+  --region ap-northeast-2 \
   --metadata document-type=spec,chunking-strategy=hierarchical
 
 # 디렉토리 업로드
 aws s3 sync ./documents/ s3://bos-ai-documents-seoul/documents/ \
+  --region ap-northeast-2 \
   --metadata document-type=text,chunking-strategy=semantic
 
 # RTL 파일 업로드 (특수 메타데이터)
 aws s3 cp design.v s3://bos-ai-documents-seoul/rtl/ \
+  --region ap-northeast-2 \
   --metadata document-type=rtl,chunking-strategy=semantic,preserve-structure=true
 ```
 
-**Python SDK 사용:**
+**AWS Console 웹 UI 사용:**
 
-```python
-import boto3
+1. AWS Console → S3 → `bos-ai-documents-seoul` 버킷 선택
+2. `documents` 폴더 열기
+3. "Upload" 버튼 클릭
+4. 파일 선택 또는 드래그 앤 드롭
+5. 메타데이터 추가 (선택사항)
+6. Upload 클릭
 
-s3_client = boto3.client('s3', region_name='ap-northeast-2')
+**자동 복제 흐름:**
+```
+Seoul S3 업로드 
+  ↓ (자동 복제)
+US S3 버킷에 복제
+  ↓ (자동 감지)
+Bedrock Knowledge Base 인덱싱
+  ↓
+OpenSearch 벡터 저장
+```
 
-# 문서 업로드
-s3_client.upload_file(
-    'document.pdf',
-    'bos-ai-documents-seoul',
-    'documents/document.pdf',
-    ExtraArgs={
-        'Metadata': {
-            'document-type': 'spec',
-            'chunking-strategy': 'hierarchical',
-            'version': '1.0',
-            'classification': 'internal'
-        }
-    }
-)
+**복제 상태 확인:**
+```bash
+# 복제 상태 확인
+aws s3api head-object \
+  --bucket bos-ai-documents-seoul \
+  --key documents/document.pdf \
+  --region ap-northeast-2 \
+  --query 'ReplicationStatus'
+
+# 가능한 상태:
+# - PENDING: 복제 대기 중
+# - COMPLETED: 복제 완료 ✅
+# - FAILED: 복제 실패 (권한 확인 필요)
+# - REPLICA: 복제본 (대상 버킷)
 ```
 
 #### Document Type 메타데이터
@@ -173,7 +189,7 @@ aws bedrock-agent-runtime retrieve-and-generate \
     "type": "KNOWLEDGE_BASE",
     "knowledgeBaseConfiguration": {
       "knowledgeBaseId": "'$KB_ID'",
-      "modelArn": "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-v2"
+      "modelArn": "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0"
     }
   }' \
   --region us-east-1
@@ -202,7 +218,7 @@ response = bedrock_agent_runtime.retrieve_and_generate(
         'type': 'KNOWLEDGE_BASE',
         'knowledgeBaseConfiguration': {
             'knowledgeBaseId': KB_ID,
-            'modelArn': 'arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-v2',
+            'modelArn': 'arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0',
             'retrievalConfiguration': {
                 'vectorSearchConfiguration': {
                     'numberOfResults': 5
@@ -214,6 +230,34 @@ response = bedrock_agent_runtime.retrieve_and_generate(
 
 print(json.dumps(response, indent=2, ensure_ascii=False))
 ```
+
+#### 실제 테스트 결과
+
+**테스트 문서:** `test-document-v2.txt` (반도체 설계 프로세스 관련)
+
+**쿼리:** "반도체 설계 프로세스의 단계를 설명해주세요"
+
+**응답:**
+```
+반도체 설계 프로세스는 다음과 같은 5단계로 이루어집니다:
+
+1. 요구사항 분석: 성능 목표, 전력 소비 제약, 면적 제약 등을 정의합니다.
+
+2. 아키텍처 설계: 시스템 아키텍처를 결정하고 주요 컴포넌트와 인터페이스를 식별합니다.
+
+3. RTL 설계: Verilog/VHDL로 구현하고 시뮬레이션 및 검증, 합성 준비를 합니다.
+
+4. 물리 설계: 배치 및 배선, 타이밍 클로저, 전력 최적화를 수행합니다.
+
+5. 검증: 기능, 타이밍, 전력 검증을 통해 설계를 검증합니다.
+```
+
+**출처:**
+- S3 위치: `s3://bos-ai-documents-us/documents/test-document-v2.txt`
+- 청크 ID: `1%3A0%3ABGItcZwBuTAsoOdhEFZj`
+- Data Source ID: `211WMHQAOK`
+
+**결론:** ✅ RAG 시스템이 완전히 작동합니다!
 
 ### Manual Re-indexing
 
@@ -244,6 +288,48 @@ aws bedrock-agent get-ingestion-job \
   --region us-east-1 \
   --query 'ingestionJob.status'
 ```
+
+**실제 테스트 결과:**
+
+```bash
+# Ingestion Job 시작
+$ aws bedrock-agent start-ingestion-job \
+    --knowledge-base-id FNNOP3VBZV \
+    --data-source-id 211WMHQAOK \
+    --region us-east-1
+
+# 응답:
+{
+    "ingestionJob": {
+        "ingestionJobId": "KZBHY3ZRCU",
+        "status": "STARTING"
+    }
+}
+
+# Job 완료 후 상태 확인
+$ aws bedrock-agent get-ingestion-job \
+    --knowledge-base-id FNNOP3VBZV \
+    --data-source-id 211WMHQAOK \
+    --ingestion-job-id KZBHY3ZRCU \
+    --region us-east-1
+
+# 응답:
+{
+    "ingestionJob": {
+        "status": "COMPLETE",
+        "statistics": {
+            "numberOfDocumentsScanned": 1,
+            "numberOfNewDocumentsIndexed": 1,
+            "numberOfDocumentsFailed": 0
+        }
+    }
+}
+```
+
+**주의:** Ingestion Job이 실패하면 다음을 확인하세요:
+1. Bedrock KB Role에 S3 ListBucket, GetObject 권한이 있는지 확인
+2. KMS 복호화 권한이 있는지 확인
+3. S3 버킷 경로가 올바른지 확인
 
 ### OpenSearch Index Management
 
@@ -512,6 +598,7 @@ aws bedrock-agent list-data-sources \
 # 최근 Ingestion Job 확인
 aws bedrock-agent list-ingestion-jobs \
   --knowledge-base-id $KB_ID \
+  --data-source-id <data-source-id> \
   --region us-east-1 \
   --max-results 5
 ```
@@ -519,9 +606,63 @@ aws bedrock-agent list-ingestion-jobs \
 **해결:**
 1. Data Source가 올바르게 구성되었는지 확인
 2. S3 버킷 (bos-ai-documents-us)에 문서가 있는지 확인
-3. Ingestion Job이 성공적으로 완료되었는지 확인
+3. Ingestion Job이 성공적으로 완료되었는지 확인 (status: COMPLETE)
 4. OpenSearch 인덱스가 생성되었는지 확인
 5. 필요시 수동 재인덱싱 실행
+
+**주의:** Claude v2는 더 이상 지원되지 않습니다. Claude v3 Sonnet을 사용하세요:
+```bash
+modelArn: "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0"
+```
+
+#### Ingestion Job 실패
+
+**증상:**
+```
+Ingestion Job Status: FAILED
+Error: User is not authorized to perform s3:ListBucket
+```
+
+**원인:** Bedrock Knowledge Base Role에 S3 권한 누락
+
+**해결:**
+```bash
+# Bedrock KB Role에 S3 권한 추가
+aws iam put-role-policy \
+  --role-name bos-ai-bedrock-kb-role-dev \
+  --policy-name bedrock-kb-s3-access \
+  --policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": [
+          "s3:ListBucket",
+          "s3:GetObject"
+        ],
+        "Resource": [
+          "arn:aws:s3:::bos-ai-documents-us",
+          "arn:aws:s3:::bos-ai-documents-us/*"
+        ]
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "kms:Decrypt",
+          "kms:DescribeKey",
+          "kms:GenerateDataKey"
+        ],
+        "Resource": "arn:aws:kms:us-east-1:533335672315:key/2e99e4c4-c341-440d-b3e1-ae2bdd152825"
+      }
+    ]
+  }'
+
+# 권한 추가 후 Ingestion Job 재시작
+aws bedrock-agent start-ingestion-job \
+  --knowledge-base-id FNNOP3VBZV \
+  --data-source-id 211WMHQAOK \
+  --region us-east-1
+```
 
 #### Bedrock API 오류
 
@@ -593,45 +734,113 @@ terraform apply
 
 ### S3 Replication Issues
 
-#### 복제 지연
+#### 복제 실패 (FAILED Status)
 
-**증상:** 문서가 Seoul 버킷에 업로드되었지만 US 버킷에 나타나지 않음
+**증상:** Replication Status가 `FAILED`
+
+**원인:** S3 Replication Role에 KMS 권한 누락
 
 **진단:**
 
 ```bash
 # Replication 구성 확인
 aws s3api get-bucket-replication \
-  --bucket bos-ai-documents-seoul
+  --bucket bos-ai-documents-seoul --region ap-northeast-2
 
 # 객체 복제 상태 확인
 aws s3api head-object \
   --bucket bos-ai-documents-seoul \
   --key documents/document.pdf \
+  --region ap-northeast-2 \
   --query 'ReplicationStatus'
+
+# 가능한 상태:
+# - PENDING: 복제 대기 중
+# - COMPLETED: 복제 완료 ✅
+# - FAILED: 복제 실패 ❌
 ```
 
 **해결:**
-1. Replication role의 권한 확인
-2. 대상 버킷의 정책 확인
-3. KMS 키 권한 확인 (암호화된 경우)
 
-#### 복제 실패
-
-**증상:** Replication Status가 `FAILED`
-
-**해결:**
+S3 Replication Role에 KMS 권한 추가:
 
 ```bash
-# 실패한 객체 재업로드
-aws s3 cp s3://bos-ai-documents-seoul/documents/document.pdf \
-  s3://bos-ai-documents-seoul/documents/document.pdf \
-  --metadata-directive REPLACE
+aws iam put-role-policy \
+  --role-name bos-ai-s3-replication-role-dev \
+  --policy-name s3-replication-kms-policy \
+  --policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": [
+          "s3:GetReplicationConfiguration",
+          "s3:ListBucket"
+        ],
+        "Resource": "arn:aws:s3:::bos-ai-documents-seoul"
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "s3:GetObjectVersionForReplication",
+          "s3:GetObjectVersionAcl",
+          "s3:GetObjectVersionTagging"
+        ],
+        "Resource": "arn:aws:s3:::bos-ai-documents-seoul/*"
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "s3:ReplicateObject",
+          "s3:ReplicateDelete",
+          "s3:ReplicateTags"
+        ],
+        "Resource": "arn:aws:s3:::bos-ai-documents-us/*"
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "kms:Decrypt",
+          "kms:DescribeKey",
+          "kms:GenerateDataKey"
+        ],
+        "Resource": "arn:aws:kms:us-east-1:533335672315:key/2e99e4c4-c341-440d-b3e1-ae2bdd152825"
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "kms:Encrypt",
+          "kms:GenerateDataKey",
+          "kms:DescribeKey"
+        ],
+        "Resource": "arn:aws:kms:us-east-1:533335672315:key/2e99e4c4-c341-440d-b3e1-ae2bdd152825"
+      }
+    ]
+  }'
 
-# 또는 수동 복사
-aws s3 cp s3://bos-ai-documents-seoul/documents/document.pdf \
-  s3://bos-ai-documents-us/documents/document.pdf
+# 권한 추가 후 새 파일 업로드하여 복제 테스트
+aws s3 cp document.pdf s3://bos-ai-documents-seoul/documents/ \
+  --region ap-northeast-2
+
+# 복제 상태 확인
+sleep 5
+aws s3api head-object \
+  --bucket bos-ai-documents-seoul \
+  --key documents/document.pdf \
+  --region ap-northeast-2 \
+  --query 'ReplicationStatus'
+# 응답: "COMPLETED" ✅
 ```
+
+#### 복제 지연
+
+**증상:** 문서가 Seoul 버킷에 업로드되었지만 US 버킷에 나타나지 않음
+
+**해결:**
+1. 복제 상태가 PENDING인지 확인 (최대 15분 소요)
+2. Replication role의 권한 확인
+3. 대상 버킷의 정책 확인
+4. KMS 키 권한 확인
 
 ### VPC Peering Issues
 
