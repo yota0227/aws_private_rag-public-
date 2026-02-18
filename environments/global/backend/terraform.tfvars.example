@@ -1,0 +1,19 @@
+# Example Terraform Variables for Backend Infrastructure
+# Copy this file to terraform.tfvars and update with your values
+
+# AWS region for backend resources
+region = "ap-northeast-2"
+
+# S3 bucket name for Terraform state storage
+# Note: S3 bucket names must be globally unique
+state_bucket_name = "bos-ai-terraform-state"
+
+# DynamoDB table name for state locking
+dynamodb_table_name = "terraform-state-lock"
+
+# List of IAM principal ARNs authorized to access the state bucket
+# Replace with your actual IAM user or role ARNs
+authorized_principals = [
+  "arn:aws:iam::123456789012:user/terraform-admin",
+  "arn:aws:iam::123456789012:role/TerraformExecutionRole"
+]

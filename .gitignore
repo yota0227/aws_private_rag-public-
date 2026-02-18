@@ -1,0 +1,53 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# Lambda
+lambda/**/package/
+lambda/**/*.zip
+lambda/**/__pycache__/
+lambda/**/*.pyc
+
+# Go
+tests/go.sum
+vendor/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets
+*.pem
+*.key
+secrets/
+.env
+.env.local
+
+# Logs
+*.log
+
+# Backup files
+*.backup
+*.bak
+
+# Test results
+test-results/
+coverage/
