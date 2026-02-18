@@ -19,6 +19,8 @@
 
 #### Seoul S3 Bucket에 문서 업로드
 
+**실제 버킷 이름:** `bos-ai-documents-seoul`
+
 **AWS CLI 사용:**
 
 ```bash
@@ -73,15 +75,17 @@ s3_client.upload_file(
 
 #### Lambda 실행 로그 확인
 
+**실제 Lambda 함수 이름:** `document-processor`
+
 ```bash
 # 최근 로그 확인
-aws logs tail /aws/lambda/bos-ai-document-processor \
+aws logs tail /aws/lambda/document-processor \
   --region us-east-1 \
   --follow
 
 # 특정 시간대 로그 조회
 aws logs filter-log-events \
-  --log-group-name /aws/lambda/bos-ai-document-processor \
+  --log-group-name /aws/lambda/document-processor \
   --start-time $(date -d '1 hour ago' +%s)000 \
   --region us-east-1
 ```
@@ -104,8 +108,13 @@ aws s3api head-object \
 
 #### Bedrock Ingestion Job 상태 확인
 
+**실제 Knowledge Base ID:** `FNNOP3VBZV`
+
 ```bash
-# Knowledge Base ID 확인
+# Knowledge Base ID 사용
+KB_ID="FNNOP3VBZV"
+
+# 또는 동적으로 확인
 KB_ID=$(aws bedrock-agent list-knowledge-bases \
   --region us-east-1 \
   --query 'knowledgeBaseSummaries[0].knowledgeBaseId' \
@@ -143,9 +152,14 @@ aws s3api delete-object \
 
 ### Querying the Knowledge Base
 
+**실제 Knowledge Base ID:** `FNNOP3VBZV`
+
 #### AWS CLI 사용
 
 ```bash
+# Knowledge Base ID 설정
+KB_ID="FNNOP3VBZV"
+
 # Retrieve API (검색만)
 aws bedrock-agent-runtime retrieve \
   --knowledge-base-id $KB_ID \
@@ -176,6 +190,9 @@ bedrock_agent_runtime = boto3.client(
     region_name='us-east-1'
 )
 
+# 실제 Knowledge Base ID
+KB_ID = 'FNNOP3VBZV'
+
 # 검색 및 생성
 response = bedrock_agent_runtime.retrieve_and_generate(
     input={
@@ -184,7 +201,7 @@ response = bedrock_agent_runtime.retrieve_and_generate(
     retrieveAndGenerateConfiguration={
         'type': 'KNOWLEDGE_BASE',
         'knowledgeBaseConfiguration': {
-            'knowledgeBaseId': 'YOUR_KB_ID',
+            'knowledgeBaseId': KB_ID,
             'modelArn': 'arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-v2',
             'retrievalConfiguration': {
                 'vectorSearchConfiguration': {
@@ -203,6 +220,9 @@ print(json.dumps(response, indent=2, ensure_ascii=False))
 Knowledge Base를 수동으로 재인덱싱해야 하는 경우:
 
 ```bash
+# Knowledge Base ID 설정
+KB_ID="FNNOP3VBZV"
+
 # Data Source ID 확인
 DATA_SOURCE_ID=$(aws bedrock-agent list-data-sources \
   --knowledge-base-id $KB_ID \
@@ -227,21 +247,42 @@ aws bedrock-agent get-ingestion-job \
 
 ### OpenSearch Index Management
 
+**실제 OpenSearch 컬렉션 엔드포인트:** `https://iw3pzcloa0en8d90hh7.us-east-1.aoss.amazonaws.com`
+**실제 인덱스 이름:** `bedrock-knowledge-base-index`
+
 #### Index 상태 확인
 
 ```bash
 # OpenSearch 컬렉션 엔드포인트 확인
+COLLECTION_ENDPOINT="https://iw3pzcloa0en8d90hh7.us-east-1.aoss.amazonaws.com"
+
+# 또는 동적으로 확인
 COLLECTION_ENDPOINT=$(aws opensearchserverless list-collections \
   --region us-east-1 \
-  --query 'collectionSummaries[?name==`bos-ai-vectors`].id' \
+  --query 'collectionSummaries[?name==`bos-ai-vectors`].collectionEndpoint' \
   --output text)
 
-# Index 통계 확인 (AWS Console 또는 OpenSearch Dashboards 사용)
+# Index 통계 확인 (Python 스크립트 사용)
+# AWS Console → OpenSearch Serverless → Collections → bos-ai-vectors → Indexes
 ```
 
 #### Index 재생성 (필요시)
 
-OpenSearch Serverless는 자동으로 인덱스를 관리하지만, 필요시 Knowledge Base를 재생성할 수 있습니다.
+OpenSearch Serverless는 자동으로 인덱스를 관리하지만, 필요시 수동으로 재생성할 수 있습니다:
+
+```bash
+# 기존 인덱스 삭제 (주의!)
+# AWS Console에서 수행하거나 Python 스크립트 사용
+
+# 새 인덱스 생성
+cd scripts
+python3 create-opensearch-index.py \
+  https://iw3pzcloa0en8d90hh7.us-east-1.aoss.amazonaws.com \
+  bedrock-knowledge-base-index \
+  1536
+```
+
+**주의:** 인덱스를 삭제하면 모든 벡터 데이터가 손실됩니다. 재인덱싱이 필요합니다.
 
 ## System Monitoring
 
@@ -367,6 +408,8 @@ aws ce get-cost-and-usage \
 
 #### Lambda 실행 실패
 
+**실제 Lambda 함수 이름:** `document-processor`
+
 **증상:** Lambda 함수가 실패하고 오류 로그가 표시됨
 
 **진단:**
@@ -374,13 +417,13 @@ aws ce get-cost-and-usage \
 ```bash
 # 최근 오류 로그 확인
 aws logs filter-log-events \
-  --log-group-name /aws/lambda/bos-ai-document-processor \
+  --log-group-name /aws/lambda/document-processor \
   --filter-pattern "ERROR" \
   --region us-east-1
 
 # Lambda 함수 구성 확인
 aws lambda get-function-configuration \
-  --function-name bos-ai-document-processor \
+  --function-name document-processor \
   --region us-east-1
 ```
 
@@ -390,7 +433,7 @@ aws lambda get-function-configuration \
    ```bash
    # 메모리 증가
    aws lambda update-function-configuration \
-     --function-name bos-ai-document-processor \
+     --function-name document-processor \
      --memory-size 2048 \
      --region us-east-1
    ```
@@ -399,14 +442,14 @@ aws lambda get-function-configuration \
    ```bash
    # 타임아웃 증가
    aws lambda update-function-configuration \
-     --function-name bos-ai-document-processor \
+     --function-name document-processor \
      --timeout 600 \
      --region us-east-1
    ```
 
 3. **IAM 권한 부족:**
    - Lambda execution role의 정책 확인
-   - 필요한 권한 추가
+   - 필요한 권한 추가 (S3, SQS, Bedrock, VPC 등)
 
 #### Lambda VPC 연결 문제
 
@@ -417,7 +460,7 @@ aws lambda get-function-configuration \
 ```bash
 # Lambda VPC 구성 확인
 aws lambda get-function-configuration \
-  --function-name bos-ai-document-processor \
+  --function-name document-processor \
   --query 'VpcConfig' \
   --region us-east-1
 
@@ -428,9 +471,21 @@ aws ec2 describe-security-groups \
 ```
 
 **해결:**
-- Security Group의 아웃바운드 규칙 확인
-- VPC Endpoint 연결 확인
-- NAT Gateway 구성 확인 (필요시)
+- Security Group의 아웃바운드 규칙 확인 (모든 트래픽 허용 필요)
+- VPC Endpoint 연결 확인 (S3, Bedrock, SQS 등)
+- NAT Gateway 구성 확인 (외부 API 호출 시 필요)
+- Lambda execution role에 VPC 권한 확인:
+  ```json
+  {
+    "Effect": "Allow",
+    "Action": [
+      "ec2:CreateNetworkInterface",
+      "ec2:DescribeNetworkInterfaces",
+      "ec2:DeleteNetworkInterface"
+    ],
+    "Resource": "*"
+  }
+  ```
 
 ### Bedrock Knowledge Base Issues
 
@@ -441,6 +496,9 @@ aws ec2 describe-security-groups \
 **진단:**
 
 ```bash
+# Knowledge Base ID 설정
+KB_ID="FNNOP3VBZV"
+
 # Knowledge Base 상태 확인
 aws bedrock-agent get-knowledge-base \
   --knowledge-base-id $KB_ID \
@@ -460,9 +518,10 @@ aws bedrock-agent list-ingestion-jobs \
 
 **해결:**
 1. Data Source가 올바르게 구성되었는지 확인
-2. S3 버킷에 문서가 있는지 확인
+2. S3 버킷 (bos-ai-documents-us)에 문서가 있는지 확인
 3. Ingestion Job이 성공적으로 완료되었는지 확인
-4. 필요시 수동 재인덱싱 실행
+4. OpenSearch 인덱스가 생성되었는지 확인
+5. 필요시 수동 재인덱싱 실행
 
 #### Bedrock API 오류
 
@@ -720,9 +779,11 @@ terraform apply -target=module.bedrock_rag.aws_bedrockagent_knowledge_base.main
 
 Lambda는 자동으로 스케일링되지만, 동시 실행 제한을 조정할 수 있습니다:
 
+**실제 Lambda 함수 이름:** `document-processor`
+
 ```bash
 aws lambda put-function-concurrency \
-  --function-name bos-ai-document-processor \
+  --function-name document-processor \
   --reserved-concurrent-executions 100 \
   --region us-east-1
 ```
@@ -751,16 +812,22 @@ S3는 자동으로 스케일링됩니다. 추가 작업 불필요.
 
 #### Lambda 코드 업데이트
 
+**실제 Lambda 함수 이름:** `document-processor`
+
 ```bash
 # 코드 수정 후
 cd lambda/document-processor
-zip -r function.zip .
+zip -r function.zip handler.py requirements.txt
 
 # Lambda 업데이트
 aws lambda update-function-code \
-  --function-name bos-ai-document-processor \
+  --function-name document-processor \
   --zip-file fileb://function.zip \
   --region us-east-1
+
+# 또는 Terraform으로 업데이트
+cd ../../environments/app-layer/bedrock-rag
+terraform apply -target=module.s3_pipeline.aws_lambda_function.processor
 ```
 
 #### Terraform 구성 업데이트
@@ -839,11 +906,14 @@ aws cloudtrail lookup-events \
 ### Useful Commands Cheat Sheet
 
 ```bash
-# Knowledge Base ID 확인
-aws bedrock-agent list-knowledge-bases --region us-east-1 --query 'knowledgeBaseSummaries[0].knowledgeBaseId' --output text
+# Knowledge Base ID (실제 값)
+KB_ID="FNNOP3VBZV"
+
+# OpenSearch 컬렉션 엔드포인트 (실제 값)
+COLLECTION_ENDPOINT="https://iw3pzcloa0en8d90hh7.us-east-1.aoss.amazonaws.com"
 
 # Lambda 로그 실시간 확인
-aws logs tail /aws/lambda/bos-ai-document-processor --follow --region us-east-1
+aws logs tail /aws/lambda/document-processor --follow --region us-east-1
 
 # S3 복제 상태 확인
 aws s3api head-object --bucket bos-ai-documents-seoul --key <key> --query 'ReplicationStatus'
@@ -856,14 +926,27 @@ aws ec2 describe-vpc-peering-connections --region ap-northeast-2
 
 # 비용 확인
 aws ce get-cost-and-usage --time-period Start=$(date -d "$(date +%Y-%m-01)" +%Y-%m-%d),End=$(date +%Y-%m-%d) --granularity MONTHLY --metrics BlendedCost
+
+# OpenSearch 인덱스 생성
+cd scripts
+python3 create-opensearch-index.py $COLLECTION_ENDPOINT bedrock-knowledge-base-index 1536
 ```
 
 ### Monitoring URLs
 
-- **CloudWatch Dashboard:** https://console.aws.amazon.com/cloudwatch/home?region=us-east-1#dashboards:name=BOS-AI-RAG-Dashboard
-- **Bedrock Console:** https://console.aws.amazon.com/bedrock/home?region=us-east-1
-- **OpenSearch Console:** https://console.aws.amazon.com/aos/home?region=us-east-1
-- **S3 Console:** https://s3.console.aws.amazon.com/s3/home?region=ap-northeast-2
+**실제 배포된 리소스:**
+- Knowledge Base ID: `FNNOP3VBZV`
+- OpenSearch Collection: `bos-ai-vectors`
+- Lambda Function: `document-processor`
+- S3 Buckets: `bos-ai-documents-seoul`, `bos-ai-documents-us`
+
+**AWS Console URLs:**
+- **CloudWatch Dashboard:** https://console.aws.amazon.com/cloudwatch/home?region=us-east-1#dashboards:
+- **Bedrock Console:** https://console.aws.amazon.com/bedrock/home?region=us-east-1#/knowledge-bases/FNNOP3VBZV
+- **OpenSearch Console:** https://console.aws.amazon.com/aos/home?region=us-east-1#opensearch/collections/bos-ai-vectors
+- **Lambda Console:** https://console.aws.amazon.com/lambda/home?region=us-east-1#/functions/document-processor
+- **S3 Console (Seoul):** https://s3.console.aws.amazon.com/s3/buckets/bos-ai-documents-seoul?region=ap-northeast-2
+- **S3 Console (US):** https://s3.console.aws.amazon.com/s3/buckets/bos-ai-documents-us?region=us-east-1
 
 ### References
 

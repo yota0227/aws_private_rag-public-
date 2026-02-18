@@ -18,6 +18,14 @@
   aws --version
   ```
 
+- **Python 3**: Python 3.8 이상 (OpenSearch 인덱스 생성용)
+  ```bash
+  python3 --version
+  
+  # 필수 패키지 설치
+  pip3 install boto3 requests-aws4auth --break-system-packages
+  ```
+
 - **Go**: v1.21 이상 (테스트 실행 시)
   ```bash
   go version
@@ -67,12 +75,15 @@ Bedrock 모델에 대한 액세스를 활성화합니다:
 배포는 3개의 레이어로 구성됩니다:
 
 ```
-1. Global Layer (Backend 및 IAM)
+1. Global Layer (Backend) - 약 2-3분 소요
    ↓
-2. Network Layer (VPC, Peering, Security Groups)
+2. Network Layer (VPC, Peering, Security Groups) - 약 5-7분 소요
    ↓
-3. App Layer (Bedrock, OpenSearch, S3, Lambda)
+3. App Layer (Bedrock, OpenSearch, S3, Lambda) - 약 8-10분 소요
 ```
+
+**총 배포 시간:** 약 15-20분
+**총 리소스 수:** 130+ 리소스 (Backend: 2개, Network: 35개, App: 95개)
 
 ## Deployment Order
 
@@ -105,6 +116,9 @@ aws s3 ls | grep bos-ai-terraform-state
 # DynamoDB 테이블 확인
 aws dynamodb describe-table --table-name terraform-state-lock
 ```
+
+**예상 소요 시간:** 2-3분
+**생성 리소스:** 2개 (S3 버킷 1개, DynamoDB 테이블 1개)
 
 ### Step 2: Import Existing VPN Resources
 
@@ -185,6 +199,9 @@ aws ec2 describe-route-tables \
   --filters "Name=vpc-id,Values=$(terraform output -raw seoul_vpc_id)"
 ```
 
+**예상 소요 시간:** 5-7분
+**생성 리소스:** 35개 (VPC 2개, Subnets, Route Tables, Security Groups, VPC Peering 등)
+
 ### Step 4: App Layer Deployment
 
 애플리케이션 레이어를 배포합니다.
@@ -256,8 +273,13 @@ aws opensearchserverless list-collections --region us-east-1
 aws s3 ls | grep bos-ai-documents
 
 # Lambda 함수 확인
-aws lambda get-function --function-name bos-ai-document-processor --region us-east-1
+aws lambda get-function --function-name document-processor --region us-east-1
 ```
+
+**예상 소요 시간:** 8-10분
+**생성 리소스:** 95개 (S3, Lambda, OpenSearch, Bedrock, KMS, IAM, CloudWatch, CloudTrail 등)
+
+**중요:** App Layer 배포 중 여러 오류가 발생할 수 있습니다. 아래 "Deployment Issues and Solutions" 섹션을 참조하세요.
 
 ## Variable Configuration
 
@@ -392,6 +414,256 @@ resource "aws_vpn_connection" "existing" {
 }
 ```
 
+### Step 5: OpenSearch Index Manual Creation
+
+**중요:** Terraform으로 OpenSearch 컬렉션은 생성되지만, Bedrock Knowledge Base가 사용할 벡터 인덱스는 수동으로 생성해야 합니다.
+
+#### OpenSearch Data Access Policy 업데이트
+
+먼저 현재 사용자에게 OpenSearch 데이터 접근 권한을 부여합니다:
+
+```bash
+# 현재 사용자 ARN 확인
+CURRENT_USER_ARN=$(aws sts get-caller-identity --query 'Arn' --output text)
+
+# OpenSearch 컬렉션 ID 확인
+COLLECTION_ID=$(terraform output -raw opensearch_collection_id)
+
+# Data Access Policy 업데이트 (AWS Console에서 수행)
+# 1. OpenSearch Serverless Console로 이동
+# 2. Collections → bos-ai-vectors 선택
+# 3. Data access → Edit
+# 4. 다음 Principal 추가: $CURRENT_USER_ARN
+# 5. Permissions: aoss:* 선택
+```
+
+#### Python 스크립트로 인덱스 생성
+
+```bash
+# OpenSearch 컬렉션 엔드포인트 확인
+COLLECTION_ENDPOINT=$(terraform output -raw opensearch_collection_endpoint)
+
+# 인덱스 생성 스크립트 실행
+cd ../../../scripts
+python3 create-opensearch-index.py \
+  $COLLECTION_ENDPOINT \
+  bedrock-knowledge-base-index \
+  1536
+
+# 출력 예시:
+# Creating index 'bedrock-knowledge-base-index' at https://xxx.us-east-1.aoss.amazonaws.com...
+# Status Code: 200
+# ✅ Index 'bedrock-knowledge-base-index' created successfully!
+```
+
+**인덱스 생성 확인:**
+
+```bash
+# AWS Console에서 확인
+# OpenSearch Serverless → Collections → bos-ai-vectors → Indexes
+```
+
+## Deployment Issues and Solutions
+
+실제 배포 과정에서 발생한 문제들과 해결 방법입니다.
+
+### Issue 1: CloudWatch Log Groups Duplication
+
+**증상:**
+```
+Error: creating CloudWatch Log Group (/aws/lambda/document-processor): ResourceAlreadyExistsException
+```
+
+**원인:** `bedrock-rag` 모듈과 `s3-pipeline` 모듈에서 동일한 CloudWatch Log Group을 생성하려고 시도
+
+**해결:**
+1. 중복된 Log Group 리소스를 모듈에서 제거
+2. 기존 Log Group 삭제 후 재생성:
+   ```bash
+   aws logs delete-log-group \
+     --log-group-name /aws/lambda/document-processor \
+     --region us-east-1
+   
+   terraform apply
+   ```
+
+### Issue 2: OpenSearch Network Policy - Public Access Required
+
+**증상:**
+```
+Error: Knowledge Base cannot access OpenSearch collection
+```
+
+**원인:** OpenSearch 네트워크 정책이 VPC 전용으로 설정되어 Bedrock Knowledge Base가 접근 불가
+
+**해결:**
+`modules/ai-workload/bedrock-rag/opensearch.tf` 수정:
+```hcl
+resource "aws_opensearchserverless_security_policy" "network" {
+  name = "${var.collection_name}-network"
+  type = "network"
+  policy = jsonencode([{
+    Rules = [
+      {
+        Resource     = ["collection/${var.collection_name}"]
+        ResourceType = "collection"
+      },
+      {
+        Resource     = ["collection/${var.collection_name}"]
+        ResourceType = "dashboard"
+      }
+    ]
+    AllowFromPublic = true  # Bedrock 접근을 위해 필요
+  }])
+}
+```
+
+### Issue 3: S3 Cross-Region Replication Configuration
+
+**증상:**
+```
+Error: InvalidRequest: ReplicationConfiguration is not valid, expected SourceSelectionCriteria
+```
+
+**원인:** KMS 암호화된 객체 복제 시 `source_selection_criteria` 필수
+
+**해결:**
+`modules/ai-workload/s3-pipeline/s3.tf` 수정:
+```hcl
+resource "aws_s3_bucket_replication_configuration" "seoul_to_us" {
+  # ... 기존 설정 ...
+  
+  rule {
+    # ... 기존 설정 ...
+    
+    source_selection_criteria {
+      sse_kms_encrypted_objects {
+        status = "Enabled"
+      }
+    }
+  }
+}
+```
+
+### Issue 4: KMS Key Policy - CloudWatch Logs and CloudTrail
+
+**증상:**
+```
+Error: CloudWatch Logs cannot encrypt log data using KMS key
+Error: CloudTrail cannot write encrypted logs
+```
+
+**원인:** KMS 키 정책에 CloudWatch Logs와 CloudTrail 서비스 권한 누락
+
+**해결:**
+`modules/security/kms/main.tf` 수정:
+```hcl
+# CloudWatch Logs 권한 추가
+statement {
+  sid    = "Allow CloudWatch Logs"
+  effect = "Allow"
+  principals {
+    type        = "Service"
+    identifiers = ["logs.amazonaws.com"]
+  }
+  actions = [
+    "kms:Encrypt",
+    "kms:Decrypt",
+    "kms:ReEncrypt*",
+    "kms:GenerateDataKey*",
+    "kms:CreateGrant",
+    "kms:DescribeKey"
+  ]
+  resources = ["*"]
+  condition {
+    test     = "ArnLike"
+    variable = "kms:EncryptionContext:aws:logs:arn"
+    values   = ["arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:*"]
+  }
+}
+
+# CloudTrail 권한 추가
+statement {
+  sid    = "Allow CloudTrail to encrypt logs"
+  effect = "Allow"
+  principals {
+    type        = "Service"
+    identifiers = ["cloudtrail.amazonaws.com"]
+  }
+  actions = [
+    "kms:GenerateDataKey*",
+    "kms:DecryptDataKey"
+  ]
+  resources = ["*"]
+  condition {
+    test     = "StringLike"
+    variable = "kms:EncryptionContext:aws:cloudtrail:arn"
+    values   = ["arn:aws:cloudtrail:*:${data.aws_caller_identity.current.account_id}:trail/*"]
+  }
+}
+```
+
+### Issue 5: CloudTrail KMS Key Reference
+
+**증상:**
+```
+Error: Invalid KMS key reference in CloudTrail configuration
+```
+
+**원인:** CloudTrail은 `kms_key_id` 대신 `kms_key_arn`을 사용해야 함
+
+**해결:**
+`modules/security/cloudtrail/main.tf` 수정:
+```hcl
+resource "aws_cloudtrail" "main" {
+  # ... 기존 설정 ...
+  
+  kms_key_id = var.kms_key_arn  # kms_key_id 변수명이지만 ARN 값 전달
+}
+```
+
+`modules/security/cloudtrail/variables.tf` 수정:
+```hcl
+variable "kms_key_arn" {  # 변수명을 명확하게 변경
+  description = "ARN of KMS key for CloudTrail encryption"
+  type        = string
+}
+```
+
+### Issue 6: Lambda IAM Role - SQS Permissions
+
+**증상:**
+Lambda 함수가 SQS 메시지를 처리하지 못함 (로그에 권한 오류)
+
+**원인:** Lambda execution role에 SQS 권한 누락
+
+**해결:**
+`modules/security/iam/lambda-role.tf` 수정:
+```hcl
+# SQS 권한 추가
+statement {
+  sid    = "AllowSQSAccess"
+  effect = "Allow"
+  actions = [
+    "sqs:ReceiveMessage",
+    "sqs:DeleteMessage",
+    "sqs:GetQueueAttributes",
+    "sqs:ChangeMessageVisibility"
+  ]
+  resources = ["arn:aws:sqs:*:${data.aws_caller_identity.current.account_id}:*"]
+}
+```
+
+### Issue 7: OpenSearch Index Creation
+
+**증상:**
+Bedrock Knowledge Base가 생성되었지만 문서 인덱싱이 실패
+
+**원인:** OpenSearch 벡터 인덱스가 생성되지 않음 (Terraform으로 자동 생성 불가)
+
+**해결:**
+위의 "Step 5: OpenSearch Index Manual Creation" 참조
+
 ## Troubleshooting
 
 ### Common Issues
@@ -435,8 +707,18 @@ Error: AccessDeniedException: You don't have access to the model
 
 **해결:**
 1. AWS Console → Bedrock → Model access
-2. 필요한 모델에 대한 액세스 요청
+2. 필요한 모델에 대한 액세스 요청:
+   - Amazon Titan Embeddings G1 - Text
+   - Anthropic Claude (v2 또는 v3)
 3. 승인 대기 (일반적으로 즉시 승인됨)
+4. 모델 ARN 확인:
+   ```bash
+   # Titan Embeddings
+   arn:aws:bedrock:us-east-1::foundation-model/amazon.titan-embed-text-v1
+   
+   # Claude v2
+   arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-v2
+   ```
 
 #### 4. OpenSearch Capacity Limit
 
