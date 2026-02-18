@@ -69,16 +69,6 @@ output "opensearch_dashboard_endpoint" {
 }
 
 # CloudWatch Log Group Outputs
-output "bedrock_kb_log_group_name" {
-  description = "Name of the CloudWatch log group for Bedrock Knowledge Base"
-  value       = aws_cloudwatch_log_group.bedrock_kb.name
-}
-
-output "bedrock_kb_log_group_arn" {
-  description = "ARN of the CloudWatch log group for Bedrock Knowledge Base"
-  value       = aws_cloudwatch_log_group.bedrock_kb.arn
-}
-
 output "bedrock_api_log_group_name" {
   description = "Name of the CloudWatch log group for Bedrock API calls"
   value       = aws_cloudwatch_log_group.bedrock_api.name

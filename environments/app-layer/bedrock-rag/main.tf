@@ -7,17 +7,13 @@
 module "kms" {
   source = "../../../modules/security/kms"
 
-  project_name = var.project_name
-  environment  = var.environment
-  key_description = "KMS key for BOS AI RAG infrastructure encryption"
-  
-  # Service principals that need access to the key
-  service_principals = [
-    "bedrock.amazonaws.com",
-    "s3.amazonaws.com",
-    "aoss.amazonaws.com",
-    "lambda.amazonaws.com"
-  ]
+  region                       = var.us_region
+  key_description              = "KMS key for BOS AI RAG infrastructure encryption"
+  enable_bedrock_access        = true
+  enable_s3_access             = true
+  enable_opensearch_access     = true
+  enable_lambda_access         = true
+  enable_cloudwatch_logs_access = true
 
   tags = local.common_tags
 }
@@ -30,12 +26,7 @@ module "iam" {
   environment  = var.environment
   
   # Resource ARNs for IAM policies
-  s3_bucket_arns = [
-    "arn:aws:s3:::${var.source_bucket_name}",
-    "arn:aws:s3:::${var.source_bucket_name}/*",
-    "arn:aws:s3:::${var.destination_bucket_name}",
-    "arn:aws:s3:::${var.destination_bucket_name}/*"
-  ]
+  s3_data_source_bucket_arn = "arn:aws:s3:::${var.source_bucket_name}"
   
   opensearch_collection_arn = module.bedrock_rag.opensearch_collection_arn
   kms_key_arn              = module.kms.key_arn
@@ -53,15 +44,18 @@ module "vpc_endpoints" {
 
   project_name = var.project_name
   environment  = var.environment
+  region       = var.us_region
   
   vpc_id             = local.us_vpc_id
   subnet_ids         = local.us_private_subnet_ids
   security_group_ids = local.us_security_group_ids
+  route_table_ids    = local.us_private_route_table_ids
   
   # Enable required VPC endpoints
-  enable_bedrock_endpoint    = true
-  enable_s3_endpoint         = true
-  enable_opensearch_endpoint = true
+  enable_bedrock_runtime_endpoint       = true
+  enable_bedrock_agent_runtime_endpoint = true
+  enable_s3_endpoint                    = true
+  enable_opensearch_endpoint            = true
 
   tags = local.common_tags
 }
@@ -88,7 +82,7 @@ module "s3_pipeline" {
     security_group_ids = local.us_security_group_ids
   }
   
-  lambda_role_arn = module.iam.lambda_processor_role_arn
+  lambda_execution_role_arn = module.iam.lambda_processor_role_arn
   
   # Enable cross-region replication
   enable_replication = true
@@ -123,7 +117,8 @@ module "bedrock_rag" {
   security_group_ids = local.us_security_group_ids
   
   # IAM
-  bedrock_kb_role_arn = module.iam.bedrock_kb_role_arn
+  bedrock_execution_role_arn  = module.iam.bedrock_kb_role_arn
+  opensearch_access_role_arn  = module.iam.bedrock_kb_role_arn
 
   tags = local.common_tags
 }
@@ -163,11 +158,11 @@ module "cloudwatch_alarms" {
   environment  = var.environment
   
   lambda_function_names     = [var.lambda_function_name]
-  bedrock_kb_id            = module.bedrock_rag.knowledge_base_id
-  opensearch_collection_id = module.bedrock_rag.opensearch_collection_id
+  bedrock_kb_id            = ""  # Will be populated after first apply
+  opensearch_collection_id = ""  # Will be populated after first apply
   
-  # SNS topic for notifications
-  sns_topic_arn = length(var.sns_notification_emails) > 0 ? module.cloudwatch_alarms.sns_topic_arn : ""
+  # SNS topic for notifications (empty string means create new topic)
+  sns_topic_arn = ""
 
   tags = local.common_tags
 }
@@ -197,7 +192,7 @@ module "cloudtrail" {
   
   trail_name      = "${var.project_name}-${var.environment}-trail"
   s3_bucket_name  = var.cloudtrail_bucket_name
-  kms_key_id      = module.kms.key_id
+  kms_key_id      = module.kms.key_arn
   
   enable_log_file_validation    = true
   include_global_service_events = true
@@ -230,7 +225,7 @@ module "budgets" {
   budget_limit_amount = var.monthly_budget_amount
   budget_time_unit    = "MONTHLY"
   
-  notification_emails = var.sns_notification_emails
+  notification_emails = length(var.sns_notification_emails) > 0 ? var.sns_notification_emails : ["placeholder@example.com"]
   alert_thresholds    = var.budget_alert_thresholds
   
   # Cost filters by project tag

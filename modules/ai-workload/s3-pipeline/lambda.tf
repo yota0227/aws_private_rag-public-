@@ -1,20 +1,6 @@
 # Lambda Document Processor Configuration
 # Creates Lambda function for processing documents uploaded to S3
 
-# CloudWatch Log Group for Lambda
-resource "aws_cloudwatch_log_group" "lambda" {
-  name              = "/aws/lambda/${var.lambda_function_name}"
-  retention_in_days = var.lambda_log_retention_days
-  kms_key_id        = var.kms_key_arn
-
-  tags = merge(
-    var.tags,
-    {
-      Name = "${var.lambda_function_name}-logs"
-    }
-  )
-}
-
 # Lambda Function
 resource "aws_lambda_function" "document_processor" {
   function_name = var.lambda_function_name
@@ -58,9 +44,6 @@ resource "aws_lambda_function" "document_processor" {
   dead_letter_config {
     target_arn = aws_sqs_queue.lambda_dlq.arn
   }
-
-  # Ensure log group is created before Lambda
-  depends_on = [aws_cloudwatch_log_group.lambda]
 
   tags = merge(
     var.tags,

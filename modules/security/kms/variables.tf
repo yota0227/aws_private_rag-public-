@@ -79,6 +79,12 @@ variable "enable_lambda_access" {
   default     = false
 }
 
+variable "enable_cloudwatch_logs_access" {
+  description = "Grant CloudWatch Logs service principal access to the key"
+  type        = bool
+  default     = false
+}
+
 variable "additional_key_admins" {
   description = "List of IAM ARNs that can administer the key"
   type        = list(string)

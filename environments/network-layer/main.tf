@@ -77,7 +77,8 @@ module "vpc_peering" {
   source = "../../modules/network/peering"
 
   providers = {
-    aws = aws.seoul
+    aws.requester = aws.seoul
+    aws.accepter  = aws.us_east
   }
 
   vpc_id      = module.vpc_seoul.vpc_id

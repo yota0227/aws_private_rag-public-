@@ -77,16 +77,6 @@ output "lambda_function_invoke_arn" {
   value       = aws_lambda_function.document_processor.invoke_arn
 }
 
-output "lambda_log_group_name" {
-  description = "Name of the CloudWatch log group for Lambda"
-  value       = aws_cloudwatch_log_group.lambda.name
-}
-
-output "lambda_log_group_arn" {
-  description = "ARN of the CloudWatch log group for Lambda"
-  value       = aws_cloudwatch_log_group.lambda.arn
-}
-
 # Dead Letter Queue Outputs
 output "lambda_dlq_arn" {
   description = "ARN of the Lambda Dead Letter Queue"

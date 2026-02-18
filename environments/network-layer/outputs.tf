@@ -114,17 +114,12 @@ output "vpn_gateway_id" {
   value       = aws_vpn_gateway.existing.id
 }
 
-output "vpn_gateway_state" {
-  description = "State of the VPN Gateway (should be 'available')"
-  value       = aws_vpn_gateway.existing.state
-}
-
 output "vpn_gateway_amazon_side_asn" {
   description = "Amazon side ASN for BGP"
   value       = aws_vpn_gateway.existing.amazon_side_asn
 }
 
-output "vpn_gateway_attachment_state" {
-  description = "State of the VPN Gateway attachment to Seoul VPC"
-  value       = aws_vpn_gateway_attachment.seoul.vpc_attachment_state
+output "vpn_gateway_attachment_id" {
+  description = "ID of the VPN Gateway attachment to Seoul VPC"
+  value       = aws_vpn_gateway_attachment.seoul.id
 }

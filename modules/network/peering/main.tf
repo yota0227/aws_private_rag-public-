@@ -1,4 +1,15 @@
+terraform {
+  required_providers {
+    aws = {
+      source                = "hashicorp/aws"
+      configuration_aliases = [aws.requester, aws.accepter]
+    }
+  }
+}
+
 resource "aws_vpc_peering_connection" "main" {
+  provider = aws.requester
+
   vpc_id      = var.vpc_id
   peer_vpc_id = var.peer_vpc_id
   peer_region = var.peer_region
@@ -13,6 +24,8 @@ resource "aws_vpc_peering_connection" "main" {
 }
 
 resource "aws_vpc_peering_connection_accepter" "peer" {
+  provider = aws.accepter
+
   vpc_peering_connection_id = aws_vpc_peering_connection.main.id
   auto_accept               = var.auto_accept
 
@@ -33,7 +46,8 @@ resource "time_sleep" "wait_for_peering" {
 
 # Add routes in requester VPC route tables
 resource "aws_route" "requester_to_peer" {
-  count = length(var.requester_route_table_ids)
+  provider = aws.requester
+  count    = length(var.requester_route_table_ids)
 
   route_table_id            = var.requester_route_table_ids[count.index]
   destination_cidr_block    = var.peer_cidr
@@ -44,7 +58,8 @@ resource "aws_route" "requester_to_peer" {
 
 # Add routes in accepter VPC route tables
 resource "aws_route" "accepter_to_requester" {
-  count = length(var.accepter_route_table_ids)
+  provider = aws.accepter
+  count    = length(var.accepter_route_table_ids)
 
   route_table_id            = var.accepter_route_table_ids[count.index]
   destination_cidr_block    = data.aws_vpc.requester.cidr_block
@@ -55,5 +70,6 @@ resource "aws_route" "accepter_to_requester" {
 
 # Data source to get requester VPC CIDR
 data "aws_vpc" "requester" {
-  id = var.vpc_id
+  provider = aws.requester
+  id       = var.vpc_id
 }

@@ -287,6 +287,12 @@ resource "aws_s3_bucket_replication_configuration" "source_to_destination" {
 
     filter {}
 
+    source_selection_criteria {
+      sse_kms_encrypted_objects {
+        status = "Enabled"
+      }
+    }
+
     destination {
       bucket        = aws_s3_bucket.destination.arn
       storage_class = "INTELLIGENT_TIERING"

@@ -181,3 +181,34 @@ resource "aws_iam_role_policy_attachment" "lambda_vpc_access" {
   role       = aws_iam_role.lambda_processor.name
   policy_arn = aws_iam_policy.lambda_vpc_access.arn
 }
+
+# Policy for SQS Dead Letter Queue access
+data "aws_iam_policy_document" "lambda_sqs_access" {
+  statement {
+    sid    = "SQSDLQAccess"
+    effect = "Allow"
+
+    actions = [
+      "sqs:SendMessage",
+      "sqs:GetQueueAttributes",
+      "sqs:GetQueueUrl"
+    ]
+
+    resources = [
+      "arn:aws:sqs:*:${data.aws_caller_identity.current.account_id}:*-dlq"
+    ]
+  }
+}
+
+resource "aws_iam_policy" "lambda_sqs_access" {
+  name        = "${var.project_name}-lambda-sqs-policy-${var.environment}"
+  description = "Allows Lambda to send messages to SQS Dead Letter Queue"
+  policy      = data.aws_iam_policy_document.lambda_sqs_access.json
+
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_sqs_access" {
+  role       = aws_iam_role.lambda_processor.name
+  policy_arn = aws_iam_policy.lambda_sqs_access.arn
+}

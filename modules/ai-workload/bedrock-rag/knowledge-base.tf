@@ -73,13 +73,6 @@ resource "aws_bedrockagent_data_source" "s3" {
       }
     }
   }
-
-  tags = merge(
-    var.tags,
-    {
-      Name = "${var.knowledge_base_name}-s3-source"
-    }
-  )
 }
 
 # Wait for data source to be ready
@@ -87,20 +80,6 @@ resource "time_sleep" "wait_for_data_source" {
   depends_on = [aws_bedrockagent_data_source.s3]
   
   create_duration = "30s"
-}
-
-# CloudWatch Log Group for Bedrock Knowledge Base
-resource "aws_cloudwatch_log_group" "bedrock_kb" {
-  name              = "/aws/bedrock/knowledgebase/${var.knowledge_base_name}"
-  retention_in_days = 7
-  kms_key_id        = var.kms_key_arn
-
-  tags = merge(
-    var.tags,
-    {
-      Name = "${var.knowledge_base_name}-logs"
-    }
-  )
 }
 
 # CloudWatch Log Group for Bedrock API Calls

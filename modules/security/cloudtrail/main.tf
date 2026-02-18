@@ -110,12 +110,12 @@ resource "aws_cloudtrail" "main" {
 
     data_resource {
       type   = "AWS::S3::Object"
-      values = ["arn:aws:s3:::*/"]
+      values = ["arn:aws:s3"]
     }
 
     data_resource {
       type   = "AWS::Lambda::Function"
-      values = ["arn:aws:lambda:*:*:function/*"]
+      values = ["arn:aws:lambda"]
     }
   }
 

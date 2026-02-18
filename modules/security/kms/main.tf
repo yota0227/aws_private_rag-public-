@@ -213,6 +213,63 @@ data "aws_iam_policy_document" "kms_key_policy" {
       }
     }
   }
+
+  # Statement 8: Allow CloudWatch Logs Service to use the key (optional)
+  dynamic "statement" {
+    for_each = var.enable_cloudwatch_logs_access ? [1] : []
+
+    content {
+      sid    = "Allow CloudWatch Logs to use the key"
+      effect = "Allow"
+
+      principals {
+        type        = "Service"
+        identifiers = ["logs.${var.region}.amazonaws.com"]
+      }
+
+      actions = [
+        "kms:Decrypt",
+        "kms:Encrypt",
+        "kms:ReEncrypt*",
+        "kms:GenerateDataKey*",
+        "kms:CreateGrant",
+        "kms:DescribeKey"
+      ]
+
+      resources = ["*"]
+
+      condition {
+        test     = "ArnLike"
+        variable = "kms:EncryptionContext:aws:logs:arn"
+        values   = ["arn:aws:logs:${var.region}:${data.aws_caller_identity.current.account_id}:*"]
+      }
+    }
+  }
+
+  # Statement 9: Allow CloudTrail Service to use the key
+  statement {
+    sid    = "Allow CloudTrail to use the key"
+    effect = "Allow"
+
+    principals {
+      type        = "Service"
+      identifiers = ["cloudtrail.amazonaws.com"]
+    }
+
+    actions = [
+      "kms:Decrypt",
+      "kms:GenerateDataKey*",
+      "kms:DescribeKey"
+    ]
+
+    resources = ["*"]
+
+    condition {
+      test     = "StringLike"
+      variable = "kms:EncryptionContext:aws:cloudtrail:arn"
+      values   = ["arn:aws:cloudtrail:*:${data.aws_caller_identity.current.account_id}:trail/*"]
+    }
+  }
 }
 
 

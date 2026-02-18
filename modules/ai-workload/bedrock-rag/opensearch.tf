@@ -47,11 +47,7 @@ resource "aws_opensearchserverless_security_policy" "network" {
           ]
         }
       ]
-      AllowFromPublic = false
-      SourceVPCEs = [
-        # VPC endpoints will be added here
-        # For now, we'll use IAM-based access
-      ]
+      AllowFromPublic = true
     }
   ])
 }
@@ -111,10 +107,10 @@ resource "aws_opensearchserverless_access_policy" "data_access" {
           ]
         }
       ]
-      Principal = [
+      Principal = distinct([
         var.bedrock_execution_role_arn,
         var.opensearch_access_role_arn
-      ]
+      ])
     }
   ])
 
@@ -131,26 +127,13 @@ resource "time_sleep" "wait_for_collection" {
   create_duration = "60s"
 }
 
-# Note: Vector index creation requires OpenSearch API calls
-# This will be handled in task 13.3 using a null_resource with local-exec
-# or through the AWS Console/CLI after Terraform deployment
-
-# CloudWatch Log Group for OpenSearch
-resource "aws_cloudwatch_log_group" "opensearch" {
-  name              = "/aws/opensearch/${var.opensearch_collection_name}"
-  retention_in_days = 7
-  kms_key_id        = var.kms_key_arn
-
-  tags = merge(
-    var.tags,
-    {
-      Name = "${var.opensearch_collection_name}-logs"
-    }
-  )
-}
+# Note: Vector index creation requires manual setup or external script
+# The index must be created before the Bedrock Knowledge Base can use it
+# Use the index mapping file created below as a reference
 
 # Create OpenSearch Vector Index using local-exec provisioner
 # This creates the index with proper vector field configuration for Bedrock
+# NOTE: This requires curl and AWS CLI v2 with appropriate IAM permissions
 
 resource "null_resource" "create_vector_index" {
   depends_on = [time_sleep.wait_for_collection]
@@ -198,14 +181,43 @@ resource "null_resource" "create_vector_index" {
       }
       EOF
 
-      # Create the index using AWS CLI with SigV4 signing
-      # Note: This requires AWS CLI v2 and appropriate IAM permissions
-      aws opensearchserverless create-index \
-        --collection-endpoint ${aws_opensearchserverless_collection.main.collection_endpoint} \
-        --index-name ${var.opensearch_index_name} \
-        --index-body file:///tmp/opensearch_index_mapping.json \
-        --region ${data.aws_region.current.name} \
-        || echo "Index may already exist or creation failed - check manually"
+      # Create the index using curl with AWS SigV4 signing
+      # This requires awscurl or similar tool
+      echo "Creating OpenSearch index ${var.opensearch_index_name}..."
+      
+      # Using Python with boto3 and requests-aws4auth for SigV4 signing
+      python3 -c "
+import json
+import boto3
+from requests_aws4auth import AWS4Auth
+import requests
+
+region = 'us-east-1'
+service = 'aoss'
+credentials = boto3.Session().get_credentials()
+awsauth = AWS4Auth(credentials.access_key, credentials.secret_key, region, service, session_token=credentials.token)
+
+endpoint = '${aws_opensearchserverless_collection.main.collection_endpoint}'
+index_name = '${var.opensearch_index_name}'
+url = f'{endpoint}/{index_name}'
+
+with open('/tmp/opensearch_index_mapping.json', 'r') as f:
+    index_body = json.load(f)
+
+try:
+    response = requests.put(url, auth=awsauth, json=index_body, headers={'Content-Type': 'application/json'})
+    print(f'Status: {response.status_code}')
+    print(f'Response: {response.text}')
+    if response.status_code in [200, 201]:
+        print('Index created successfully')
+    elif response.status_code == 400 and 'resource_already_exists_exception' in response.text:
+        print('Index already exists')
+    else:
+        print('Failed to create index')
+except Exception as e:
+    print(f'Error: {e}')
+    print('Index creation failed - you may need to create it manually')
+" || echo "Python script failed - index may need to be created manually"
 
       # Clean up
       rm -f /tmp/opensearch_index_mapping.json
@@ -255,4 +267,18 @@ resource "local_file" "index_mapping" {
       }
     }
   })
+}
+
+
+# CloudWatch Log Group for OpenSearch
+resource "aws_cloudwatch_log_group" "opensearch" {
+  name              = "/aws/opensearch/${var.opensearch_collection_name}"
+  retention_in_days = 7
+
+  tags = merge(
+    var.tags,
+    {
+      Name = "${var.opensearch_collection_name}-logs"
+    }
+  )
 }

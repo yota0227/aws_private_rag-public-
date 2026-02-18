@@ -80,7 +80,7 @@ output "lambda_processor_role_arn" {
 # VPC Endpoints Outputs
 output "vpc_endpoint_ids" {
   description = "IDs of VPC endpoints"
-  value       = module.vpc_endpoints.endpoint_ids
+  value       = module.vpc_endpoints.all_endpoint_ids
 }
 
 # Monitoring Outputs

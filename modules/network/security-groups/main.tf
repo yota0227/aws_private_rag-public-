@@ -8,27 +8,9 @@ resource "aws_security_group" "lambda" {
   # Default deny inbound - Lambda doesn't accept incoming connections
   # No ingress rules defined
 
-  # Outbound to Bedrock VPC Endpoint
+  # Outbound to VPC Endpoints (Bedrock, S3, OpenSearch)
   egress {
-    description = "HTTPS to Bedrock VPC Endpoint"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = [var.vpc_cidr]
-  }
-
-  # Outbound to S3 VPC Endpoint
-  egress {
-    description = "HTTPS to S3 VPC Endpoint"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = [var.vpc_cidr]
-  }
-
-  # Outbound to OpenSearch VPC Endpoint
-  egress {
-    description = "HTTPS to OpenSearch VPC Endpoint"
+    description = "HTTPS to VPC Endpoints"
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
