@@ -22,13 +22,3 @@ provider "aws" {
     tags = local.common_tags
   }
 }
-
-# Seoul Provider for consolidated VPC resources
-provider "aws" {
-  alias  = "seoul"
-  region = "ap-northeast-2"
-
-  default_tags {
-    tags = local.common_tags
-  }
-}

@@ -1,0 +1,23 @@
+{
+    "Items": [
+        {
+            "LockID": {
+                "S": "bos-ai-terraform-state/network-layer/terraform.tfstate-md5"
+            },
+            "Digest": {
+                "S": "248da131c6d9e126cda54f54e6ebc8f7"
+            }
+        },
+        {
+            "LockID": {
+                "S": "bos-ai-terraform-state/app-layer/bedrock-rag/terraform.tfstate-md5"
+            },
+            "Digest": {
+                "S": "f1edee442f7f551d82d506ba02e966f6"
+            }
+        }
+    ],
+    "Count": 2,
+    "ScannedCount": 2,
+    "ConsumedCapacity": null
+}

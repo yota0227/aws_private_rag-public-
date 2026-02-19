@@ -42,18 +42,6 @@ variable "enable_opensearch_endpoint" {
   default     = true
 }
 
-variable "enable_secretsmanager_endpoint" {
-  description = "Enable Secrets Manager VPC endpoint"
-  type        = bool
-  default     = true
-}
-
-variable "enable_logs_endpoint" {
-  description = "Enable CloudWatch Logs VPC endpoint"
-  type        = bool
-  default     = true
-}
-
 variable "route_table_ids" {
   description = "List of route table IDs for S3 Gateway endpoint"
   type        = list(string)

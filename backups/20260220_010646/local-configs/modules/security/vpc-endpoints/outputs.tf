@@ -57,38 +57,6 @@ output "opensearch_endpoint_network_interface_ids" {
   value       = var.enable_opensearch_endpoint ? aws_vpc_endpoint.opensearch[0].network_interface_ids : []
 }
 
-# Secrets Manager Endpoint Outputs
-output "secretsmanager_endpoint_id" {
-  description = "ID of the Secrets Manager VPC endpoint"
-  value       = var.enable_secretsmanager_endpoint ? aws_vpc_endpoint.secretsmanager[0].id : null
-}
-
-output "secretsmanager_endpoint_dns_entries" {
-  description = "DNS entries for the Secrets Manager VPC endpoint"
-  value       = var.enable_secretsmanager_endpoint ? aws_vpc_endpoint.secretsmanager[0].dns_entry : []
-}
-
-output "secretsmanager_endpoint_network_interface_ids" {
-  description = "Network interface IDs for the Secrets Manager VPC endpoint"
-  value       = var.enable_secretsmanager_endpoint ? aws_vpc_endpoint.secretsmanager[0].network_interface_ids : []
-}
-
-# CloudWatch Logs Endpoint Outputs
-output "logs_endpoint_id" {
-  description = "ID of the CloudWatch Logs VPC endpoint"
-  value       = var.enable_logs_endpoint ? aws_vpc_endpoint.logs[0].id : null
-}
-
-output "logs_endpoint_dns_entries" {
-  description = "DNS entries for the CloudWatch Logs VPC endpoint"
-  value       = var.enable_logs_endpoint ? aws_vpc_endpoint.logs[0].dns_entry : []
-}
-
-output "logs_endpoint_network_interface_ids" {
-  description = "Network interface IDs for the CloudWatch Logs VPC endpoint"
-  value       = var.enable_logs_endpoint ? aws_vpc_endpoint.logs[0].network_interface_ids : []
-}
-
 # All Endpoint IDs
 output "all_endpoint_ids" {
   description = "Map of all VPC endpoint IDs"
@@ -97,7 +65,5 @@ output "all_endpoint_ids" {
     bedrock_agent_runtime = var.enable_bedrock_agent_runtime_endpoint ? aws_vpc_endpoint.bedrock_agent_runtime[0].id : null
     s3                    = var.enable_s3_endpoint ? aws_vpc_endpoint.s3[0].id : null
     opensearch            = var.enable_opensearch_endpoint ? aws_vpc_endpoint.opensearch[0].id : null
-    secretsmanager        = var.enable_secretsmanager_endpoint ? aws_vpc_endpoint.secretsmanager[0].id : null
-    logs                  = var.enable_logs_endpoint ? aws_vpc_endpoint.logs[0].id : null
   }
 }

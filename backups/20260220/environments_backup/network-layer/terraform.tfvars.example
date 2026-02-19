@@ -1,0 +1,21 @@
+# Example Terraform Variables for Network Layer
+# Copy this file to terraform.tfvars and customize for your environment
+
+# Environment Configuration
+environment = "prod"
+
+# Seoul VPC Configuration
+seoul_vpc_cidr             = "10.10.0.0/16"
+seoul_availability_zones   = ["ap-northeast-2a", "ap-northeast-2c"]
+seoul_private_subnet_cidrs = ["10.10.1.0/24", "10.10.2.0/24"]
+
+# US VPC Configuration
+us_vpc_cidr             = "10.20.0.0/16"
+us_availability_zones   = ["us-east-1a", "us-east-1b", "us-east-1c"]
+us_private_subnet_cidrs = ["10.20.1.0/24", "10.20.2.0/24", "10.20.3.0/24"]
+
+# Additional Tags (Optional)
+additional_tags = {
+  Owner      = "AI-Team"
+  CostCenter = "AI-Infrastructure"
+}
