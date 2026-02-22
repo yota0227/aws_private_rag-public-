@@ -13,10 +13,10 @@
   - [x] 2.2 Terraform 변수 파일 업데이트 (environments/seoul/terraform.tfvars)
   - [x] 2.3 태그 전략 문서 작성
 
-- [ ] 3. 롤백 계획 수립
-  - [~] 3.1 각 Phase별 롤백 절차 문서화
-  - [~] 3.2 롤백 트리거 조건 정의
-  - [~] 3.3 긴급 연락망 구성
+- [x] 3. 롤백 계획 수립
+  - [x] 3.1 각 Phase별 롤백 절차 문서화
+  - [x] 3.2 롤백 트리거 조건 정의
+  - [x] 3.3 긴급 연락망 구성
 
 ## Phase 2: VPC 네이밍 변경
 
@@ -27,19 +27,19 @@
   - [x] 4.4 NAT Gateway 태그 변경
   - [x] 4.5 Internet Gateway 태그 변경
 
-- [ ] 5. Security Group 이름 및 태그 업데이트
-  - [~] 5.1 기존 Security Group 이름 변경 (Terraform)
-  - [~] 5.2 Security Group 태그 업데이트
-  - [~] 5.3 Security Group 설명 업데이트
+- [x] 5. Security Group 이름 및 태그 업데이트
+  - [x] 5.1 기존 Security Group 이름 변경 (Terraform)
+  - [x] 5.2 Security Group 태그 업데이트
+  - [x] 5.3 Security Group 설명 업데이트
 
-- [ ] 6. Route53 Resolver 엔드포인트 이름 변경
-  - [~] 6.1 Inbound Endpoint 이름 변경 (ibe-bos-ai-seoul-prod)
-  - [~] 6.2 Outbound Endpoint 이름 변경 (obe-bos-ai-seoul-prod)
+- [x] 6. Route53 Resolver 엔드포인트 이름 변경
+  - [x] 6.1 Inbound Endpoint 이름 변경 (ibe-bos-ai-seoul-prod)
+  - [x] 6.2 Outbound Endpoint 이름 변경 (obe-bos-ai-seoul-prod)
 
-- [ ] 7. 네이밍 변경 검증
-  - [~] 7.1 모든 리소스 이름 확인
-  - [~] 7.2 태그 일관성 확인
-  - [~] 7.3 기존 기능 정상 동작 확인
+- [x] 7. 네이밍 변경 검증
+  - [x] 7.1 모든 리소스 이름 확인
+  - [x] 7.2 태그 일관성 확인
+  - [x] 7.3 기존 기능 정상 동작 확인
 
 ## Phase 3: VPC 엔드포인트 구성
 
@@ -58,10 +58,10 @@
   - [x] 10.1 S3 Gateway 엔드포인트 생성
   - [x] 10.2 Route Table 연결 확인
 
-- [ ] 11. VPC 엔드포인트 연결 테스트
-  - [~] 11.1 Bedrock Runtime 엔드포인트 테스트 (nslookup, curl)
-  - [~] 11.2 Secrets Manager 엔드포인트 테스트
-  - [~] 11.3 S3 Gateway 엔드포인트 테스트
+- [x] 11. VPC 엔드포인트 연결 테스트
+  - [x] 11.1 Bedrock Runtime 엔드포인트 테스트 (nslookup, curl)
+  - [x] 11.2 Secrets Manager 엔드포인트 테스트
+  - [x] 11.3 S3 Gateway 엔드포인트 테스트
 
 ## Phase 4: OpenSearch Serverless 배포
 
@@ -90,71 +90,71 @@
   - [x] 16.2 인덱스 생성 스크립트 실행
   - [x] 16.3 인덱스 설정 확인
 
-- [ ] 17. OpenSearch 연결 테스트
-  - [~] 17.1 VPC 내부에서 연결 테스트
-  - [~] 17.2 온프레미스에서 연결 테스트 (VPN 통해)
-  - [~] 17.3 샘플 데이터 인덱싱 테스트
+- [x] 17. OpenSearch 연결 테스트
+  - [x] 17.1 VPC 내부에서 연결 테스트
+  - [x] 17.2 온프레미스에서 연결 테스트 (VPN 통해)
+  - [x] 17.3 샘플 데이터 인덱싱 테스트
 
 ## Phase 5: Lambda 배포
 
-- [ ] 18. Security Group 생성 (Lambda용)
+- [x] 18. Security Group 생성 (Lambda용)
   - [x] 18.1 sg-lambda-bos-ai-seoul-prod 생성
-  - [~] 18.2 Outbound 규칙 추가 (443 to OpenSearch, VPC Endpoints, 버지니아)
+  - [x] 18.2 Outbound 규칙 추가 (443 to OpenSearch, VPC Endpoints, 버지니아)
 
-- [ ] 19. IAM Role 생성 (Lambda용)
-  - [~] 19.1 role-lambda-document-processor-seoul-prod 생성
-  - [~] 19.2 S3 권한 추가 (GetObject, PutObject)
-  - [~] 19.3 OpenSearch 권한 추가 (ESHttpPost, ESHttpPut)
-  - [~] 19.4 Bedrock 권한 추가 (InvokeModel)
-  - [~] 19.5 Secrets Manager 권한 추가 (GetSecretValue)
-  - [~] 19.6 CloudWatch Logs 권한 추가
-  - [~] 19.7 VPC 권한 추가 (ENI 관리)
+- [x] 19. IAM Role 생성 (Lambda용)
+  - [x] 19.1 role-lambda-document-processor-seoul-prod 생성
+  - [x] 19.2 S3 권한 추가 (GetObject, PutObject)
+  - [x] 19.3 OpenSearch 권한 추가 (ESHttpPost, ESHttpPut)
+  - [x] 19.4 Bedrock 권한 추가 (InvokeModel)
+  - [x] 19.5 Secrets Manager 권한 추가 (GetSecretValue)
+  - [x] 19.6 CloudWatch Logs 권한 추가
+  - [x] 19.7 VPC 권한 추가 (ENI 관리)
 
-- [ ] 20. Lambda 함수 배포
-  - [~] 20.1 Lambda 함수 코드 패키징 (lambda/document-processor/)
-  - [~] 20.2 Lambda 함수 생성 (lambda-document-processor-seoul-prod)
-  - [~] 20.3 VPC 설정 (서브넷, Security Group)
-  - [~] 20.4 환경 변수 설정
-  - [~] 20.5 메모리 및 타임아웃 설정
+- [x] 20. Lambda 함수 배포
+  - [x] 20.1 Lambda 함수 코드 패키징 (lambda/document-processor/)
+  - [x] 20.2 Lambda 함수 생성 (lambda-document-processor-seoul-prod)
+  - [x] 20.3 VPC 설정 (서브넷, Security Group)
+  - [x] 20.4 환경 변수 설정
+  - [x] 20.5 메모리 및 타임아웃 설정
 
-- [ ] 21. Lambda 트리거 설정
-  - [~] 21.1 S3 Event 트리거 설정 (버지니아 버킷)
-  - [~] 21.2 EventBridge 스케줄 설정 (선택사항)
+- [x] 21. Lambda 트리거 설정
+  - [x] 21.1 S3 Event 트리거 설정 (버지니아 버킷)
+  - [x] 21.2 EventBridge 스케줄 설정 (선택사항)
 
-- [ ] 22. Lambda 테스트
-  - [~] 22.1 테스트 이벤트 생성
-  - [~] 22.2 함수 실행 테스트
-  - [~] 22.3 OpenSearch 인덱싱 확인
-  - [~] 22.4 CloudWatch Logs 확인
+- [x] 22. Lambda 테스트
+  - [x] 22.1 테스트 이벤트 생성
+  - [x] 22.2 함수 실행 테스트
+  - [x] 22.3 OpenSearch 인덱싱 확인
+  - [x] 22.4 CloudWatch Logs 확인
 
 ## Phase 6: Bedrock Knowledge Base 설정
 
-- [ ] 23. Security Group 생성 (Bedrock KB용)
+- [x] 23. Security Group 생성 (Bedrock KB용)
   - [x] 23.1 sg-bedrock-kb-bos-ai-seoul-prod 생성
-  - [~] 23.2 Outbound 규칙 추가 (443 to OpenSearch, VPC Endpoints)
+  - [x] 23.2 Outbound 규칙 추가 (443 to OpenSearch, VPC Endpoints)
 
-- [ ] 24. IAM Role 생성 (Bedrock KB용)
-  - [~] 24.1 role-bedrock-kb-seoul-prod 생성
+- [x] 24. IAM Role 생성 (Bedrock KB용)
+  - [x] 24.1 role-bedrock-kb-seoul-prod 생성
   - [x] 24.2 S3 권한 추가 (GetObject, ListBucket)
   - [x] 24.3 OpenSearch Serverless 권한 추가 (APIAccessAll)
   - [x] 24.4 Bedrock 권한 추가 (InvokeModel)
 
-- [ ] 25. Bedrock Knowledge Base 생성
-  - [ ] 25.1 Knowledge Base 생성 (bos-ai-kb-seoul-prod)
-  - [ ] 25.2 Foundation Model 설정 (amazon.titan-embed-text-v1)
-  - [ ] 25.3 Vector Store 연결 (OpenSearch Serverless)
-  - [ ] 25.4 VPC 설정 (서브넷, Security Group)
+- [x] 25. Bedrock Knowledge Base 생성
+  - [x] 25.1 Knowledge Base 생성 (bos-ai-kb-seoul-prod)
+  - [x] 25.2 Foundation Model 설정 (amazon.titan-embed-text-v1)
+  - [x] 25.3 Vector Store 연결 (OpenSearch Serverless)
+  - [x] 25.4 VPC 설정 (서브넷, Security Group)
 
-- [ ] 26. 데이터 소스 연결
-  - [ ] 26.1 S3 데이터 소스 추가 (버지니아 버킷)
-  - [ ] 26.2 S3 데이터 소스 추가 (서울 버킷, 선택사항)
-  - [ ] 26.3 동기화 설정
+- [x] 26. 데이터 소스 연결
+  - [x] 26.1 S3 데이터 소스 추가 (버지니아 버킷)
+  - [x] 26.2 S3 데이터 소스 추가 (서울 버킷, 선택사항)
+  - [x] 26.3 동기화 설정
 
-- [ ] 27. Knowledge Base 동기화 및 테스트
-  - [ ] 27.1 초기 동기화 실행
-  - [ ] 27.2 동기화 상태 확인
-  - [ ] 27.3 샘플 쿼리 테스트
-  - [ ] 27.4 검색 결과 확인
+- [x] 27. Knowledge Base 동기화 및 테스트
+  - [x] 27.1 초기 동기화 실행
+  - [x] 27.2 동기화 상태 확인
+  - [x] 27.3 샘플 쿼리 테스트
+  - [x] 27.4 검색 결과 확인
 
 ## Phase 7: VPC 피어링 구성
 
@@ -171,24 +171,24 @@
   - [x] 30.1 Private Route Table에 서울 경로 추가 (10.200.0.0/16 → pcx-xxxxx)
   - [x] 30.2 라우팅 우선순위 확인
 
-- [ ] 31. Security Group 규칙 추가
-  - [ ] 31.1 서울 Lambda SG에 버지니아 CIDR 허용
-  - [ ] 31.2 서울 OpenSearch SG에 버지니아 CIDR 허용
-  - [ ] 31.3 버지니아 S3 VPC Endpoint SG에 서울 CIDR 허용
+- [x] 31. Security Group 규칙 추가
+  - [x] 31.1 서울 Lambda SG에 버지니아 CIDR 허용
+  - [x] 31.2 서울 OpenSearch SG에 버지니아 CIDR 허용
+  - [x] 31.3 버지니아 S3 VPC Endpoint SG에 서울 CIDR 허용
 
-- [ ] 32. VPC 피어링 연결 테스트
-  - [ ] 32.1 서울 → 버지니아 ping 테스트
-  - [ ] 32.2 서울 Lambda → 버지니아 S3 접근 테스트
-  - [ ] 32.3 지연시간 측정 (<200ms 확인)
+- [x] 32. VPC 피어링 연결 테스트
+  - [x] 32.1 서울 → 버지니아 ping 테스트
+  - [x] 32.2 서울 Lambda → 버지니아 S3 접근 테스트
+  - [x] 32.3 지연시간 측정 (<200ms 확인)
 
 ## Phase 8: 통합 테스트
 
-- [ ] 33. 전체 파이프라인 테스트
-  - [ ] 33.1 버지니아 S3에 테스트 문서 업로드
-  - [ ] 33.2 Lambda 자동 트리거 확인
-  - [ ] 33.3 Bedrock 임베딩 생성 확인
-  - [ ] 33.4 OpenSearch 인덱싱 확인
-  - [ ] 33.5 Knowledge Base 쿼리 테스트
+- [x] 33. 전체 파이프라인 테스트
+  - [x] 33.1 버지니아 S3에 테스트 문서 업로드
+  - [x] 33.2 Lambda 자동 트리거 확인
+  - [x] 33.3 Bedrock 임베딩 생성 확인
+  - [x] 33.4 OpenSearch 인덱싱 확인
+  - [x] 33.5 Knowledge Base 쿼리 테스트
 
 - [ ] 34. 온프레미스 연결 테스트
   - [ ] 34.1 온프레미스 → 서울 VPC ping 테스트
