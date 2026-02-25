@@ -42,6 +42,24 @@ variable "enable_dns_support" {
   default     = true
 }
 
+variable "public_subnet_cidrs" {
+  description = "CIDR blocks for public subnets (optional)"
+  type        = list(string)
+  default     = []
+}
+
+variable "enable_nat_gateway" {
+  description = "Enable NAT Gateway for private subnets"
+  type        = bool
+  default     = false
+}
+
+variable "single_nat_gateway" {
+  description = "Use single NAT Gateway for all private subnets (cost optimization)"
+  type        = bool
+  default     = true
+}
+
 variable "tags" {
   description = "Common tags for all resources"
   type        = map(string)

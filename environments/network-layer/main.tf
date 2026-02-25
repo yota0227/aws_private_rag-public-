@@ -1,7 +1,11 @@
-# Network Layer Main Configuration
-# Creates VPCs in Seoul and US regions, establishes VPC peering, and configures security groups
+# Network Layer Main Configuration with Transit Gateway
+# Creates VPCs in Seoul, establishes TGW for VPN and VPC connectivity
 #
-# Requirements: 1.1, 1.2, 1.4, 1.5, 1.6, 1.7, 1.9, 9.2, 11.5, 12.1
+# Architecture:
+# - Logging Pipeline VPC (10.200.0.0/16) - Security logging infrastructure
+# - BOS-AI Frontend VPC (10.10.0.0/16) - AI workload frontend
+# - Transit Gateway - Central hub for VPN and VPC connectivity
+# - VPC Peering to US Backend VPC (10.20.0.0/16)
 
 # Local variables for common tags
 locals {
@@ -30,10 +34,43 @@ locals {
   )
 }
 
-# Seoul VPC
-# Purpose: Transit Bridge for on-premises to US region access
-# No Internet Gateway (No-IGW policy)
-module "vpc_seoul" {
+# ============================================================================
+# Logging Pipeline VPC (10.200.0.0/16)
+# Purpose: Security logging infrastructure (EC2 log collectors, Firehose, etc.)
+# ============================================================================
+
+module "vpc_logging" {
+  source = "../../modules/network/vpc"
+
+  providers = {
+    aws = aws.seoul
+  }
+
+  vpc_name             = "vpc-bos-ai-seoul-prod-01"
+  vpc_cidr             = "10.200.0.0/16"
+  availability_zones   = ["ap-northeast-2a", "ap-northeast-2c"]
+  private_subnet_cidrs = ["10.200.1.0/24", "10.200.2.0/24"]
+  public_subnet_cidrs  = ["10.200.10.0/24", "10.200.20.0/24"]
+  enable_dns_hostnames = true
+  enable_dns_support   = true
+  enable_nat_gateway   = true
+  single_nat_gateway   = true
+
+  tags = merge(
+    local.seoul_tags,
+    {
+      Purpose = "Security Logging Pipeline"
+      VPCType = "Logging"
+    }
+  )
+}
+
+# ============================================================================
+# BOS-AI Frontend VPC (10.10.0.0/16)
+# Purpose: AI workload frontend, connects to US backend via VPC peering
+# ============================================================================
+
+module "vpc_frontend" {
   source = "../../modules/network/vpc"
 
   providers = {
@@ -47,12 +84,20 @@ module "vpc_seoul" {
   enable_dns_hostnames = true
   enable_dns_support   = true
 
-  tags = local.seoul_tags
+  tags = merge(
+    local.seoul_tags,
+    {
+      Purpose = "BOS-AI Frontend"
+      VPCType = "Frontend"
+    }
+  )
 }
 
-# US VPC
-# Purpose: AI workload hosting (Bedrock, OpenSearch, Lambda)
-# No Internet Gateway (No-IGW policy)
+# ============================================================================
+# US Backend VPC (10.20.0.0/16)
+# Purpose: AI workload backend (Bedrock, OpenSearch, Lambda)
+# ============================================================================
+
 module "vpc_us" {
   source = "../../modules/network/vpc"
 
@@ -67,12 +112,82 @@ module "vpc_us" {
   enable_dns_hostnames = true
   enable_dns_support   = true
 
-  tags = local.us_tags
+  tags = merge(
+    local.us_tags,
+    {
+      Purpose = "BOS-AI Backend"
+      VPCType = "Backend"
+    }
+  )
 }
 
-# VPC Peering Connection
-# Establishes bidirectional connectivity between Seoul and US VPCs
-# Seoul VPC acts as Transit Bridge for on-premises traffic to US region
+# ============================================================================
+# Transit Gateway
+# Purpose: Central hub for connecting VPN and multiple VPCs
+# ============================================================================
+
+# Transit Gateway
+resource "aws_ec2_transit_gateway" "main" {
+  provider = aws.seoul
+
+  description                     = "Transit Gateway for BOS-AI VPN and VPC connectivity"
+  amazon_side_asn                 = 64512
+  default_route_table_association = "enable"
+  default_route_table_propagation = "enable"
+  dns_support                     = "enable"
+  vpn_ecmp_support                = "enable"
+
+  tags = merge(
+    local.seoul_tags,
+    {
+      Name = "tgw-bos-ai-seoul-${var.environment}"
+    }
+  )
+}
+
+# TGW Attachment - Logging VPC (10.200.0.0/16)
+resource "aws_ec2_transit_gateway_vpc_attachment" "logging_vpc" {
+  provider = aws.seoul
+
+  transit_gateway_id = aws_ec2_transit_gateway.main.id
+  vpc_id             = module.vpc_logging.vpc_id
+  subnet_ids         = module.vpc_logging.private_subnet_ids
+
+  tags = merge(
+    local.seoul_tags,
+    {
+      Name = "tgw-attach-logging-vpc"
+      VPC  = "Logging Pipeline"
+    }
+  )
+
+  depends_on = [aws_ec2_transit_gateway.main]
+}
+
+# TGW Attachment - Frontend VPC (10.10.0.0/16)
+resource "aws_ec2_transit_gateway_vpc_attachment" "frontend_vpc" {
+  provider = aws.seoul
+
+  transit_gateway_id = aws_ec2_transit_gateway.main.id
+  vpc_id             = module.vpc_frontend.vpc_id
+  subnet_ids         = module.vpc_frontend.private_subnet_ids
+
+  tags = merge(
+    local.seoul_tags,
+    {
+      Name = "tgw-attach-frontend-vpc"
+      VPC  = "BOS-AI Frontend"
+    }
+  )
+
+  depends_on = [aws_ec2_transit_gateway.main]
+}
+
+# ============================================================================
+# VPC Peering Connection (Frontend Seoul <-> Backend US)
+# Purpose: Connect Seoul frontend to US backend for AI workloads
+# ============================================================================
+
 module "vpc_peering" {
   source = "../../modules/network/peering"
 
@@ -81,14 +196,14 @@ module "vpc_peering" {
     aws.accepter  = aws.us_east
   }
 
-  vpc_id      = module.vpc_seoul.vpc_id
+  vpc_id      = module.vpc_frontend.vpc_id
   peer_vpc_id = module.vpc_us.vpc_id
   peer_region = "us-east-1"
   peer_cidr   = var.us_vpc_cidr
 
   auto_accept = true
 
-  requester_route_table_ids = module.vpc_seoul.private_route_table_ids
+  requester_route_table_ids = module.vpc_frontend.private_route_table_ids
   accepter_route_table_ids  = module.vpc_us.private_route_table_ids
 
   tags = merge(
@@ -99,32 +214,116 @@ module "vpc_peering" {
   )
 
   depends_on = [
-    module.vpc_seoul,
+    module.vpc_frontend,
     module.vpc_us
   ]
 }
 
-# Security Groups for Seoul VPC
-# Minimal security groups for Seoul region (primarily for VPN and transit)
-module "security_groups_seoul" {
+# ============================================================================
+# Route Table Updates for TGW
+# ============================================================================
+
+# Add TGW routes to Logging VPC route tables
+resource "aws_route" "logging_to_frontend_via_tgw" {
+  count = length(module.vpc_logging.private_route_table_ids)
+
+  provider = aws.seoul
+
+  route_table_id         = module.vpc_logging.private_route_table_ids[count.index]
+  destination_cidr_block = var.seoul_vpc_cidr  # 10.10.0.0/16
+  transit_gateway_id     = aws_ec2_transit_gateway.main.id
+
+  depends_on = [aws_ec2_transit_gateway_vpc_attachment.logging_vpc]
+}
+
+resource "aws_route" "logging_to_onprem_via_tgw" {
+  count = length(module.vpc_logging.private_route_table_ids)
+
+  provider = aws.seoul
+
+  route_table_id         = module.vpc_logging.private_route_table_ids[count.index]
+  destination_cidr_block = "192.128.0.0/16"  # On-premises CIDR
+  transit_gateway_id     = aws_ec2_transit_gateway.main.id
+
+  depends_on = [aws_ec2_transit_gateway_vpc_attachment.logging_vpc]
+}
+
+# Add TGW routes to Frontend VPC route tables
+resource "aws_route" "frontend_to_logging_via_tgw" {
+  count = length(module.vpc_frontend.private_route_table_ids)
+
+  provider = aws.seoul
+
+  route_table_id         = module.vpc_frontend.private_route_table_ids[count.index]
+  destination_cidr_block = "10.200.0.0/16"  # Logging VPC CIDR
+  transit_gateway_id     = aws_ec2_transit_gateway.main.id
+
+  depends_on = [aws_ec2_transit_gateway_vpc_attachment.frontend_vpc]
+}
+
+resource "aws_route" "frontend_to_onprem_via_tgw" {
+  count = length(module.vpc_frontend.private_route_table_ids)
+
+  provider = aws.seoul
+
+  route_table_id         = module.vpc_frontend.private_route_table_ids[count.index]
+  destination_cidr_block = "192.128.0.0/16"  # On-premises CIDR
+  transit_gateway_id     = aws_ec2_transit_gateway.main.id
+
+  depends_on = [aws_ec2_transit_gateway_vpc_attachment.frontend_vpc]
+}
+
+# ============================================================================
+# Security Groups
+# ============================================================================
+
+# Security Groups for Logging VPC
+module "security_groups_logging" {
   source = "../../modules/network/security-groups"
 
   providers = {
     aws = aws.seoul
   }
 
-  vpc_id        = module.vpc_seoul.vpc_id
+  vpc_id        = module.vpc_logging.vpc_id
+  vpc_cidr      = "10.200.0.0/16"
+  peer_vpc_cidr = var.seoul_vpc_cidr
+  environment   = var.environment
+
+  tags = merge(
+    local.seoul_tags,
+    {
+      VPC = "Logging Pipeline"
+    }
+  )
+
+  depends_on = [module.vpc_logging]
+}
+
+# Security Groups for Frontend VPC
+module "security_groups_frontend" {
+  source = "../../modules/network/security-groups"
+
+  providers = {
+    aws = aws.seoul
+  }
+
+  vpc_id        = module.vpc_frontend.vpc_id
   vpc_cidr      = var.seoul_vpc_cidr
   peer_vpc_cidr = var.us_vpc_cidr
   environment   = var.environment
 
-  tags = local.seoul_tags
+  tags = merge(
+    local.seoul_tags,
+    {
+      VPC = "BOS-AI Frontend"
+    }
+  )
 
-  depends_on = [module.vpc_seoul]
+  depends_on = [module.vpc_frontend]
 }
 
-# Security Groups for US VPC
-# Security groups for Lambda, OpenSearch, and VPC Endpoints
+# Security Groups for US Backend VPC
 module "security_groups_us" {
   source = "../../modules/network/security-groups"
 
@@ -137,73 +336,40 @@ module "security_groups_us" {
   peer_vpc_cidr = var.seoul_vpc_cidr
   environment   = var.environment
 
-  tags = local.us_tags
+  tags = merge(
+    local.us_tags,
+    {
+      VPC = "BOS-AI Backend"
+    }
+  )
 
   depends_on = [module.vpc_us]
 }
 
-# Import existing VPN Gateway
-# Requirements: 7.1, 7.2, 7.3
-#
-# To import an existing VPN Gateway, follow these steps:
-# 1. Identify the VPN Gateway ID using AWS CLI:
-#    aws ec2 describe-vpn-gateways --region ap-northeast-2
-# 2. Replace the placeholder ID below with the actual VPN Gateway ID
-# 3. Run: terraform plan -generate-config-out=generated.tf
-# 4. Review generated.tf and merge into this configuration
-# 5. Run: terraform apply to complete the import
-#
-# Note: Uncomment the import block below and replace the ID when ready to import
+# ============================================================================
+# VPN Gateway Import (Existing)
+# Note: This will be migrated to TGW VPN attachment
+# Commented out for now - will be used when TGW is enabled
+# ============================================================================
 
-# import {
-#   to = aws_vpn_gateway.existing
-#   id = "vgw-XXXXXXXXXXXXXXXXX"  # Replace with actual VPN Gateway ID
+# # Import existing VPN Gateway for Logging VPC
+# # This is temporary - will be replaced with TGW VPN attachment
+# data "aws_vpn_gateway" "logging_vgw" {
+#   provider = aws.seoul
+# 
+#   filter {
+#     name   = "attachment.vpc-id"
+#     values = [module.vpc_logging.vpc_id]
+#   }
 # }
-
-# VPN Gateway Resource Configuration
-# This resource will be managed by Terraform after import
-resource "aws_vpn_gateway" "existing" {
-  # VPC attachment - connects VPN Gateway to Seoul VPC
-  vpc_id = module.vpc_seoul.vpc_id
-
-  # Amazon side ASN for BGP
-  amazon_side_asn = 64512
-
-  tags = merge(
-    local.seoul_tags,
-    {
-      Name     = "bos-ai-vpn-gateway-${var.environment}"
-      Imported = "true"
-      Purpose  = "On-premises connectivity"
-    }
-  )
-
-  # Ensure VPC is created before attaching VPN Gateway
-  depends_on = [module.vpc_seoul]
-}
-
-# VPN Gateway Attachment (explicit attachment for clarity)
-# Note: The vpc_id in aws_vpn_gateway already creates the attachment,
-# but this resource makes the attachment explicit and manageable
-resource "aws_vpn_gateway_attachment" "seoul" {
-  vpc_id         = module.vpc_seoul.vpc_id
-  vpn_gateway_id = aws_vpn_gateway.existing.id
-
-  depends_on = [
-    module.vpc_seoul,
-    aws_vpn_gateway.existing
-  ]
-}
-
-# Route propagation for VPN Gateway
-# Enables automatic route propagation from VPN Gateway to route tables
-resource "aws_vpn_gateway_route_propagation" "seoul_private" {
-  count = length(module.vpc_seoul.private_route_table_ids)
-
-  vpn_gateway_id = aws_vpn_gateway.existing.id
-  route_table_id = module.vpc_seoul.private_route_table_ids[count.index]
-
-  depends_on = [
-    aws_vpn_gateway_attachment.seoul
-  ]
-}
+# 
+# # Import existing VPN Gateway for Frontend VPC
+# # This is temporary - will be replaced with TGW VPN attachment
+# data "aws_vpn_gateway" "frontend_vgw" {
+#   provider = aws.seoul
+# 
+#   filter {
+#     name   = "attachment.vpc-id"
+#     values = [module.vpc_frontend.vpc_id]
+#   }
+# }
