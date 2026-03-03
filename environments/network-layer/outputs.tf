@@ -1,32 +1,65 @@
-# Network Layer Outputs
-# Exposes VPC IDs, subnet IDs, and security group IDs for app-layer consumption
-#
-# Requirements: 12.4, 9.7
+# Network Layer Outputs with Transit Gateway
+# Exposes VPC IDs, subnet IDs, security group IDs, and TGW information
 
-# Seoul VPC Outputs
-output "seoul_vpc_id" {
-  description = "ID of the Seoul VPC"
-  value       = module.vpc_seoul.vpc_id
+# ============================================================================
+# Logging VPC Outputs
+# ============================================================================
+
+output "logging_vpc_id" {
+  description = "ID of the Logging Pipeline VPC"
+  value       = module.vpc_logging.vpc_id
 }
 
-output "seoul_vpc_cidr" {
-  description = "CIDR block of the Seoul VPC"
-  value       = module.vpc_seoul.vpc_cidr
+output "logging_vpc_cidr" {
+  description = "CIDR block of the Logging Pipeline VPC"
+  value       = module.vpc_logging.vpc_cidr
 }
 
-output "seoul_private_subnet_ids" {
-  description = "List of private subnet IDs in Seoul VPC"
-  value       = module.vpc_seoul.private_subnet_ids
+output "logging_private_subnet_ids" {
+  description = "List of private subnet IDs in Logging VPC"
+  value       = module.vpc_logging.private_subnet_ids
 }
 
-output "seoul_private_route_table_ids" {
-  description = "List of private route table IDs in Seoul VPC"
-  value       = module.vpc_seoul.private_route_table_ids
+output "logging_public_subnet_ids" {
+  description = "List of public subnet IDs in Logging VPC"
+  value       = module.vpc_logging.public_subnet_ids
 }
 
-# US VPC Outputs
+output "logging_private_route_table_ids" {
+  description = "List of private route table IDs in Logging VPC"
+  value       = module.vpc_logging.private_route_table_ids
+}
+
+# ============================================================================
+# Frontend VPC Outputs
+# ============================================================================
+
+output "frontend_vpc_id" {
+  description = "ID of the BOS-AI Frontend VPC"
+  value       = module.vpc_frontend.vpc_id
+}
+
+output "frontend_vpc_cidr" {
+  description = "CIDR block of the Frontend VPC"
+  value       = module.vpc_frontend.vpc_cidr
+}
+
+output "frontend_private_subnet_ids" {
+  description = "List of private subnet IDs in Frontend VPC"
+  value       = module.vpc_frontend.private_subnet_ids
+}
+
+output "frontend_private_route_table_ids" {
+  description = "List of private route table IDs in Frontend VPC"
+  value       = module.vpc_frontend.private_route_table_ids
+}
+
+# ============================================================================
+# US Backend VPC Outputs
+# ============================================================================
+
 output "us_vpc_id" {
-  description = "ID of the US VPC"
+  description = "ID of the US Backend VPC"
   value       = module.vpc_us.vpc_id
 }
 
@@ -45,9 +78,37 @@ output "us_private_route_table_ids" {
   value       = module.vpc_us.private_route_table_ids
 }
 
+# ============================================================================
+# Transit Gateway Outputs
+# Note: Commented out until TGW module is uncommented
+# ============================================================================
+
+# output "transit_gateway_id" {
+#   description = "ID of the Transit Gateway"
+#   value       = module.transit_gateway.transit_gateway_id
+# }
+# 
+# output "transit_gateway_arn" {
+#   description = "ARN of the Transit Gateway"
+#   value       = module.transit_gateway.transit_gateway_arn
+# }
+# 
+# output "transit_gateway_default_route_table_id" {
+#   description = "ID of the default TGW route table"
+#   value       = module.transit_gateway.transit_gateway_association_default_route_table_id
+# }
+# 
+# output "tgw_vpc_attachment_ids" {
+#   description = "Map of TGW VPC attachment IDs"
+#   value       = module.transit_gateway.vpc_attachment_ids
+# }
+
+# ============================================================================
 # VPC Peering Outputs
+# ============================================================================
+
 output "vpc_peering_connection_id" {
-  description = "ID of the VPC peering connection between Seoul and US"
+  description = "ID of the VPC peering connection between Seoul Frontend and US Backend"
   value       = module.vpc_peering.peering_connection_id
 }
 
@@ -56,28 +117,28 @@ output "vpc_peering_status" {
   value       = module.vpc_peering.peering_status
 }
 
-# Seoul Security Group Outputs
-output "seoul_lambda_security_group_id" {
-  description = "ID of the Lambda security group in Seoul VPC"
-  value       = module.security_groups_seoul.lambda_security_group_id
+# ============================================================================
+# Security Group Outputs - Logging VPC
+# ============================================================================
+
+output "logging_security_group_ids" {
+  description = "Map of all security group IDs in Logging VPC"
+  value       = module.security_groups_logging.all_security_group_ids
 }
 
-output "seoul_opensearch_security_group_id" {
-  description = "ID of the OpenSearch security group in Seoul VPC"
-  value       = module.security_groups_seoul.opensearch_security_group_id
+# ============================================================================
+# Security Group Outputs - Frontend VPC
+# ============================================================================
+
+output "frontend_security_group_ids" {
+  description = "Map of all security group IDs in Frontend VPC"
+  value       = module.security_groups_frontend.all_security_group_ids
 }
 
-output "seoul_vpc_endpoints_security_group_id" {
-  description = "ID of the VPC Endpoints security group in Seoul VPC"
-  value       = module.security_groups_seoul.vpc_endpoints_security_group_id
-}
+# ============================================================================
+# Security Group Outputs - US Backend VPC
+# ============================================================================
 
-output "seoul_all_security_group_ids" {
-  description = "Map of all security group IDs in Seoul VPC"
-  value       = module.security_groups_seoul.all_security_group_ids
-}
-
-# US Security Group Outputs
 output "us_lambda_security_group_id" {
   description = "ID of the Lambda security group in US VPC"
   value       = module.security_groups_us.lambda_security_group_id
@@ -98,7 +159,10 @@ output "us_all_security_group_ids" {
   value       = module.security_groups_us.all_security_group_ids
 }
 
-# Convenience outputs for app-layer consumption
+# ============================================================================
+# Convenience Outputs
+# ============================================================================
+
 output "bedrock_security_group_ids" {
   description = "Security group IDs for Bedrock workload (Lambda, OpenSearch, VPC Endpoints)"
   value = {
@@ -108,18 +172,20 @@ output "bedrock_security_group_ids" {
   }
 }
 
-# VPN Gateway Outputs
-output "vpn_gateway_id" {
-  description = "ID of the VPN Gateway attached to Seoul VPC"
-  value       = aws_vpn_gateway.existing.id
+output "all_vpc_ids" {
+  description = "Map of all VPC IDs"
+  value = {
+    logging  = module.vpc_logging.vpc_id
+    frontend = module.vpc_frontend.vpc_id
+    backend  = module.vpc_us.vpc_id
+  }
 }
 
-output "vpn_gateway_amazon_side_asn" {
-  description = "Amazon side ASN for BGP"
-  value       = aws_vpn_gateway.existing.amazon_side_asn
-}
-
-output "vpn_gateway_attachment_id" {
-  description = "ID of the VPN Gateway attachment to Seoul VPC"
-  value       = aws_vpn_gateway_attachment.seoul.id
+output "all_vpc_cidrs" {
+  description = "Map of all VPC CIDRs"
+  value = {
+    logging  = module.vpc_logging.vpc_cidr
+    frontend = module.vpc_frontend.vpc_cidr
+    backend  = module.vpc_us.vpc_cidr
+  }
 }
