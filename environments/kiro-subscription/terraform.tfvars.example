@@ -1,0 +1,23 @@
+# Example Terraform Variables for Kiro Subscription
+# Copy this file to terraform.tfvars and update values as needed
+
+aws_region = "us-east-1"
+environment = "prod"
+
+# S3 Bucket Configuration
+bucket_name = "bos-ai-kiro-logs"
+
+# Logging Configuration
+log_retention_days = 90
+
+# Versioning Configuration
+enable_versioning = true
+enable_mfa_delete = false
+
+# Additional Tags
+tags = {
+  Team        = "Kiro-Team"
+  CostCenter  = "Kiro-Infrastructure"
+  Compliance  = "GDPR"
+  DataType    = "UserMetadata"
+}

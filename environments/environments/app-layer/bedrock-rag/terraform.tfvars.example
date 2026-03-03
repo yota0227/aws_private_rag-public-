@@ -1,0 +1,48 @@
+# Example Terraform Variables for App Layer - Bedrock RAG
+# Copy this file to terraform.tfvars and customize the values
+
+# Project Configuration
+project_name = "bos-ai"
+environment  = "dev"
+us_region    = "us-east-1"
+
+# Bedrock Configuration
+knowledge_base_name   = "bos-ai-knowledge-base"
+embedding_model_arn   = "arn:aws:bedrock:us-east-1::foundation-model/amazon.titan-embed-text-v1"
+foundation_model_arn  = "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-v2"
+
+# OpenSearch Configuration
+opensearch_collection_name = "bos-ai-vectors"
+opensearch_index_name      = "bedrock-knowledge-base-index"
+vector_dimension           = 1536
+
+opensearch_capacity_units = {
+  search_ocu   = 2
+  indexing_ocu = 2
+}
+
+# S3 Configuration
+source_bucket_name      = "bos-ai-documents-seoul"
+destination_bucket_name = "bos-ai-documents-us"
+
+# Lambda Configuration
+lambda_function_name = "document-processor"
+lambda_runtime       = "python3.11"
+lambda_memory_size   = 1024
+lambda_timeout       = 300
+
+# Monitoring Configuration
+log_retention_days = 30
+
+# SNS notification emails for alarms and budget alerts
+sns_notification_emails = [
+  "admin@example.com",
+  "ops@example.com"
+]
+
+# Budget Configuration
+monthly_budget_amount = 1000
+budget_alert_thresholds = [80, 100]
+
+# CloudTrail Configuration
+cloudtrail_bucket_name = "bos-ai-cloudtrail-logs"

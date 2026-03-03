@@ -1,0 +1,30 @@
+Terraform State Backup
+======================
+Backup Date: Fri Feb 20 01:06:53 KST 2026
+Backup Directory: backups/20260220_010646
+S3 Bucket: bos-ai-terraform-state
+DynamoDB Table: terraform-state-lock
+Region: ap-northeast-2
+
+AWS Account Information:
+{
+    "UserId": "AIDAXYLKIQX5XIKCRMV74",
+    "Account": "533335672315",
+    "Arn": "arn:aws:iam::533335672315:user/seungil.woo"
+}
+
+Backed Up State Files:
+2026-02-18 21:50:59     259416 app-layer/bedrock-rag/terraform.tfstate
+2026-02-19 17:17:31     104174 network-layer/terraform.tfstate
+
+Git Information:
+Branch: main
+Commit: 73ccd4026a25fcd675031ec60fc93db4df4a7f09
+Status: 
+ M README.md
+?? .kiro/specs/bos-ai-vpc-consolidation/
+?? .kiro/specs/vpc-migration-seoul-unification/
+?? backups/
+?? scripts/backup-terraform-state.sh
+
+Purpose: Pre-migration backup for BOS-AI VPC consolidation (Task 1.1)
