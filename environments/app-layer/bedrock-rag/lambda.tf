@@ -2,58 +2,39 @@
 # Creates Lambda function for document processing with VPC connectivity
 # Requirements: 3.3, NFR-1, NFR-2
 
-# Security Group for Lambda
+# Security Group for Lambda - Private RAG VPC (서울 Frontend)
+# Requirements: 2.1, 2.2
 resource "aws_security_group" "lambda" {
-  name        = "lambda-bos-ai-seoul-prod"
-  description = "Security group for Lambda document processor"
-  vpc_id      = "vpc-066c464f9c750ee9e"  # Seoul consolidated VPC
+  provider = aws.seoul
 
-  # No inbound rules needed for Lambda (Lambda doesn't accept inbound connections)
+  name        = "lambda-private-rag-${var.environment}"
+  description = "Lambda document processor - Private RAG VPC (Seoul Frontend)"
+  vpc_id      = local.frontend_vpc_id  # Private RAG VPC (10.10.0.0/16)
 
-  # Outbound Rules
-  # Allow HTTPS to OpenSearch
+  # No inbound rules needed for Lambda
+
+  # Outbound: HTTPS to Virginia VPC (via VPC Peering) - Bedrock, OpenSearch, S3
   egress {
-    description     = "HTTPS to OpenSearch Serverless"
-    from_port       = 443
-    to_port         = 443
-    protocol        = "tcp"
-    security_groups = [aws_security_group.opensearch.id]
-  }
-
-  # Allow HTTPS to VPC Endpoints
-  egress {
-    description = "HTTPS to VPC Endpoints"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["10.200.0.0/16"]
-  }
-
-  # Allow HTTPS to Virginia VPC (via peering)
-  egress {
-    description = "HTTPS to Virginia VPC"
+    description = "HTTPS to Virginia Backend VPC via VPC Peering"
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
     cidr_blocks = ["10.20.0.0/16"]
   }
 
-  # Allow all outbound for AWS service access
+  # Outbound: HTTPS to Seoul VPC Endpoints (CloudWatch Logs, Secrets Manager, etc.)
   egress {
-    description = "Allow all outbound"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+    description = "HTTPS to Seoul VPC Endpoints"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["10.10.0.0/16"]
   }
 
-  tags = {
-    Name        = "lambda-bos-ai-seoul-prod"
-    Project     = "BOS-AI"
-    Environment = "Production"
-    ManagedBy   = "Terraform"
-    Layer       = "Security"
-  }
+  tags = merge(local.common_tags, {
+    Name    = "lambda-private-rag-${var.environment}"
+    Purpose = "Lambda document processor - Frontend"
+  })
 }
 
 # IAM Role for Lambda
@@ -107,7 +88,7 @@ resource "aws_iam_role_policy" "lambda_s3" {
   })
 }
 
-# IAM Policy for Lambda - OpenSearch Access
+# IAM Policy for Lambda - OpenSearch Access (Cross-Region: us-east-1)
 resource "aws_iam_role_policy" "lambda_opensearch" {
   name = "lambda-opensearch-access"
   role = aws_iam_role.lambda.id
@@ -121,14 +102,14 @@ resource "aws_iam_role_policy" "lambda_opensearch" {
           "aoss:APIAccessAll"
         ]
         Resource = [
-          "arn:aws:aoss:ap-northeast-2:533335672315:collection/*"
+          "arn:aws:aoss:us-east-1:533335672315:collection/*"
         ]
       }
     ]
   })
 }
 
-# IAM Policy for Lambda - Bedrock Access
+# IAM Policy for Lambda - Bedrock Access (Cross-Region: us-east-1)
 resource "aws_iam_role_policy" "lambda_bedrock" {
   name = "lambda-bedrock-access"
   role = aws_iam_role.lambda.id
@@ -139,10 +120,13 @@ resource "aws_iam_role_policy" "lambda_bedrock" {
       {
         Effect = "Allow"
         Action = [
-          "bedrock:InvokeModel"
+          "bedrock:InvokeModel",
+          "bedrock:Retrieve",
+          "bedrock:RetrieveAndGenerate"
         ]
         Resource = [
-          "arn:aws:bedrock:ap-northeast-2::foundation-model/*"
+          "arn:aws:bedrock:us-east-1::foundation-model/*",
+          "arn:aws:bedrock:us-east-1:533335672315:knowledge-base/*"
         ]
       }
     ]
@@ -216,9 +200,12 @@ resource "aws_iam_role_policy" "lambda_vpc" {
   })
 }
 
-# Lambda Function
+# Lambda Function - Seoul Private RAG VPC
+# Requirements: 2.1, 2.2, 2.11
 resource "aws_lambda_function" "document_processor" {
-  filename         = "lambda-deployment-package.zip"  # Placeholder - needs actual deployment package
+  provider = aws.seoul
+
+  filename         = "lambda-deployment-package.zip"
   function_name    = "lambda-document-processor-seoul-prod"
   role             = aws_iam_role.lambda.arn
   handler          = "index.handler"
@@ -227,31 +214,32 @@ resource "aws_lambda_function" "document_processor" {
   timeout          = 300
   memory_size      = 512
 
-  # VPC Configuration
+  # VPC Configuration - Private RAG VPC (Seoul Frontend)
   vpc_config {
-    subnet_ids         = ["subnet-0f027e9de8e26c18f", "subnet-0625d992edf151017"]  # Replace with actual subnet IDs
+    subnet_ids         = local.frontend_private_subnet_ids  # 10.10.1.0/24, 10.10.2.0/24
     security_group_ids = [aws_security_group.lambda.id]
   }
 
   # Environment Variables
   environment {
     variables = {
-      OPENSEARCH_ENDPOINT = aws_opensearchserverless_collection.main.collection_endpoint
-      OPENSEARCH_INDEX    = "bos-ai-documents"
-      BEDROCK_MODEL_ID    = "amazon.titan-embed-text-v1"
-      S3_BUCKET_VIRGINIA  = "bos-ai-documents-us"
-      SECRET_NAME         = "opensearch/bos-ai-rag-prod"
-      AWS_REGION          = "ap-northeast-2"
+      OPENSEARCH_ENDPOINT  = data.aws_opensearchserverless_collection.virginia.collection_endpoint
+      OPENSEARCH_INDEX     = "bos-ai-documents"
+      BEDROCK_MODEL_ID     = "amazon.titan-embed-text-v1"
+      BEDROCK_REGION       = "us-east-1"
+      S3_BUCKET_VIRGINIA   = "bos-ai-documents-us"
+      S3_BUCKET_SEOUL      = "bos-ai-documents-seoul-v3"
+      SECRET_NAME          = "opensearch/bos-ai-rag-prod"
+      LAMBDA_REGION        = "ap-northeast-2"
+      BACKEND_REGION       = "us-east-1"
     }
   }
 
-  tags = {
-    Name        = "lambda-document-processor-seoul-prod"
-    Project     = "BOS-AI"
-    Environment = "Production"
-    ManagedBy   = "Terraform"
-    Layer       = "Compute"
-  }
+  tags = merge(local.common_tags, {
+    Name    = "lambda-document-processor-seoul-prod"
+    Purpose = "RAG Document Processor - Frontend"
+    Layer   = "Compute"
+  })
 
   depends_on = [
     aws_iam_role_policy.lambda_s3,
@@ -290,6 +278,8 @@ resource "aws_cloudwatch_log_group" "lambda" {
 
 # Lambda Permission for S3 to invoke
 resource "aws_lambda_permission" "allow_s3" {
+  provider = aws.seoul
+
   statement_id  = "AllowExecutionFromS3"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.document_processor.function_name

@@ -12,14 +12,14 @@ output "knowledge_base_arn" {
   value       = module.bedrock_rag.knowledge_base_arn
 }
 
-# OpenSearch Outputs
-output "opensearch_collection_endpoint" {
-  description = "Endpoint of OpenSearch Serverless collection"
+# OpenSearch Outputs (module-managed Virginia collection)
+output "opensearch_module_collection_endpoint" {
+  description = "Endpoint of OpenSearch Serverless collection (module)"
   value       = module.bedrock_rag.opensearch_collection_endpoint
 }
 
-output "opensearch_collection_arn" {
-  description = "ARN of OpenSearch Serverless collection"
+output "opensearch_module_collection_arn" {
+  description = "ARN of OpenSearch Serverless collection (module)"
   value       = module.bedrock_rag.opensearch_collection_arn
 }
 

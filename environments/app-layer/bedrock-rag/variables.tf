@@ -139,3 +139,10 @@ variable "cloudtrail_bucket_name" {
   type        = string
   default     = "bos-ai-cloudtrail-logs"
 }
+
+# ACM Certificate for Private API Gateway Custom Domain
+variable "acm_certificate_arn" {
+  description = "ACM certificate ARN for rag.corp.bos-semi.com (Private CA or Regional)"
+  type        = string
+  default     = ""  # Must be set before deployment
+}

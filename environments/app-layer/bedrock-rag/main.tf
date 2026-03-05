@@ -209,7 +209,7 @@ module "network_acls" {
   vpc_name            = "${var.project_name}-${var.environment}-us-vpc"
   private_subnet_ids  = local.us_private_subnet_ids
   vpc_cidr            = data.terraform_remote_state.network.outputs.us_vpc_cidr
-  peer_vpc_cidr       = data.terraform_remote_state.network.outputs.seoul_vpc_cidr
+  peer_vpc_cidr       = data.terraform_remote_state.network.outputs.frontend_vpc_cidr
 
   tags = local.common_tags
 }

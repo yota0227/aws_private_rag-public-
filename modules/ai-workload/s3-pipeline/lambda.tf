@@ -60,12 +60,16 @@ resource "null_resource" "lambda_placeholder" {
   }
 
   provisioner "local-exec" {
-    command = <<-EOT
-      if [ ! -f "${path.module}/lambda_placeholder.zip" ]; then
-        echo 'def lambda_handler(event, context): return {"statusCode": 200}' > /tmp/handler.py
-        cd /tmp && zip -q ${path.module}/lambda_placeholder.zip handler.py
-        rm /tmp/handler.py
-      fi
+    interpreter = ["PowerShell", "-Command"]
+    command     = <<-EOT
+      if (-not (Test-Path "${path.module}/lambda_placeholder.zip")) {
+        $handler = 'def lambda_handler(event, context): return {"statusCode": 200}'
+        $tmpDir = [System.IO.Path]::GetTempPath()
+        $handlerPath = Join-Path $tmpDir "handler.py"
+        $handler | Out-File -FilePath $handlerPath -Encoding utf8
+        Compress-Archive -Path $handlerPath -DestinationPath "${path.module}/lambda_placeholder.zip" -Force
+        Remove-Item $handlerPath
+      }
     EOT
   }
 }

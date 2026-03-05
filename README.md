@@ -87,7 +87,20 @@ Transit Gateway (tgw-0897383168475b532)
 └── README.md                  # 이 파일
 ```
 
-## 🚀 빠른 시작
+## 🎓 팀원 교육
+
+새로운 팀원이 시스템을 이해하고 배포할 수 있도록 다음 순서로 학습하세요:
+
+**시작점**: [Report/README_TEAM_EDUCATION.md](Report/README_TEAM_EDUCATION.md) - 팀원 교육 자료 가이드
+
+**학습 순서**:
+1. [Report/TEAM_TRAINING_GUIDE.md](Report/TEAM_TRAINING_GUIDE.md) - 팀원 교육 가이드 (30분)
+2. [Report/ARCHITECTURE_DETAILS.md](Report/ARCHITECTURE_DETAILS.md) - 아키텍처 상세 설명 (1시간)
+3. [Report/DEPLOYMENT_PHASES.md](Report/DEPLOYMENT_PHASES.md) - 배포 3단계 상세 가이드 (1시간)
+4. 실제 배포 및 테스트 (2-3시간)
+5. [docs/OPERATIONAL_RUNBOOK.md](docs/OPERATIONAL_RUNBOOK.md) - 운영 및 트러블슈팅 (필요시)
+
+**예상 학습 시간**: 3-4시간 (이론 2시간 + 실습 2-3시간)
 
 ### 사전 요구사항
 
@@ -117,19 +130,23 @@ terraform init
 
 ### 배포
 
+**배포 3단계 상세 가이드**: [Report/DEPLOYMENT_PHASES.md](Report/DEPLOYMENT_PHASES.md)
+
 #### 1단계: 네트워크 인프라 배포
 ```bash
 cd environments/network-layer
 terraform plan
 terraform apply
 ```
+**구성**: VPC, Transit Gateway, VPC Peering, Route53 Resolver, VPC Endpoints
 
 #### 2단계: AI 워크로드 배포
 ```bash
-cd environments/ai-workload
+cd environments/app-layer/bedrock-rag
 terraform plan
 terraform apply
 ```
+**구성**: Lambda, API Gateway, S3, OpenSearch, Bedrock Knowledge Base
 
 #### 3단계: 모니터링 설정
 ```bash
@@ -137,6 +154,7 @@ cd environments/monitoring
 terraform plan
 terraform apply
 ```
+**구성**: CloudWatch, CloudTrail, 알람
 
 ## 📊 현재 상태
 
@@ -182,11 +200,13 @@ terraform apply
 
 | 문서 | 설명 |
 |------|------|
-| [DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md) | 전체 배포 가이드 |
-| [OPERATIONAL_RUNBOOK.md](docs/OPERATIONAL_RUNBOOK.md) | 운영 및 트러블슈팅 |
-| [vpn-migration-and-testing-guide.md](docs/vpn-migration-and-testing-guide.md) | VPN 마이그레이션 및 테스트 |
-| [tgw-migration-guide.md](docs/tgw-migration-guide.md) | Transit Gateway 마이그레이션 |
-| [CURRENT_STATUS.md](docs/CURRENT_STATUS.md) | 현재 상태 및 진행 상황 |
+| [Report/DEPLOYMENT_PHASES.md](Report/DEPLOYMENT_PHASES.md) | **배포 3단계 상세 가이드** - 각 단계별 구성 요소 및 배포 방법 |
+| [Report/ARCHITECTURE_DETAILS.md](Report/ARCHITECTURE_DETAILS.md) | **아키텍처 상세 설명** - 시스템 목적, 데이터 흐름, 보안, 성능 |
+| [docs/DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md) | 전체 배포 가이드 |
+| [docs/OPERATIONAL_RUNBOOK.md](docs/OPERATIONAL_RUNBOOK.md) | 운영 및 트러블슈팅 |
+| [docs/vpn-migration-and-testing-guide.md](docs/vpn-migration-and-testing-guide.md) | VPN 마이그레이션 및 테스트 |
+| [docs/tgw-migration-guide.md](docs/tgw-migration-guide.md) | Transit Gateway 마이그레이션 |
+| [docs/CURRENT_STATUS.md](docs/CURRENT_STATUS.md) | 현재 상태 및 진행 상황 |
 
 ## 🧪 테스트
 

@@ -15,7 +15,7 @@ data "terraform_remote_state" "network" {
 
 # Local values derived from network layer
 locals {
-  # Network Layer Outputs
+  # Network Layer Outputs - US Backend VPC
   us_vpc_id                   = data.terraform_remote_state.network.outputs.us_vpc_id
   us_private_subnet_ids       = data.terraform_remote_state.network.outputs.us_private_subnet_ids
   us_private_route_table_ids  = data.terraform_remote_state.network.outputs.us_private_route_table_ids
@@ -24,7 +24,15 @@ locals {
     data.terraform_remote_state.network.outputs.us_opensearch_security_group_id,
     data.terraform_remote_state.network.outputs.us_vpc_endpoints_security_group_id
   ]
-  
+
+  # Network Layer Outputs - Seoul Frontend (Private RAG) VPC
+  frontend_vpc_id              = data.terraform_remote_state.network.outputs.frontend_vpc_id
+  frontend_private_subnet_ids  = data.terraform_remote_state.network.outputs.frontend_private_subnet_ids
+
+  # Network Layer Outputs - VPC Endpoints (Private RAG VPC)
+  frontend_execute_api_endpoint_id = data.terraform_remote_state.network.outputs.frontend_execute_api_endpoint_id
+  frontend_vpc_endpoints_sg_id     = data.terraform_remote_state.network.outputs.frontend_vpc_endpoints_sg_id
+
   # Common Tags
   common_tags = {
     Project     = var.project_name
