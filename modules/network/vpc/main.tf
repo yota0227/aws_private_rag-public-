@@ -42,7 +42,7 @@ resource "aws_route_table" "private" {
 }
 
 resource "aws_route_table_association" "private" {
-  count = 0  # Disabled - already exist in AWS, will be imported manually
+  count = 0  # Disabled - managed per-VPC in environment layer due to mixed RTB states
 
   subnet_id      = aws_subnet.private[count.index].id
   route_table_id = aws_route_table.private[count.index].id

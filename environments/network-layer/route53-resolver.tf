@@ -36,6 +36,24 @@ resource "aws_security_group" "resolver_inbound" {
     cidr_blocks = ["192.128.0.0/16"]
   }
 
+  # TCP 53 from VPC internal (TGW ENI uses VPC CIDR as source)
+  ingress {
+    description = "DNS TCP from VPC internal (TGW transit)"
+    from_port   = 53
+    to_port     = 53
+    protocol    = "tcp"
+    cidr_blocks = ["10.10.0.0/16"]
+  }
+
+  # UDP 53 from VPC internal (TGW ENI uses VPC CIDR as source)
+  ingress {
+    description = "DNS UDP from VPC internal (TGW transit)"
+    from_port   = 53
+    to_port     = 53
+    protocol    = "udp"
+    cidr_blocks = ["10.10.0.0/16"]
+  }
+
   egress {
     description = "Allow all outbound"
     from_port   = 0

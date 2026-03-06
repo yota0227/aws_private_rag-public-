@@ -46,7 +46,7 @@ module "vpc_logging" {
     aws = aws.seoul
   }
 
-  vpc_name             = "vpc-bos-ai-seoul-prod-01"
+  vpc_name             = "vpc-logging-seoul-prod"
   vpc_cidr             = "10.200.0.0/16"
   availability_zones   = ["ap-northeast-2a", "ap-northeast-2c"]
   private_subnet_cidrs = ["10.200.1.0/24", "10.200.2.0/24"]
@@ -271,6 +271,18 @@ resource "aws_route" "frontend_to_onprem_via_tgw" {
   transit_gateway_id     = aws_ec2_transit_gateway.main.id
 
   depends_on = [aws_ec2_transit_gateway_vpc_attachment.frontend_vpc]
+}
+
+# Frontend VPC: Subnet → Route Table Association
+# Terraform이 만든 RTB(TGW/Peering 경로 포함)에 서브넷을 명시적으로 연결
+# Main RTB(local만 있음)를 사용하지 않도록 함
+resource "aws_route_table_association" "frontend_private" {
+  count = length(module.vpc_frontend.private_subnet_ids)
+
+  provider = aws.seoul
+
+  subnet_id      = module.vpc_frontend.private_subnet_ids[count.index]
+  route_table_id = module.vpc_frontend.private_route_table_ids[count.index]
 }
 
 # ============================================================================
