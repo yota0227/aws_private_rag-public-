@@ -131,6 +131,15 @@ resource "aws_api_gateway_resource" "health" {
   path_part   = "health"
 }
 
+# /rag/categories resource (팀/카테고리 목록 API)
+resource "aws_api_gateway_resource" "categories" {
+  provider = aws.seoul
+
+  rest_api_id = aws_api_gateway_rest_api.private_rag.id
+  parent_id   = aws_api_gateway_resource.rag.id
+  path_part   = "categories"
+}
+
 # POST /rag/query
 resource "aws_api_gateway_method" "query_post" {
   provider = aws.seoul
@@ -278,6 +287,27 @@ resource "aws_api_gateway_integration" "health_lambda" {
   uri                     = aws_lambda_function.document_processor.invoke_arn
 }
 
+# GET /rag/categories (팀/카테고리 목록)
+resource "aws_api_gateway_method" "categories_get" {
+  provider = aws.seoul
+
+  rest_api_id   = aws_api_gateway_rest_api.private_rag.id
+  resource_id   = aws_api_gateway_resource.categories.id
+  http_method   = "GET"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "categories_lambda" {
+  provider = aws.seoul
+
+  rest_api_id             = aws_api_gateway_rest_api.private_rag.id
+  resource_id             = aws_api_gateway_resource.categories.id
+  http_method             = aws_api_gateway_method.categories_get.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.document_processor.invoke_arn
+}
+
 # ----------------------------------------------------------------------------
 # Deployment & Stage
 # ----------------------------------------------------------------------------
@@ -297,6 +327,7 @@ resource "aws_api_gateway_deployment" "main" {
       aws_api_gateway_resource.documents_complete.id,
       aws_api_gateway_resource.upload.id,
       aws_api_gateway_resource.health.id,
+      aws_api_gateway_resource.categories.id,
       aws_api_gateway_method.query_post.id,
       aws_api_gateway_method.documents_get.id,
       aws_api_gateway_method.documents_initiate_post.id,
@@ -304,6 +335,7 @@ resource "aws_api_gateway_deployment" "main" {
       aws_api_gateway_method.documents_complete_post.id,
       aws_api_gateway_method.upload_get.id,
       aws_api_gateway_method.health_get.id,
+      aws_api_gateway_method.categories_get.id,
       aws_api_gateway_integration.query_lambda.id,
       aws_api_gateway_integration.documents_get_lambda.id,
       aws_api_gateway_integration.documents_initiate_lambda.id,
@@ -311,6 +343,7 @@ resource "aws_api_gateway_deployment" "main" {
       aws_api_gateway_integration.documents_complete_lambda.id,
       aws_api_gateway_integration.upload_lambda.id,
       aws_api_gateway_integration.health_lambda.id,
+      aws_api_gateway_integration.categories_lambda.id,
     ]))
   }
 
