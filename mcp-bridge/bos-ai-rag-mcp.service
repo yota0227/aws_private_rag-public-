@@ -1,0 +1,16 @@
+[Unit]
+Description=BOS-AI RAG MCP SSE Bridge
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/common/bos-ai-rag-mcp-bridge
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=5
+Environment=PORT=3100
+Environment=RAG_API_BASE=https://r0qa9lzhgi.execute-api.ap-northeast-2.amazonaws.com/dev/rag
+
+[Install]
+WantedBy=multi-user.target
