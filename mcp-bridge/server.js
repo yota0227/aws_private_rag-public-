@@ -1,6 +1,13 @@
+/**
+ * BOS-AI RAG MCP SSE Bridge
+ * 
+ * Obot → localhost:3100/sse (MCP SSE) → Seoul Private API Gateway → Lambda → Virginia Bedrock KB
+ */
 const express = require("express");
 const http = require("http");
 const https = require("https");
+const { McpServer } = require("@modelcontextprotocol/sdk/server/mcp.js");
+const { SSEServerTransport } = require("@modelcontextprotocol/sdk/server/sse.js");
 
 const RAG_API_BASE = process.env.RAG_API_BASE || "https://r0qa9lzhgi.execute-api.ap-northeast-2.amazonaws.com/dev/rag";
 const PORT = process.env.PORT || 3100;
@@ -12,61 +19,136 @@ function ragApi(method, path, body) {
       hostname: url.hostname,
       port: url.port || 443,
       path: url.pathname + url.search,
-      method: method,
+      method,
       headers: { "Content-Type": "application/json" },
       timeout: 60000
     };
-
     const req = https.request(options, (res) => {
       let data = "";
       res.on("data", (chunk) => { data += chunk; });
       res.on("end", () => {
-        try {
-          resolve(JSON.parse(data));
-        } catch(e) {
-          resolve({ raw: data });
-        }
+        try { resolve(JSON.parse(data)); }
+        catch(e) { resolve({ raw: data }); }
       });
     });
-
-    req.on("error", (err) => { reject(err); });
+    req.on("error", reject);
     req.on("timeout", () => { req.destroy(); reject(new Error("Request timeout")); });
-
     if (body) req.write(JSON.stringify(body));
     req.end();
   });
 }
 
+// MCP Server 생성
+function createMcpServer() {
+  const mcp = new McpServer({ name: "bos-ai-rag", version: "1.0.0" });
+
+  // Tool 1: RAG 질의
+  mcp.tool(
+    "rag_query",
+    "BOS-AI RAG 지식 베이스에 질의합니다. 업로드된 SoC 코드, 스펙 문서 등을 검색하여 답변합니다.",
+    { query: { type: "string", description: "질의 내용 (한국어/영어 모두 가능)" } },
+    async (params) => {
+      try {
+        const resp = await ragApi("POST", "/query", { query: params.query });
+        if (resp.error) return { content: [{ type: "text", text: "오류: " + resp.error }], isError: true };
+        let text = resp.answer || resp.message || JSON.stringify(resp);
+        if (resp.citations?.length > 0) {
+          text += "\n\n--- 참조 문서 ---";
+          resp.citations.forEach((c, i) => {
+            if (c.references?.length > 0) text += "\n[" + (i+1) + "] " + c.references.join(", ");
+          });
+        }
+        return { content: [{ type: "text", text }] };
+      } catch(err) {
+        return { content: [{ type: "text", text: "RAG API 호출 실패: " + err.message }], isError: true };
+      }
+    }
+  );
+
+  // Tool 2: 문서 목록 조회
+  mcp.tool(
+    "rag_list_documents",
+    "업로드된 RAG 문서 목록을 조회합니다. 팀/카테고리로 필터링 가능합니다.",
+    {
+      team: { type: "string", description: "팀 필터 (예: soc). 생략 시 전체 조회" },
+      category: { type: "string", description: "카테고리 필터 (예: code, spec). 생략 시 전체 조회" }
+    },
+    async (params) => {
+      try {
+        let path = "/documents";
+        const qs = [];
+        if (params.team) qs.push("team=" + encodeURIComponent(params.team));
+        if (params.category) qs.push("category=" + encodeURIComponent(params.category));
+        if (qs.length > 0) path += "?" + qs.join("&");
+        const resp = await ragApi("GET", path);
+        if (resp.error) return { content: [{ type: "text", text: "오류: " + resp.error }], isError: true };
+        if (!resp.files?.length) return { content: [{ type: "text", text: "업로드된 문서가 없습니다." }] };
+        let text = "총 " + resp.count + "개 문서:\n";
+        resp.files.forEach((f) => {
+          const size = f.size < 1048576 ? (f.size/1024).toFixed(1)+" KB" : (f.size/1048576).toFixed(1)+" MB";
+          text += "\n- [" + f.team + "/" + f.category + "] " + f.filename + " (" + size + ")";
+        });
+        return { content: [{ type: "text", text }] };
+      } catch(err) {
+        return { content: [{ type: "text", text: "문서 목록 조회 실패: " + err.message }], isError: true };
+      }
+    }
+  );
+
+  // Tool 3: 카테고리 목록
+  mcp.tool(
+    "rag_categories",
+    "RAG 시스템에 등록된 팀/카테고리 목록을 조회합니다.",
+    {},
+    async () => {
+      try {
+        const resp = await ragApi("GET", "/categories");
+        if (resp.error) return { content: [{ type: "text", text: "오류: " + resp.error }], isError: true };
+        let text = "등록된 팀/카테고리:\n";
+        const teams = resp.teams || {};
+        Object.keys(teams).forEach((key) => {
+          const info = teams[key];
+          text += "\n- " + info.name + " (" + key + "): " + info.categories.join(", ");
+        });
+        return { content: [{ type: "text", text }] };
+      } catch(err) {
+        return { content: [{ type: "text", text: "카테고리 조회 실패: " + err.message }], isError: true };
+      }
+    }
+  );
+
+  return mcp;
+}
+
+// Express + SSE Transport
 const app = express();
 app.use(express.json());
+const sessions = {};
 
 app.get("/health", (req, res) => {
-  res.json({ status: "ok", ragApi: RAG_API_BASE });
+  res.json({ status: "ok", ragApi: RAG_API_BASE, sessions: Object.keys(sessions).length });
 });
 
 app.get("/sse", (req, res) => {
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
-  res.setHeader("X-Accel-Buffering", "no");
+  const transport = new SSEServerTransport("/messages", res);
+  const sessionId = transport.sessionId;
+  sessions[sessionId] = { transport, connectedAt: new Date() };
+  console.log("[" + new Date().toISOString() + "] MCP session opened: " + sessionId);
 
-  const sessionId = Math.random().toString(36).substring(7);
-  console.log("[" + new Date().toISOString() + "] SSE session opened: " + sessionId);
+  transport.onclose = () => {
+    delete sessions[sessionId];
+    console.log("[" + new Date().toISOString() + "] MCP session closed: " + sessionId);
+  };
 
-  res.write(":connected\n\n");
-
-  const interval = setInterval(() => {
-    res.write(":ping\n\n");
-  }, 30000);
-
-  req.on("close", () => {
-    clearInterval(interval);
-    console.log("[" + new Date().toISOString() + "] SSE session closed: " + sessionId);
-  });
+  const mcp = createMcpServer();
+  mcp.connect(transport);
 });
 
 app.post("/messages", (req, res) => {
-  res.json({ status: "ok" });
+  const sessionId = req.query.sessionId;
+  const session = sessions[sessionId];
+  if (!session) { res.status(400).json({ error: "Invalid session" }); return; }
+  session.transport.handlePostMessage(req, res);
 });
 
 const server = http.createServer(app);
@@ -78,11 +160,12 @@ server.listen(PORT, () => {
   console.log("  MCP SSE:  http://localhost:" + PORT + "/sse");
   console.log("  Health:   http://localhost:" + PORT + "/health");
   console.log("  RAG API:  " + RAG_API_BASE);
+  console.log("  Node.js:  " + process.version);
   console.log("=============================");
 });
 
 process.on("SIGTERM", () => {
   console.log("Shutting down...");
-  server.close(() => { process.exit(0); });
-  setTimeout(() => { process.exit(1); }, 10000);
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(1), 10000);
 });
