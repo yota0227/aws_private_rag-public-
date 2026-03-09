@@ -5,7 +5,7 @@ After=network.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/common/bos-ai-rag-mcp-bridge
+WorkingDirectory=/root/bos-ai-rag-mcp-bridge
 ExecStart=/usr/bin/node server.js
 Restart=always
 RestartSec=5
