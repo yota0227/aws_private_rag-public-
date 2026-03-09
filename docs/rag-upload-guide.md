@@ -168,4 +168,4 @@ rm index.py lambda-deploy.zip
 
 ## 9. 문의
 
-시스템 관련 문의: AI 인프라팀
+시스템 관련 문의: IT/Devops
