@@ -1,0 +1,13 @@
+{
+  "name": "bos-ai-rag-mcp-bridge",
+  "version": "1.0.0",
+  "description": "MCP SSE Bridge - Obot에서 Seoul Private RAG API Gateway를 MCP tool로 사용",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "express": "^4.21.0"
+  }
+}
