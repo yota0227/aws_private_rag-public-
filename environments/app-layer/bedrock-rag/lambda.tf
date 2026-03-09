@@ -31,6 +31,17 @@ resource "aws_security_group" "lambda" {
     cidr_blocks = ["10.10.0.0/16"]
   }
 
+  # Outbound: HTTPS to S3 via S3 Gateway Endpoint (prefix list)
+  # S3 Gateway Endpoint는 ENI가 없어 VPC CIDR로 커버되지 않음
+  # 트래픽은 AWS 내부 백본을 통해 전달되며 인터넷을 거치지 않음
+  egress {
+    description     = "HTTPS to S3 via Gateway Endpoint"
+    from_port       = 443
+    to_port         = 443
+    protocol        = "tcp"
+    prefix_list_ids = ["pl-78a54011"]
+  }
+
   tags = merge(local.common_tags, {
     Name    = "lambda-private-rag-${var.environment}"
     Purpose = "Lambda document processor - Frontend"
