@@ -146,3 +146,10 @@ variable "acm_certificate_arn" {
   type        = string
   default     = ""  # Must be set before deployment
 }
+
+# Bedrock KB Data Source ID (for sync after upload)
+variable "bedrock_kb_data_source_id" {
+  description = "Bedrock Knowledge Base Data Source ID for triggering sync"
+  type        = string
+  default     = ""  # Set after KB data source is created
+}

@@ -90,6 +90,27 @@ resource "aws_s3_bucket_policy" "documents_seoul" {
         ]
       },
       {
+        Sid       = "AllowLambdaAccess"
+        Effect    = "Allow"
+        Principal = {
+          AWS = aws_iam_role.lambda.arn
+        }
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:ListBucket",
+          "s3:CreateMultipartUpload",
+          "s3:UploadPart",
+          "s3:CompleteMultipartUpload",
+          "s3:AbortMultipartUpload",
+          "s3:ListMultipartUploadParts"
+        ]
+        Resource = [
+          aws_s3_bucket.documents_seoul.arn,
+          "${aws_s3_bucket.documents_seoul.arn}/*"
+        ]
+      },
+      {
         Sid       = "AllowReplicationRole"
         Effect    = "Allow"
         Principal = {
@@ -123,7 +144,8 @@ resource "aws_s3_bucket_policy" "documents_seoul" {
           ArnNotEquals = {
             "aws:PrincipalArn" = [
               "arn:aws:iam::533335672315:user/seungil.woo",
-              aws_iam_role.s3_replication.arn
+              aws_iam_role.s3_replication.arn,
+              aws_iam_role.lambda.arn
             ]
           }
         }
@@ -244,7 +266,9 @@ resource "aws_s3_bucket_replication_configuration" "seoul_to_virginia" {
     id     = "replicate-to-virginia"
     status = "Enabled"
 
-    filter {}  # 모든 객체 복제
+    filter {
+      prefix = ""  # 모든 객체 복제
+    }
 
     destination {
       bucket        = "arn:aws:s3:::${var.destination_bucket_name}"

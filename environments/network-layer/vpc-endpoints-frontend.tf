@@ -57,7 +57,8 @@ resource "aws_security_group" "vpc_endpoints_frontend" {
 
 # ----------------------------------------------------------------------------
 # execute-api VPC Endpoint (Interface)
-# Private DNS OFF: Private Hosted Zone 커스텀 도메인과 충돌 방지
+# Private DNS ON: API Gateway API ID 기반 도메인 resolve 지원
+# 온프렘에서 {api-id}.execute-api.ap-northeast-2.amazonaws.com 으로 직접 접근
 # ----------------------------------------------------------------------------
 
 resource "aws_vpc_endpoint" "execute_api" {
@@ -66,7 +67,7 @@ resource "aws_vpc_endpoint" "execute_api" {
   vpc_id              = module.vpc_frontend.vpc_id
   service_name        = "com.amazonaws.ap-northeast-2.execute-api"
   vpc_endpoint_type   = "Interface"
-  private_dns_enabled = false  # PHZ 커스텀 도메인(rag.corp.bos-semi.com)과 충돌 방지
+  private_dns_enabled = true  # API ID 기반 도메인 resolve 필요 (온프렘 브라우저 접근)
 
   subnet_ids         = module.vpc_frontend.private_subnet_ids
   security_group_ids = [aws_security_group.vpc_endpoints_frontend.id]

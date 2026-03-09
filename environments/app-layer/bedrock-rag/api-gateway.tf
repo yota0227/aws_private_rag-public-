@@ -3,9 +3,13 @@
 # Purpose: 온프렘에서만 접근 가능한 RAG API 엔드포인트
 #
 # Endpoints:
-#   POST /rag/query     - RAG 질의
-#   POST /rag/documents - 문서 업로드
-#   GET  /rag/health    - 헬스체크
+#   GET  /rag/upload                  - 웹 업로드 UI
+#   POST /rag/documents/initiate      - S3 multipart upload 시작
+#   POST /rag/documents/upload-part   - chunk 업로드
+#   POST /rag/documents/complete      - multipart upload 완료 + KB sync
+#   GET  /rag/documents               - 업로드된 파일 목록
+#   POST /rag/query                   - RAG 질의
+#   GET  /rag/health                  - 헬스체크
 #
 # Requirements: 2.3, 2.6, 2.7, 2.8, 2.9, 2.10
 # ============================================================================
@@ -25,22 +29,13 @@ resource "aws_api_gateway_rest_api" "private_rag" {
     vpc_endpoint_ids = [local.frontend_execute_api_endpoint_id]
   }
 
-  # Resource Policy: VPC Endpoint 또는 온프렘 CIDR에서 오는 요청 허용
+  # Resource Policy: VPC Endpoint를 통한 요청만 허용
+  # Private API는 VPC Endpoint를 통해서만 접근 가능하므로 vpce 조건으로 제어
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
-        Effect    = "Allow"
-        Principal = "*"
-        Action    = "execute-api:Invoke"
-        Resource  = "execute-api:/*"
-        Condition = {
-          IpAddress = {
-            "aws:SourceIp" = "192.128.0.0/16"  # 온프렘 네트워크
-          }
-        }
-      },
-      {
+        Sid       = "AllowVPCEndpointAccess"
         Effect    = "Allow"
         Principal = "*"
         Action    = "execute-api:Invoke"
@@ -50,12 +45,6 @@ resource "aws_api_gateway_rest_api" "private_rag" {
             "aws:sourceVpce" = local.frontend_execute_api_endpoint_id
           }
         }
-      },
-      {
-        Effect    = "Deny"
-        Principal = "*"
-        Action    = "execute-api:Invoke"
-        Resource  = "execute-api:/*"
       }
     ]
   })
@@ -97,6 +86,42 @@ resource "aws_api_gateway_resource" "documents" {
   path_part   = "documents"
 }
 
+# /rag/documents/initiate resource
+resource "aws_api_gateway_resource" "documents_initiate" {
+  provider = aws.seoul
+
+  rest_api_id = aws_api_gateway_rest_api.private_rag.id
+  parent_id   = aws_api_gateway_resource.documents.id
+  path_part   = "initiate"
+}
+
+# /rag/documents/upload-part resource
+resource "aws_api_gateway_resource" "documents_upload_part" {
+  provider = aws.seoul
+
+  rest_api_id = aws_api_gateway_rest_api.private_rag.id
+  parent_id   = aws_api_gateway_resource.documents.id
+  path_part   = "upload-part"
+}
+
+# /rag/documents/complete resource
+resource "aws_api_gateway_resource" "documents_complete" {
+  provider = aws.seoul
+
+  rest_api_id = aws_api_gateway_rest_api.private_rag.id
+  parent_id   = aws_api_gateway_resource.documents.id
+  path_part   = "complete"
+}
+
+# /rag/upload resource (웹 UI)
+resource "aws_api_gateway_resource" "upload" {
+  provider = aws.seoul
+
+  rest_api_id = aws_api_gateway_rest_api.private_rag.id
+  parent_id   = aws_api_gateway_resource.rag.id
+  path_part   = "upload"
+}
+
 # /rag/health resource
 resource "aws_api_gateway_resource" "health" {
   provider = aws.seoul
@@ -127,22 +152,106 @@ resource "aws_api_gateway_integration" "query_lambda" {
   uri                     = aws_lambda_function.document_processor.invoke_arn
 }
 
-# POST /rag/documents
-resource "aws_api_gateway_method" "documents_post" {
+# GET /rag/documents (파일 목록)
+resource "aws_api_gateway_method" "documents_get" {
   provider = aws.seoul
 
   rest_api_id   = aws_api_gateway_rest_api.private_rag.id
   resource_id   = aws_api_gateway_resource.documents.id
-  http_method   = "POST"
+  http_method   = "GET"
   authorization = "NONE"
 }
 
-resource "aws_api_gateway_integration" "documents_lambda" {
+resource "aws_api_gateway_integration" "documents_get_lambda" {
   provider = aws.seoul
 
   rest_api_id             = aws_api_gateway_rest_api.private_rag.id
   resource_id             = aws_api_gateway_resource.documents.id
-  http_method             = aws_api_gateway_method.documents_post.http_method
+  http_method             = aws_api_gateway_method.documents_get.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.document_processor.invoke_arn
+}
+
+# POST /rag/documents/initiate (multipart upload 시작)
+resource "aws_api_gateway_method" "documents_initiate_post" {
+  provider = aws.seoul
+
+  rest_api_id   = aws_api_gateway_rest_api.private_rag.id
+  resource_id   = aws_api_gateway_resource.documents_initiate.id
+  http_method   = "POST"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "documents_initiate_lambda" {
+  provider = aws.seoul
+
+  rest_api_id             = aws_api_gateway_rest_api.private_rag.id
+  resource_id             = aws_api_gateway_resource.documents_initiate.id
+  http_method             = aws_api_gateway_method.documents_initiate_post.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.document_processor.invoke_arn
+}
+
+# POST /rag/documents/upload-part (chunk 업로드)
+resource "aws_api_gateway_method" "documents_upload_part_post" {
+  provider = aws.seoul
+
+  rest_api_id   = aws_api_gateway_rest_api.private_rag.id
+  resource_id   = aws_api_gateway_resource.documents_upload_part.id
+  http_method   = "POST"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "documents_upload_part_lambda" {
+  provider = aws.seoul
+
+  rest_api_id             = aws_api_gateway_rest_api.private_rag.id
+  resource_id             = aws_api_gateway_resource.documents_upload_part.id
+  http_method             = aws_api_gateway_method.documents_upload_part_post.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.document_processor.invoke_arn
+}
+
+# POST /rag/documents/complete (multipart upload 완료)
+resource "aws_api_gateway_method" "documents_complete_post" {
+  provider = aws.seoul
+
+  rest_api_id   = aws_api_gateway_rest_api.private_rag.id
+  resource_id   = aws_api_gateway_resource.documents_complete.id
+  http_method   = "POST"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "documents_complete_lambda" {
+  provider = aws.seoul
+
+  rest_api_id             = aws_api_gateway_rest_api.private_rag.id
+  resource_id             = aws_api_gateway_resource.documents_complete.id
+  http_method             = aws_api_gateway_method.documents_complete_post.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.document_processor.invoke_arn
+}
+
+# GET /rag/upload (웹 업로드 UI)
+resource "aws_api_gateway_method" "upload_get" {
+  provider = aws.seoul
+
+  rest_api_id   = aws_api_gateway_rest_api.private_rag.id
+  resource_id   = aws_api_gateway_resource.upload.id
+  http_method   = "GET"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "upload_lambda" {
+  provider = aws.seoul
+
+  rest_api_id             = aws_api_gateway_rest_api.private_rag.id
+  resource_id             = aws_api_gateway_resource.upload.id
+  http_method             = aws_api_gateway_method.upload_get.http_method
   integration_http_method = "POST"
   type                    = "AWS_PROXY"
   uri                     = aws_lambda_function.document_processor.invoke_arn
@@ -183,12 +292,24 @@ resource "aws_api_gateway_deployment" "main" {
       aws_api_gateway_resource.rag.id,
       aws_api_gateway_resource.query.id,
       aws_api_gateway_resource.documents.id,
+      aws_api_gateway_resource.documents_initiate.id,
+      aws_api_gateway_resource.documents_upload_part.id,
+      aws_api_gateway_resource.documents_complete.id,
+      aws_api_gateway_resource.upload.id,
       aws_api_gateway_resource.health.id,
       aws_api_gateway_method.query_post.id,
-      aws_api_gateway_method.documents_post.id,
+      aws_api_gateway_method.documents_get.id,
+      aws_api_gateway_method.documents_initiate_post.id,
+      aws_api_gateway_method.documents_upload_part_post.id,
+      aws_api_gateway_method.documents_complete_post.id,
+      aws_api_gateway_method.upload_get.id,
       aws_api_gateway_method.health_get.id,
       aws_api_gateway_integration.query_lambda.id,
-      aws_api_gateway_integration.documents_lambda.id,
+      aws_api_gateway_integration.documents_get_lambda.id,
+      aws_api_gateway_integration.documents_initiate_lambda.id,
+      aws_api_gateway_integration.documents_upload_part_lambda.id,
+      aws_api_gateway_integration.documents_complete_lambda.id,
+      aws_api_gateway_integration.upload_lambda.id,
       aws_api_gateway_integration.health_lambda.id,
     ]))
   }

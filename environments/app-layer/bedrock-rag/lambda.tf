@@ -77,7 +77,12 @@ resource "aws_iam_role_policy" "lambda_s3" {
         Action = [
           "s3:GetObject",
           "s3:PutObject",
-          "s3:ListBucket"
+          "s3:ListBucket",
+          "s3:CreateMultipartUpload",
+          "s3:UploadPart",
+          "s3:CompleteMultipartUpload",
+          "s3:AbortMultipartUpload",
+          "s3:ListMultipartUploadParts"
         ]
         Resource = [
           "arn:aws:s3:::bos-ai-documents-*",
@@ -126,6 +131,17 @@ resource "aws_iam_role_policy" "lambda_bedrock" {
         ]
         Resource = [
           "arn:aws:bedrock:us-east-1::foundation-model/*",
+          "arn:aws:bedrock:us-east-1:533335672315:knowledge-base/*"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "bedrock:StartIngestionJob",
+          "bedrock:GetIngestionJob",
+          "bedrock:ListIngestionJobs"
+        ]
+        Resource = [
           "arn:aws:bedrock:us-east-1:533335672315:knowledge-base/*"
         ]
       }
@@ -200,6 +216,32 @@ resource "aws_iam_role_policy" "lambda_vpc" {
   })
 }
 
+# IAM Policy for Lambda - KMS Access (Seoul S3 SSE-KMS 암호화)
+resource "aws_iam_role_policy" "lambda_kms" {
+  name = "lambda-kms-access"
+  role = aws_iam_role.lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "kms:Decrypt",
+          "kms:Encrypt",
+          "kms:GenerateDataKey",
+          "kms:GenerateDataKeyWithoutPlaintext",
+          "kms:ReEncryptFrom",
+          "kms:ReEncryptTo"
+        ]
+        Resource = [
+          aws_kms_key.s3_seoul.arn
+        ]
+      }
+    ]
+  })
+}
+
 # Lambda Function - Seoul Private RAG VPC
 # Requirements: 2.1, 2.2, 2.11
 resource "aws_lambda_function" "document_processor" {
@@ -232,6 +274,9 @@ resource "aws_lambda_function" "document_processor" {
       SECRET_NAME          = "opensearch/bos-ai-rag-prod"
       LAMBDA_REGION        = "ap-northeast-2"
       BACKEND_REGION       = "us-east-1"
+      BEDROCK_KB_ID            = module.bedrock_rag.knowledge_base_id
+      BEDROCK_KB_DATA_SOURCE_ID = var.bedrock_kb_data_source_id
+      FOUNDATION_MODEL_ARN     = var.foundation_model_arn
     }
   }
 
@@ -247,7 +292,8 @@ resource "aws_lambda_function" "document_processor" {
     aws_iam_role_policy.lambda_bedrock,
     aws_iam_role_policy.lambda_secrets,
     aws_iam_role_policy.lambda_logs,
-    aws_iam_role_policy.lambda_vpc
+    aws_iam_role_policy.lambda_vpc,
+    aws_iam_role_policy.lambda_kms
   ]
 }
 
