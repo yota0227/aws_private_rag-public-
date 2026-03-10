@@ -94,6 +94,10 @@ def handler(event, context):
         if '/documents/extract' in path and method == 'POST':
             return start_extraction(event)
 
+        # 파일 삭제
+        if '/documents/delete' in path and method == 'POST':
+            return delete_document(event)
+
         # 파일 목록
         if '/documents' in path and method == 'GET':
             return list_documents(event)
@@ -524,6 +528,37 @@ def trigger_kb_sync():
 # ============================================================================
 # Document List & Query Handlers
 # ============================================================================
+
+def delete_document(event):
+    """S3에서 문서 삭제 + KB Sync 트리거"""
+    body = parse_body(event)
+    s3_key = body.get('s3_key', '')
+
+    if not s3_key:
+        return response(400, {'error': 's3_key is required'})
+
+    # documents/ 프리픽스 내 파일만 삭제 허용 (보안)
+    if not s3_key.startswith(S3_PREFIX):
+        return response(403, {'error': 'Cannot delete files outside documents/ prefix'})
+
+    try:
+        s3_client.head_object(Bucket=S3_BUCKET_SEOUL, Key=s3_key)
+    except Exception as e:
+        if '404' in str(e) or 'NoSuchKey' in str(e):
+            return response(404, {'error': 'File not found', 's3_key': s3_key})
+        raise
+
+    s3_client.delete_object(Bucket=S3_BUCKET_SEOUL, Key=s3_key)
+    logger.info(f"Deleted document: {s3_key}")
+
+    sync_result = trigger_kb_sync()
+
+    return response(200, {
+        'message': 'Document deleted',
+        'key': s3_key,
+        'kb_sync': sync_result
+    })
+
 
 def list_documents(event=None):
     """Seoul S3 버킷의 문서 목록 조회 (team/category 필터 지원)"""
@@ -1296,11 +1331,26 @@ async function loadDocuments() {
     el.innerHTML = data.files.map(f => '<div class="doc-item"><div>' +
       '<span class="name">' + f.filename + '</span>' +
       '<div class="tag">' + f.team + '/' + f.category + '</div>' +
-      '</div><span class="meta">' + formatSize(f.size) + '<br>' +
-      new Date(f.last_modified).toLocaleString('ko-KR') + '</span></div>'
+      '</div><div style="display:flex;align-items:center;gap:.75rem">' +
+      '<span class="meta">' + formatSize(f.size) + '<br>' +
+      new Date(f.last_modified).toLocaleString(\'ko-KR\') + '</span>' +
+      '<button onclick="deleteDocument(\'' + f.key.replace(/\'/g, "\\\\'") + '\')" style="background:none;border:1px solid #475569;color:#94a3b8;border-radius:6px;padding:.3rem .6rem;cursor:pointer;font-size:.75rem" onmouseover="this.style.borderColor=\'#f87171\';this.style.color=\'#f87171\'" onmouseout="this.style.borderColor=\'#475569\';this.style.color=\'#94a3b8\'">🗑 삭제</button>' +
+      '</div></div>'
     ).join('');
   } catch (err) {
     document.getElementById('docList').innerHTML = '<div class="empty">목록 조회 실패</div>';
+  }
+}
+
+/* === Delete Document === */
+async function deleteDocument(s3Key) {
+  if (!confirm('정말 삭제하시겠습니까?\\n' + s3Key)) return;
+  try {
+    await apiPost('/documents/delete', { s3_key: s3Key });
+    toast('삭제 완료', 'success');
+    loadDocuments();
+  } catch(e) {
+    toast('삭제 실패: ' + e.message, 'error');
   }
 }
 

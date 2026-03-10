@@ -434,6 +434,40 @@ resource "aws_api_gateway_integration" "documents_extract_status_lambda" {
 }
 
 # ----------------------------------------------------------------------------
+# Document Delete 라우트
+# ----------------------------------------------------------------------------
+
+# /rag/documents/delete resource
+resource "aws_api_gateway_resource" "documents_delete" {
+  provider = aws.seoul
+
+  rest_api_id = aws_api_gateway_rest_api.private_rag.id
+  parent_id   = aws_api_gateway_resource.documents.id
+  path_part   = "delete"
+}
+
+# POST /rag/documents/delete (문서 삭제)
+resource "aws_api_gateway_method" "documents_delete_post" {
+  provider = aws.seoul
+
+  rest_api_id   = aws_api_gateway_rest_api.private_rag.id
+  resource_id   = aws_api_gateway_resource.documents_delete.id
+  http_method   = "POST"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "documents_delete_lambda" {
+  provider = aws.seoul
+
+  rest_api_id             = aws_api_gateway_rest_api.private_rag.id
+  resource_id             = aws_api_gateway_resource.documents_delete.id
+  http_method             = aws_api_gateway_method.documents_delete_post.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.document_processor.invoke_arn
+}
+
+# ----------------------------------------------------------------------------
 # Deployment & Stage
 # ----------------------------------------------------------------------------
 
@@ -457,6 +491,7 @@ resource "aws_api_gateway_deployment" "main" {
       aws_api_gateway_resource.documents_confirm.id,
       aws_api_gateway_resource.documents_extract.id,
       aws_api_gateway_resource.documents_extract_status.id,
+      aws_api_gateway_resource.documents_delete.id,
       aws_api_gateway_method.query_post.id,
       aws_api_gateway_method.documents_get.id,
       aws_api_gateway_method.documents_initiate_post.id,
@@ -469,6 +504,7 @@ resource "aws_api_gateway_deployment" "main" {
       aws_api_gateway_method.documents_confirm_post.id,
       aws_api_gateway_method.documents_extract_post.id,
       aws_api_gateway_method.documents_extract_status_get.id,
+      aws_api_gateway_method.documents_delete_post.id,
       aws_api_gateway_integration.query_lambda.id,
       aws_api_gateway_integration.documents_get_lambda.id,
       aws_api_gateway_integration.documents_initiate_lambda.id,
@@ -481,6 +517,7 @@ resource "aws_api_gateway_deployment" "main" {
       aws_api_gateway_integration.documents_confirm_lambda.id,
       aws_api_gateway_integration.documents_extract_lambda.id,
       aws_api_gateway_integration.documents_extract_status_lambda.id,
+      aws_api_gateway_integration.documents_delete_lambda.id,
     ]))
   }
 

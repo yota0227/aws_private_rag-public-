@@ -186,6 +186,27 @@ function createMcpServer() {
     }
   );
 
+  mcp.tool(
+    "rag_delete_document",
+    "RAG 지식 베이스에서 문서를 삭제합니다. S3에서 파일을 제거하고 KB Sync를 트리거합니다.",
+    {
+      s3_key: { type: "string", description: "삭제할 파일의 S3 키 (예: documents/soc/code/filename.pdf)" }
+    },
+    async (params) => {
+      try {
+        console.log("[TOOL] rag_delete_document: s3_key=" + params.s3_key);
+        const resp = await ragApi("POST", "/documents/delete", { s3_key: params.s3_key });
+        if (resp.error) return { content: [{ type: "text", text: "오류: " + resp.error }], isError: true };
+        let text = "✅ 문서 삭제 완료\n";
+        text += "  삭제된 파일: " + resp.key + "\n";
+        text += "  KB Sync: " + (resp.kb_sync || "unknown");
+        return { content: [{ type: "text", text }] };
+      } catch(err) {
+        return { content: [{ type: "text", text: "문서 삭제 실패: " + err.message }], isError: true };
+      }
+    }
+  );
+
   return mcp;
 }
 
