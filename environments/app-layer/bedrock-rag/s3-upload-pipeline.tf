@@ -62,97 +62,99 @@ resource "aws_s3_bucket_public_access_block" "documents_seoul" {
 }
 
 # Bucket Policy: S3 VPC Endpoint에서만 접근 허용 (Terraform IAM 사용자 예외)
-resource "aws_s3_bucket_policy" "documents_seoul" {
-  provider = aws.seoul
-
-  bucket = aws_s3_bucket.documents_seoul.id
-
-  # versioning, encryption 설정 완료 후 policy 적용
-  depends_on = [
-    aws_s3_bucket_versioning.documents_seoul,
-    aws_s3_bucket_server_side_encryption_configuration.documents_seoul,
-    aws_s3_bucket_public_access_block.documents_seoul
-  ]
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid       = "AllowTerraformManagement"
-        Effect    = "Allow"
-        Principal = {
-          AWS = "arn:aws:iam::533335672315:user/seungil.woo"
-        }
-        Action    = "s3:*"
-        Resource = [
-          aws_s3_bucket.documents_seoul.arn,
-          "${aws_s3_bucket.documents_seoul.arn}/*"
-        ]
-      },
-      {
-        Sid       = "AllowLambdaAccess"
-        Effect    = "Allow"
-        Principal = {
-          AWS = aws_iam_role.lambda.arn
-        }
-        Action = [
-          "s3:GetObject",
-          "s3:PutObject",
-          "s3:ListBucket",
-          "s3:CreateMultipartUpload",
-          "s3:UploadPart",
-          "s3:CompleteMultipartUpload",
-          "s3:AbortMultipartUpload",
-          "s3:ListMultipartUploadParts"
-        ]
-        Resource = [
-          aws_s3_bucket.documents_seoul.arn,
-          "${aws_s3_bucket.documents_seoul.arn}/*"
-        ]
-      },
-      {
-        Sid       = "AllowReplicationRole"
-        Effect    = "Allow"
-        Principal = {
-          AWS = aws_iam_role.s3_replication.arn
-        }
-        Action = [
-          "s3:GetReplicationConfiguration",
-          "s3:ListBucket",
-          "s3:GetObjectVersionForReplication",
-          "s3:GetObjectVersionAcl",
-          "s3:GetObjectVersionTagging"
-        ]
-        Resource = [
-          aws_s3_bucket.documents_seoul.arn,
-          "${aws_s3_bucket.documents_seoul.arn}/*"
-        ]
-      },
-      {
-        Sid       = "DenyNonVPCEndpointAccess"
-        Effect    = "Deny"
-        Principal = "*"
-        Action    = "s3:*"
-        Resource = [
-          aws_s3_bucket.documents_seoul.arn,
-          "${aws_s3_bucket.documents_seoul.arn}/*"
-        ]
-        Condition = {
-          StringNotEquals = {
-            "aws:sourceVpce" = data.terraform_remote_state.network.outputs.frontend_s3_gateway_endpoint_id
-          }
-          ArnNotEquals = {
-            "aws:PrincipalArn" = [
-              "arn:aws:iam::533335672315:user/seungil.woo",
-              aws_iam_role.s3_replication.arn,
-              aws_iam_role.lambda.arn
-            ]
-          }
-        }
-      }
-    ]
-  })
-}
+# NOTE: S3 정책은 AWS에서 직접 관리됨 (Terraform 관리 제외)
+# resource "aws_s3_bucket_policy" "documents_seoul" {
+#   provider = aws.seoul
+#
+#   bucket = aws_s3_bucket.documents_seoul.id
+#
+#   # versioning, encryption 설정 완료 후 policy 적용
+#   depends_on = [
+#     aws_s3_bucket_versioning.documents_seoul,
+#     aws_s3_bucket_server_side_encryption_configuration.documents_seoul,
+#     aws_s3_bucket_public_access_block.documents_seoul
+#   ]
+#
+#   policy = jsonencode({
+#     Version = "2012-10-17"
+#     Statement = [
+#       {
+#         Sid       = "AllowTerraformManagement"
+#         Effect    = "Allow"
+#         Principal = {
+#           AWS = "arn:aws:iam::533335672315:user/seungil.woo"
+#         }
+#         Action    = "s3:*"
+#         Resource = [
+#           aws_s3_bucket.documents_seoul.arn,
+#           "${aws_s3_bucket.documents_seoul.arn}/*"
+#         ]
+#       },
+#       {
+#         Sid       = "AllowLambdaAccess"
+#         Effect    = "Allow"
+#         Principal = {
+#           AWS = "arn:aws:iam::533335672315:role/role-lambda-document-processor-seoul-prod"
+#         }
+#         Action = [
+#           "s3:GetObject",
+#           "s3:PutObject",
+#           "s3:DeleteObject",
+#           "s3:ListBucket",
+#           "s3:CreateMultipartUpload",
+#           "s3:UploadPart",
+#           "s3:CompleteMultipartUpload",
+#           "s3:AbortMultipartUpload",
+#           "s3:ListMultipartUploadParts"
+#         ]
+#         Resource = [
+#           aws_s3_bucket.documents_seoul.arn,
+#           "${aws_s3_bucket.documents_seoul.arn}/*"
+#         ]
+#       },
+#       {
+#         Sid       = "AllowReplicationRole"
+#         Effect    = "Allow"
+#         Principal = {
+#           AWS = "arn:aws:iam::533335672315:role/role-s3-replication-seoul-to-virginia-dev"
+#         }
+#         Action = [
+#           "s3:GetReplicationConfiguration",
+#           "s3:ListBucket",
+#           "s3:GetObjectVersionForReplication",
+#           "s3:GetObjectVersionAcl",
+#           "s3:GetObjectVersionTagging"
+#         ]
+#         Resource = [
+#           aws_s3_bucket.documents_seoul.arn,
+#           "${aws_s3_bucket.documents_seoul.arn}/*"
+#         ]
+#       },
+#       {
+#         Sid       = "DenyNonVPCEndpointAccess"
+#         Effect    = "Deny"
+#         Principal = "*"
+#         Action    = "s3:*"
+#         Resource = [
+#           aws_s3_bucket.documents_seoul.arn,
+#           "${aws_s3_bucket.documents_seoul.arn}/*"
+#         ]
+#         Condition = {
+#           StringNotEquals = {
+#             "aws:sourceVpce" = data.terraform_remote_state.network.outputs.frontend_s3_gateway_endpoint_id
+#           }
+#           ArnNotEquals = {
+#             "aws:PrincipalArn" = [
+#               "arn:aws:iam::533335672315:user/seungil.woo",
+#               "arn:aws:iam::533335672315:role/role-s3-replication-seoul-to-virginia-dev",
+#               "arn:aws:iam::533335672315:role/role-lambda-document-processor-seoul-prod"
+#             ]
+#           }
+#         }
+#       }
+#     ]
+#   })
+# }
 
 # KMS Key for Seoul S3 Bucket
 resource "aws_kms_key" "s3_seoul" {
@@ -173,6 +175,28 @@ resource "aws_kms_alias" "s3_seoul" {
 
   name          = "alias/bos-ai-s3-documents-seoul"
   target_key_id = aws_kms_key.s3_seoul.key_id
+}
+
+# ----------------------------------------------------------------------------
+# S3 CORS Configuration (Pre-signed URL PUT 지원)
+# Purpose: 브라우저에서 Pre-signed URL로 S3에 직접 PUT 업로드 시
+#          Cross-Origin 요청 Preflight(OPTIONS) 통과를 위한 CORS 규칙
+# Requirements: 10.4
+# Design: 5.2
+# ----------------------------------------------------------------------------
+
+resource "aws_s3_bucket_cors_configuration" "documents_cors" {
+  provider = aws.seoul
+
+  bucket = aws_s3_bucket.documents_seoul.id
+
+  cors_rule {
+    allowed_headers = ["*"]
+    allowed_methods = ["PUT", "GET", "HEAD"]
+    allowed_origins = ["https://r0qa9lzhgi.execute-api.ap-northeast-2.amazonaws.com"]
+    expose_headers  = ["ETag", "x-amz-request-id"]
+    max_age_seconds = 3600
+  }
 }
 
 # ----------------------------------------------------------------------------

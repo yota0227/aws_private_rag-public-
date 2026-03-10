@@ -118,6 +118,74 @@ function createMcpServer() {
     }
   );
 
+  mcp.tool(
+    "rag_upload_status",
+    "최근 업로드된 RAG 문서 목록과 KB Sync 상태를 조회합니다.",
+    {
+      team: { type: "string", description: "팀 필터 (선택)" },
+      category: { type: "string", description: "카테고리 필터 (선택)" }
+    },
+    async (params) => {
+      try {
+        console.log("[TOOL] rag_upload_status: team=" + (params.team||"all") + " category=" + (params.category||"all"));
+        let path = "/documents";
+        const qs = [];
+        if (params.team) qs.push("team=" + encodeURIComponent(params.team));
+        if (params.category) qs.push("category=" + encodeURIComponent(params.category));
+        if (qs.length > 0) path += "?" + qs.join("&");
+        const resp = await ragApi("GET", path);
+        if (resp.error) return { content: [{ type: "text", text: "오류: " + resp.error }], isError: true };
+        if (!resp.files?.length) return { content: [{ type: "text", text: "최근 업로드된 문서가 없습니다." }] };
+        let text = "📄 최근 업로드 상태 (총 " + resp.count + "개):\n";
+        resp.files.forEach((f) => {
+          const size = f.size < 1048576 ? (f.size/1024).toFixed(1)+" KB" : (f.size/1048576).toFixed(1)+" MB";
+          const sync = f.kb_sync || "unknown";
+          text += "\n- [" + f.team + "/" + f.category + "] " + f.filename + " (" + size + ") — KB Sync: " + sync;
+        });
+        return { content: [{ type: "text", text }] };
+      } catch(err) {
+        return { content: [{ type: "text", text: "업로드 상태 조회 실패: " + err.message }], isError: true };
+      }
+    }
+  );
+
+  mcp.tool(
+    "rag_extract_status",
+    "압축 파일 해제 작업(Extraction Task)의 상태를 조회합니다.",
+    {
+      task_id: { type: "string", description: "Extraction Task ID (필수)" }
+    },
+    async (params) => {
+      try {
+        console.log("[TOOL] rag_extract_status: task_id=" + params.task_id);
+        const resp = await ragApi("GET", "/documents/extract-status?task_id=" + encodeURIComponent(params.task_id));
+        if (resp.error) return { content: [{ type: "text", text: "오류: " + resp.error }], isError: true };
+        let text = "📦 Extraction Task 상태\n";
+        text += "  Task ID: " + resp.task_id + "\n";
+        text += "  상태: " + resp.status + "\n";
+        text += "  생성: " + resp.created_at + "\n";
+        text += "  갱신: " + resp.updated_at + "\n";
+        if (resp.results) {
+          const r = resp.results;
+          text += "\n  📊 처리 결과:\n";
+          text += "    전체: " + r.total_files + "개\n";
+          text += "    성공: " + r.success_count + "개\n";
+          text += "    건너뜀: " + r.skipped_count + "개\n";
+          text += "    오류: " + r.error_count + "개\n";
+          if (r.skipped_files?.length > 0) {
+            text += "    건너뛴 파일: " + r.skipped_files.join(", ") + "\n";
+          }
+          if (r.kb_sync) {
+            text += "    KB Sync: " + r.kb_sync + "\n";
+          }
+        }
+        return { content: [{ type: "text", text }] };
+      } catch(err) {
+        return { content: [{ type: "text", text: "Extraction 상태 조회 실패: " + err.message }], isError: true };
+      }
+    }
+  );
+
   return mcp;
 }
 

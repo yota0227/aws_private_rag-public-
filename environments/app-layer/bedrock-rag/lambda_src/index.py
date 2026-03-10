@@ -15,6 +15,12 @@ import json
 import os
 import logging
 import base64
+import uuid
+import zipfile
+import tarfile
+import shutil
+import tempfile
+import time
 import boto3
 from datetime import datetime
 
@@ -35,9 +41,21 @@ VALID_CATEGORIES = {f"{t}/{c}" for t, info in TEAMS.items() for c in info['categ
 
 s3_client = boto3.client('s3', region_name='ap-northeast-2')
 
+# 비동기 압축 해제 관련 설정
+DYNAMODB_TABLE = os.environ.get('DYNAMODB_TABLE', 'rag-extraction-tasks-dev')
+dynamodb = boto3.resource('dynamodb', region_name='ap-northeast-2')
+lambda_client = boto3.client('lambda', region_name='ap-northeast-2')
+ALLOWED_EXTENSIONS = ['pdf', 'txt', 'docx', 'csv', 'html', 'md']
+ARCHIVE_EXTENSIONS = ['zip', 'tar.gz']
+SYSTEM_FILES = ['__MACOSX', 'Thumbs.db', '.DS_Store']
+
 
 def handler(event, context):
     """Main Lambda handler for Private RAG API Gateway"""
+    # 비동기 Lambda Event Invocation 처리
+    if event.get('action') == 'process_extraction':
+        return process_extraction(event)
+
     logger.info(f"Event path: {event.get('path')}, method: {event.get('httpMethod')}")
 
     path = event.get('path', '')
@@ -59,6 +77,22 @@ def handler(event, context):
         # Multipart upload 완료
         if '/documents/complete' in path and method == 'POST':
             return complete_upload(event)
+
+        # Pre-signed URL 생성
+        if '/documents/presign' in path and method == 'POST':
+            return presign_upload(event)
+
+        # 업로드 완료 확인
+        if '/documents/confirm' in path and method == 'POST':
+            return confirm_upload(event)
+
+        # 압축 해제 상태 조회 (extract-status를 extract보다 먼저 매칭)
+        if '/documents/extract-status' in path and method == 'GET':
+            return get_extraction_status(event)
+
+        # 비동기 압축 해제 시작
+        if '/documents/extract' in path and method == 'POST':
+            return start_extraction(event)
 
         # 파일 목록
         if '/documents' in path and method == 'GET':
@@ -188,6 +222,283 @@ def complete_upload(event):
         'bucket': S3_BUCKET_SEOUL,
         'location': resp.get('Location', ''),
         'kb_sync': sync_result
+    })
+
+
+# ============================================================================
+# Pre-signed URL Upload Handlers
+# ============================================================================
+
+def presign_upload(event):
+    """Pre-signed URL 생성 — 클라이언트가 S3에 직접 업로드할 수 있는 서명 URL 반환"""
+    body = parse_body(event)
+    filename = body.get('filename', '')
+    team = body.get('team', '')
+    category = body.get('category', '')
+    content_type = body.get('content_type', 'application/octet-stream')
+
+    # 필수 필드 검증
+    missing = [f for f in ['filename', 'team', 'category'] if not body.get(f)]
+    if missing:
+        return response(400, {
+            'error': f'{", ".join(missing)} are required',
+            'missing_fields': missing
+        })
+
+    # team/category 유효성 검증
+    if f"{team}/{category}" not in VALID_CATEGORIES:
+        return response(400, {
+            'error': f'Invalid team/category: {team}/{category}. Valid: {sorted(VALID_CATEGORIES)}'
+        })
+
+    key = f"{S3_PREFIX}{team}/{category}/{filename}"
+
+    presigned_url = s3_client.generate_presigned_url(
+        'put_object',
+        Params={
+            'Bucket': S3_BUCKET_SEOUL,
+            'Key': key,
+            'ContentType': content_type
+        },
+        ExpiresIn=3600
+    )
+
+    logger.info(f"Generated presigned URL for: {key}")
+    return response(200, {
+        'presigned_url': presigned_url,
+        's3_key': key,
+        'expires_in': 3600
+    })
+
+
+def confirm_upload(event):
+    """업로드 완료 확인 — S3 파일 존재 확인 + 선택적 KB Sync"""
+    body = parse_body(event)
+    s3_key = body.get('s3_key', '')
+    skip_sync = body.get('skip_sync', False)
+
+    if not s3_key:
+        return response(400, {'error': 's3_key is required'})
+
+    # S3 파일 존재 확인
+    try:
+        s3_client.head_object(Bucket=S3_BUCKET_SEOUL, Key=s3_key)
+    except s3_client.exceptions.ClientError as e:
+        if e.response['Error']['Code'] == '404':
+            return response(404, {'error': 'File not found in S3', 's3_key': s3_key})
+        raise
+
+    # KB Sync 제어
+    sync_result = 'skipped'
+    if not skip_sync:
+        sync_result = trigger_kb_sync()
+
+    logger.info(f"Upload confirmed: {s3_key}, kb_sync: {sync_result}")
+    return response(200, {
+        'message': 'Upload confirmed',
+        'key': s3_key,
+        'kb_sync': sync_result
+    })
+
+
+# ============================================================================
+# Async Extraction Handlers
+# ============================================================================
+
+def start_extraction(event):
+    """비동기 압축 해제 시작 — DynamoDB에 Task 생성 + Lambda Event 호출"""
+    body = parse_body(event)
+    s3_key = body.get('s3_key', '')
+    team = body.get('team', '')
+    category = body.get('category', '')
+
+    if not s3_key:
+        return response(400, {'error': 's3_key is required'})
+
+    now = datetime.utcnow()
+    task_id = f"ext-{now.strftime('%Y%m%d')}-{str(uuid.uuid4())[:8]}"
+
+    # DynamoDB에 초기 레코드 생성
+    table = dynamodb.Table(DYNAMODB_TABLE)
+    table.put_item(Item={
+        'task_id': task_id,
+        'status': '대기중',
+        's3_key': s3_key,
+        'team': team,
+        'category': category,
+        'created_at': now.isoformat(),
+        'updated_at': now.isoformat(),
+        'ttl': int(time.time()) + 7 * 24 * 3600  # 7일 후 자동 삭제
+    })
+
+    # Lambda 비동기 호출
+    lambda_client.invoke(
+        FunctionName=os.environ['AWS_LAMBDA_FUNCTION_NAME'],
+        InvocationType='Event',
+        Payload=json.dumps({
+            'action': 'process_extraction',
+            'task_id': task_id,
+            's3_key': s3_key,
+            'team': team,
+            'category': category
+        })
+    )
+
+    logger.info(f"Extraction task created: {task_id} for {s3_key}")
+    return response(202, {
+        'task_id': task_id,
+        'status': '대기중',
+        'message': 'Extraction task created'
+    })
+
+
+def process_extraction(event):
+    """실제 압축 해제 로직 — 비동기 Lambda Event Invocation으로 실행"""
+    task_id = event.get('task_id')
+    s3_key = event.get('s3_key')
+    team = event.get('team', '')
+    category = event.get('category', '')
+
+    table = dynamodb.Table(DYNAMODB_TABLE)
+    tmp_dir = None
+
+    try:
+        # 상태를 "처리중"으로 갱신
+        table.update_item(
+            Key={'task_id': task_id},
+            UpdateExpression='SET #s = :s, updated_at = :u',
+            ExpressionAttributeNames={'#s': 'status'},
+            ExpressionAttributeValues={':s': '처리중', ':u': datetime.utcnow().isoformat()}
+        )
+
+        # S3에서 Archive 다운로드
+        tmp_dir = tempfile.mkdtemp(dir='/tmp')
+        filename = os.path.basename(s3_key)
+        archive_path = os.path.join(tmp_dir, filename)
+        s3_client.download_file(S3_BUCKET_SEOUL, s3_key, archive_path)
+
+        # 압축 해제
+        extract_dir = os.path.join(tmp_dir, 'extracted')
+        os.makedirs(extract_dir, exist_ok=True)
+
+        if filename.endswith('.zip'):
+            with zipfile.ZipFile(archive_path, 'r') as zf:
+                zf.extractall(extract_dir)
+        elif filename.endswith('.tar.gz') or filename.endswith('.tgz'):
+            with tarfile.open(archive_path, 'r:gz') as tf:
+                tf.extractall(extract_dir)
+        else:
+            raise ValueError(f"Unsupported archive format: {filename}")
+
+        # 해제된 파일 처리
+        success_files = []
+        skipped_files = []
+        error_files = []
+
+        for root, dirs, files in os.walk(extract_dir):
+            for fname in files:
+                filepath = os.path.join(root, fname)
+                rel_path = os.path.relpath(filepath, extract_dir)
+
+                # flatten_path로 파일명 변환 + 필터링
+                flat_name = flatten_path(rel_path)
+                if flat_name is None:
+                    skipped_files.append(rel_path)
+                    continue
+
+                # 확장자 검증
+                ext = flat_name.rsplit('.', 1)[-1].lower() if '.' in flat_name else ''
+                if ext not in ALLOWED_EXTENSIONS:
+                    skipped_files.append(rel_path)
+                    continue
+
+                # S3에 업로드
+                try:
+                    dest_key = f"{S3_PREFIX}{team}/{category}/{flat_name}"
+                    s3_client.upload_file(filepath, S3_BUCKET_SEOUL, dest_key)
+                    success_files.append(flat_name)
+                except Exception as upload_err:
+                    logger.error(f"Failed to upload {flat_name}: {upload_err}")
+                    error_files.append(flat_name)
+
+        # 원본 Archive S3 삭제
+        s3_client.delete_object(Bucket=S3_BUCKET_SEOUL, Key=s3_key)
+
+        # KB Sync
+        sync_result = trigger_kb_sync()
+
+        # 결과 기록
+        total_files = len(success_files) + len(skipped_files) + len(error_files)
+        results = {
+            'total_files': total_files,
+            'success_count': len(success_files),
+            'skipped_count': len(skipped_files),
+            'error_count': len(error_files),
+            'success_files': success_files,
+            'skipped_files': skipped_files,
+            'error_files': error_files,
+            'kb_sync': sync_result
+        }
+
+        table.update_item(
+            Key={'task_id': task_id},
+            UpdateExpression='SET #s = :s, updated_at = :u, results = :r',
+            ExpressionAttributeNames={'#s': 'status'},
+            ExpressionAttributeValues={
+                ':s': '완료',
+                ':u': datetime.utcnow().isoformat(),
+                ':r': results
+            }
+        )
+
+        logger.info(f"Extraction complete: {task_id}, {total_files} files processed")
+        return {'status': '완료', 'task_id': task_id, 'results': results}
+
+    except Exception as e:
+        logger.error(f"Extraction failed: {task_id}, error: {str(e)}", exc_info=True)
+        try:
+            table.update_item(
+                Key={'task_id': task_id},
+                UpdateExpression='SET #s = :s, updated_at = :u, error_message = :e',
+                ExpressionAttributeNames={'#s': 'status'},
+                ExpressionAttributeValues={
+                    ':s': '실패',
+                    ':u': datetime.utcnow().isoformat(),
+                    ':e': str(e)
+                }
+            )
+        except Exception:
+            logger.error(f"Failed to update DynamoDB status for {task_id}")
+        return {'status': '실패', 'task_id': task_id, 'error': str(e)}
+
+    finally:
+        # /tmp 정리
+        if tmp_dir and os.path.exists(tmp_dir):
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def get_extraction_status(event):
+    """Extraction Task 상태 조회"""
+    params = event.get('queryStringParameters') or {}
+    task_id = params.get('task_id', '')
+
+    if not task_id:
+        return response(400, {'error': 'task_id is required'})
+
+    table = dynamodb.Table(DYNAMODB_TABLE)
+    result = table.get_item(Key={'task_id': task_id})
+    item = result.get('Item')
+
+    if not item:
+        return response(404, {'error': 'Task not found', 'task_id': task_id})
+
+    return response(200, {
+        'task_id': item.get('task_id'),
+        'status': item.get('status'),
+        'created_at': item.get('created_at'),
+        'updated_at': item.get('updated_at'),
+        'results': item.get('results'),
+        'error_message': item.get('error_message')
     })
 
 
@@ -328,6 +639,21 @@ def serve_upload_ui():
 # Utility Functions
 # ============================================================================
 
+def flatten_path(filepath):
+    """경로 평탄화 — 디렉토리 구분자를 _로 변환, 숨김/시스템 파일 필터링"""
+    # 경로 구성 요소 분리
+    parts = filepath.replace('\\', '/').split('/')
+
+    # 숨김 파일 또는 시스템 파일 필터링
+    for part in parts:
+        if part.startswith('.'):
+            return None
+        if part in SYSTEM_FILES:
+            return None
+
+    # / → _ 변환
+    return '_'.join(parts)
+
 def parse_body(event):
     """이벤트 body 파싱 (base64 인코딩 처리 포함)"""
     body = event.get('body', '{}')
@@ -350,7 +676,7 @@ def response(status_code, body):
 
 
 def get_upload_html():
-    """업로드 웹 UI HTML - 팀/카테고리 선택 포함"""
+    """업로드 웹 UI HTML - 다중 파일/디렉토리 업로드 + Pre-signed URL 플로우"""
     return '''<!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -360,7 +686,7 @@ def get_upload_html():
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh;display:flex;align-items:center;justify-content:center}
-.container{max-width:700px;width:100%;padding:2rem}
+.container{max-width:750px;width:100%;padding:2rem}
 h1{font-size:1.5rem;margin-bottom:.5rem;color:#38bdf8}
 .subtitle{color:#94a3b8;margin-bottom:1.5rem;font-size:.9rem}
 .selector-row{display:flex;gap:1rem;margin-bottom:1.5rem}
@@ -368,29 +694,42 @@ h1{font-size:1.5rem;margin-bottom:.5rem;color:#38bdf8}
 .selector-group label{display:block;font-size:.8rem;color:#94a3b8;margin-bottom:.4rem}
 .selector-group select{width:100%;padding:.6rem .8rem;background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:8px;font-size:.9rem;cursor:pointer}
 .selector-group select:focus{outline:none;border-color:#38bdf8}
-.drop-zone{border:2px dashed #334155;border-radius:12px;padding:3rem;text-align:center;cursor:pointer;transition:all .2s}
+.drop-zone{border:2px dashed #334155;border-radius:12px;padding:2.5rem;text-align:center;cursor:pointer;transition:all .2s}
 .drop-zone:hover,.drop-zone.dragover{border-color:#38bdf8;background:rgba(56,189,248,.05)}
 .drop-zone.disabled{opacity:.4;cursor:not-allowed;pointer-events:none}
 .drop-zone p{color:#94a3b8;margin-top:.5rem}
 .drop-zone .icon{font-size:2.5rem;margin-bottom:.5rem}
 input[type=file]{display:none}
-.file-list{margin-top:1.5rem}
-.file-item{background:#1e293b;border-radius:8px;padding:1rem;margin-bottom:.75rem;display:flex;align-items:center;gap:1rem}
+.btn-row{display:flex;gap:.75rem;margin-top:1rem}
+.btn{background:#38bdf8;color:#0f172a;border:none;padding:.75rem 1.5rem;border-radius:8px;font-weight:600;cursor:pointer;font-size:.9rem;transition:background .2s}
+.btn:hover{background:#7dd3fc}
+.btn:disabled{background:#334155;color:#64748b;cursor:not-allowed}
+.btn-secondary{background:#334155;color:#e2e8f0}
+.btn-secondary:hover{background:#475569}
+.btn-secondary:disabled{background:#1e293b;color:#64748b;cursor:not-allowed}
+.file-list{margin-top:1.5rem;max-height:400px;overflow-y:auto}
+.file-item{background:#1e293b;border-radius:8px;padding:.75rem 1rem;margin-bottom:.5rem;display:flex;align-items:center;gap:.75rem}
+.file-icon{font-size:1.3rem;flex-shrink:0;width:28px;text-align:center}
 .file-info{flex:1;min-width:0}
-.file-name{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.file-size{color:#64748b;font-size:.8rem}
-.file-tag{display:inline-block;background:#334155;color:#94a3b8;font-size:.7rem;padding:.15rem .5rem;border-radius:4px;margin-top:.25rem}
-.progress-bar{width:100%;height:6px;background:#334155;border-radius:3px;margin-top:.5rem;overflow:hidden}
+.file-name{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.9rem}
+.file-size{color:#64748b;font-size:.75rem}
+.file-tag{display:inline-block;background:#334155;color:#94a3b8;font-size:.65rem;padding:.1rem .4rem;border-radius:4px;margin-top:.2rem}
+.progress-bar{width:100%;height:5px;background:#334155;border-radius:3px;margin-top:.4rem;overflow:hidden}
 .progress-fill{height:100%;background:#38bdf8;border-radius:3px;transition:width .3s;width:0}
-.status{font-size:.75rem;margin-top:.25rem}
+.status{font-size:.7rem;margin-top:.2rem}
 .status.uploading{color:#38bdf8}
 .status.done{color:#4ade80}
 .status.error{color:#f87171}
-.btn{background:#38bdf8;color:#0f172a;border:none;padding:.75rem 1.5rem;border-radius:8px;font-weight:600;cursor:pointer;font-size:.9rem;margin-top:1rem;transition:background .2s}
-.btn:hover{background:#7dd3fc}
-.btn:disabled{background:#334155;color:#64748b;cursor:not-allowed}
-.btn-remove{background:none;border:none;color:#64748b;cursor:pointer;font-size:1.2rem;padding:.25rem}
+.status.extracting{color:#fbbf24}
+.btn-remove{background:none;border:none;color:#64748b;cursor:pointer;font-size:1.1rem;padding:.2rem;flex-shrink:0}
 .btn-remove:hover{color:#f87171}
+.overall-progress{margin-top:1rem;padding:.75rem 1rem;background:#1e293b;border-radius:8px;display:none}
+.overall-progress .label{font-size:.85rem;color:#94a3b8;margin-bottom:.4rem}
+.overall-progress .progress-bar{height:8px}
+.overall-progress .progress-fill{background:#38bdf8}
+.extraction-status{margin-top:.3rem;font-size:.7rem;display:flex;align-items:center;gap:.3rem}
+.extraction-status .spinner{display:inline-block;width:10px;height:10px;border:2px solid #fbbf24;border-top-color:transparent;border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 .doc-list{margin-top:2rem;border-top:1px solid #1e293b;padding-top:1.5rem}
 .doc-list h2{font-size:1.1rem;color:#38bdf8;margin-bottom:1rem}
 .filter-row{display:flex;gap:.75rem;margin-bottom:1rem}
@@ -400,10 +739,12 @@ input[type=file]{display:none}
 .doc-item .meta{color:#64748b;font-size:.75rem;text-align:right}
 .doc-item .tag{color:#38bdf8;font-size:.7rem}
 .empty{color:#64748b;text-align:center;padding:1rem}
-.toast{position:fixed;top:1rem;right:1rem;padding:1rem 1.5rem;border-radius:8px;font-size:.9rem;z-index:100;animation:slideIn .3s}
+.toast{position:fixed;top:1rem;right:1rem;padding:1rem 1.5rem;border-radius:8px;font-size:.9rem;z-index:100;animation:slideIn .3s;max-width:350px}
 .toast.success{background:#065f46;color:#4ade80}
 .toast.error{background:#7f1d1d;color:#f87171}
+.toast.warning{background:#78350f;color:#fbbf24}
 @keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+.warning-msg{color:#fbbf24;font-size:.8rem;margin-top:.5rem;padding:.5rem .75rem;background:rgba(251,191,36,.08);border-radius:6px;display:none}
 </style>
 </head>
 <body>
@@ -428,13 +769,27 @@ input[type=file]{display:none}
 
 <div class="drop-zone disabled" id="dropZone">
   <div class="icon">📁</div>
-  <p>팀과 카테고리를 먼저 선택하세요</p>
-  <p style="font-size:.75rem;color:#475569">PDF, TXT, DOCX, CSV, HTML, MD 지원</p>
+  <p id="dropZoneText">팀과 카테고리를 먼저 선택하세요</p>
+  <p style="font-size:.75rem;color:#475569">PDF, TXT, DOCX, CSV, HTML, MD, ZIP, TAR.GZ 지원 · 파일 및 폴더 드래그 가능</p>
 </div>
 <input type="file" id="fileInput" multiple>
+<input type="file" id="dirInput" webkitdirectory>
+
+<div class="btn-row">
+  <button class="btn" id="btnSelectFiles" disabled onclick="document.getElementById('fileInput').click()">📄 파일 선택</button>
+  <button class="btn btn-secondary" id="btnSelectDir" disabled onclick="document.getElementById('dirInput').click()">📂 폴더 선택</button>
+</div>
+
+<div class="warning-msg" id="warningMsg"></div>
 
 <div class="file-list" id="fileList"></div>
-<button class="btn" id="uploadBtn" disabled onclick="startUpload()">업로드 시작</button>
+
+<div class="overall-progress" id="overallProgress">
+  <div class="label" id="overallLabel">0/0 파일 완료</div>
+  <div class="progress-bar"><div class="progress-fill" id="overallFill"></div></div>
+</div>
+
+<button class="btn" id="uploadBtn" disabled onclick="startUpload()" style="margin-top:1rem;width:100%">⬆ 업로드 시작</button>
 
 <div class="doc-list">
   <h2>📋 업로드된 문서 목록</h2>
@@ -451,13 +806,130 @@ input[type=file]{display:none}
 </div>
 
 <script>
-const CHUNK_SIZE = 3.5 * 1024 * 1024;
+/* === Constants === */
 const API_BASE = window.location.pathname.replace(/\\/upload$/, '');
+const ALLOWED_EXTENSIONS = ['pdf', 'txt', 'docx', 'csv', 'html', 'md', 'zip', 'tar.gz'];
+const MAX_FILE_SIZE = 100 * 1024 * 1024;
+const MAX_ARCHIVE_SIZE = 500 * 1024 * 1024;
+const ARCHIVE_EXTENSIONS = ['zip', 'tar.gz'];
+const SYSTEM_FILES = ['__MACOSX', 'Thumbs.db', '.DS_Store'];
+const FILE_ICONS = {pdf:'📕',txt:'📝',docx:'📘',csv:'📊',html:'🌐',md:'📓',zip:'📦','tar.gz':'📦'};
+
 let pendingFiles = [];
 let teamsData = {};
 let selectedTeam = '';
 let selectedCategory = '';
+let isUploading = false;
 
+/* === File Validation (Task 6.3) === */
+function getFileExtension(filename) {
+  const lower = filename.toLowerCase();
+  if (lower.endsWith('.tar.gz')) return 'tar.gz';
+  const parts = lower.split('.');
+  return parts.length > 1 ? parts[parts.length - 1] : '';
+}
+
+function isArchive(filename) {
+  return ARCHIVE_EXTENSIONS.includes(getFileExtension(filename));
+}
+
+function validateFile(file) {
+  const name = file._relativePath || file.name;
+  const ext = getFileExtension(name);
+  if (!ALLOWED_EXTENSIONS.includes(ext)) {
+    return {valid: false, reason: '지원하지 않는 형식: .' + (ext || '(없음)')};
+  }
+  if (isArchive(name)) {
+    if (file.size > MAX_ARCHIVE_SIZE) {
+      return {valid: false, reason: '압축 파일 크기 제한 초과 (최대 500MB)'};
+    }
+  } else {
+    if (file.size > MAX_FILE_SIZE) {
+      return {valid: false, reason: '파일 크기 제한 초과 (최대 100MB)'};
+    }
+  }
+  return {valid: true, reason: ''};
+}
+
+function getFileIcon(filename) {
+  const ext = getFileExtension(filename);
+  return FILE_ICONS[ext] || '📄';
+}
+
+/* === Directory Traversal (Task 6.2) === */
+function getFile(entry) {
+  return new Promise((resolve, reject) => entry.file(resolve, reject));
+}
+
+async function readAllEntries(reader) {
+  const all = [];
+  let batch;
+  do {
+    batch = await new Promise((resolve, reject) => reader.readEntries(resolve, reject));
+    all.push(...batch);
+  } while (batch.length > 0);
+  return all;
+}
+
+async function traverseDirectory(entry, path) {
+  path = path || '';
+  const results = [];
+  if (entry.isFile) {
+    const baseName = entry.name;
+    if (baseName.startsWith('.')) return results;
+    if (SYSTEM_FILES.includes(baseName)) return results;
+    try {
+      const file = await getFile(entry);
+      Object.defineProperty(file, '_relativePath', {value: path + baseName, writable: true});
+      results.push(file);
+    } catch(e) { /* skip unreadable */ }
+  } else if (entry.isDirectory) {
+    if (entry.name.startsWith('.') || SYSTEM_FILES.includes(entry.name)) return results;
+    const reader = entry.createReader();
+    const entries = await readAllEntries(reader);
+    for (const child of entries) {
+      const sub = await traverseDirectory(child, path + entry.name + '/');
+      results.push(...sub);
+    }
+  }
+  return results;
+}
+
+/* === File Queue Management (Task 6.4) === */
+function addFiles(fileList) {
+  const warnings = [];
+  const arr = Array.isArray(fileList) ? fileList : Array.from(fileList);
+  for (const f of arr) {
+    const displayName = f._relativePath || f.name;
+    const validation = validateFile(f);
+    if (!validation.valid) {
+      warnings.push(displayName + ': ' + validation.reason);
+      continue;
+    }
+    const key = displayName;
+    if (!pendingFiles.find(p => (p._relativePath || p.name) === key)) {
+      pendingFiles.push(f);
+    }
+  }
+  if (warnings.length > 0) {
+    showWarning(warnings.join('\\n'));
+  }
+  renderFileList();
+}
+
+function removeFile(idx) {
+  pendingFiles.splice(idx, 1);
+  renderFileList();
+}
+
+function showWarning(msg) {
+  const el = document.getElementById('warningMsg');
+  el.textContent = msg;
+  el.style.display = 'block';
+  setTimeout(() => { el.style.display = 'none'; }, 5000);
+}
+
+/* === Team/Category Selection === */
 async function loadCategories() {
   try {
     const resp = await fetch(API_BASE + '/categories');
@@ -494,129 +966,294 @@ function onCategoryChange() {
 
 function updateDropZone() {
   const dz = document.getElementById('dropZone');
-  if (selectedTeam && selectedCategory) {
+  const enabled = selectedTeam && selectedCategory;
+  if (enabled) {
     dz.classList.remove('disabled');
-    dz.querySelector('p').textContent = '파일을 드래그하거나 클릭하여 선택';
+    document.getElementById('dropZoneText').textContent = '파일 또는 폴더를 드래그하거나 아래 버튼으로 선택';
   } else {
     dz.classList.add('disabled');
-    dz.querySelector('p').textContent = '팀과 카테고리를 먼저 선택하세요';
+    document.getElementById('dropZoneText').textContent = '팀과 카테고리를 먼저 선택하세요';
   }
+  document.getElementById('btnSelectFiles').disabled = !enabled;
+  document.getElementById('btnSelectDir').disabled = !enabled;
 }
 
+/* === Drop Zone & File Input Events (Task 6.1) === */
 const dropZone = document.getElementById('dropZone');
 const fileInput = document.getElementById('fileInput');
+const dirInput = document.getElementById('dirInput');
 
 dropZone.addEventListener('click', () => {
-  if (selectedTeam && selectedCategory) fileInput.click();
+  if (selectedTeam && selectedCategory && !isUploading) fileInput.click();
 });
 dropZone.addEventListener('dragover', e => {
   e.preventDefault();
   if (selectedTeam && selectedCategory) dropZone.classList.add('dragover');
 });
 dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
-dropZone.addEventListener('drop', e => {
+dropZone.addEventListener('drop', async e => {
   e.preventDefault();
   dropZone.classList.remove('dragover');
-  if (selectedTeam && selectedCategory) addFiles(e.dataTransfer.files);
-});
-fileInput.addEventListener('change', e => addFiles(e.target.files));
-
-function addFiles(files) {
-  for (const f of files) {
-    if (!pendingFiles.find(p => p.name === f.name)) pendingFiles.push(f);
+  if (!selectedTeam || !selectedCategory || isUploading) return;
+  const items = e.dataTransfer.items;
+  if (!items) { addFiles(e.dataTransfer.files); return; }
+  const collected = [];
+  const promises = [];
+  for (let i = 0; i < items.length; i++) {
+    const entry = items[i].webkitGetAsEntry && items[i].webkitGetAsEntry();
+    if (entry) {
+      promises.push(traverseDirectory(entry, ''));
+    }
   }
-  renderFileList();
-}
+  const results = await Promise.all(promises);
+  for (const r of results) collected.push(...r);
+  if (collected.length > 0) addFiles(collected);
+});
 
-function removeFile(idx) {
-  pendingFiles.splice(idx, 1);
-  renderFileList();
-}
+fileInput.addEventListener('change', e => {
+  if (e.target.files.length > 0) addFiles(e.target.files);
+  e.target.value = '';
+});
+dirInput.addEventListener('change', e => {
+  if (e.target.files.length > 0) {
+    const files = Array.from(e.target.files).filter(f => {
+      const path = f.webkitRelativePath || f.name;
+      const parts = path.split('/');
+      for (const p of parts) {
+        if (p.startsWith('.') || SYSTEM_FILES.includes(p)) return false;
+      }
+      return true;
+    }).map(f => {
+      const rel = f.webkitRelativePath || f.name;
+      Object.defineProperty(f, '_relativePath', {value: rel, writable: true});
+      return f;
+    });
+    addFiles(files);
+  }
+  e.target.value = '';
+});
 
+/* === Render File List === */
 function renderFileList() {
   const el = document.getElementById('fileList');
-  document.getElementById('uploadBtn').disabled = pendingFiles.length === 0;
-  el.innerHTML = pendingFiles.map((f, i) => `
-    <div class="file-item" id="file-${i}">
-      <div class="file-info">
-        <div class="file-name">${f.name}</div>
-        <div class="file-size">${formatSize(f.size)}</div>
-        <div class="file-tag">${selectedTeam}/${selectedCategory}</div>
-        <div class="progress-bar"><div class="progress-fill" id="prog-${i}"></div></div>
-        <div class="status" id="status-${i}"></div>
-      </div>
-      <button class="btn-remove" onclick="removeFile(${i})" id="rm-${i}">✕</button>
-    </div>
-  `).join('');
+  document.getElementById('uploadBtn').disabled = pendingFiles.length === 0 || isUploading;
+  if (pendingFiles.length === 0) { el.innerHTML = ''; return; }
+  el.innerHTML = pendingFiles.map((f, i) => {
+    const name = f._relativePath || f.name;
+    const icon = getFileIcon(name);
+    return '<div class="file-item" id="file-' + i + '">' +
+      '<div class="file-icon">' + icon + '</div>' +
+      '<div class="file-info">' +
+        '<div class="file-name" title="' + name + '">' + name + '</div>' +
+        '<div class="file-size">' + formatSize(f.size) + (isArchive(name) ? ' (압축)' : '') + '</div>' +
+        '<div class="file-tag">' + selectedTeam + '/' + selectedCategory + '</div>' +
+        '<div class="progress-bar"><div class="progress-fill" id="prog-' + i + '"></div></div>' +
+        '<div class="status" id="status-' + i + '"></div>' +
+      '</div>' +
+      '<button class="btn-remove" onclick="removeFile(' + i + ')" id="rm-' + i + '">✕</button>' +
+    '</div>';
+  }).join('');
 }
 
+/* === Pre-signed URL Upload (Task 7.1) === */
+async function uploadFilePresigned(file, idx, isLast) {
+  const statusEl = document.getElementById('status-' + idx);
+  const progEl = document.getElementById('prog-' + idx);
+  const displayName = file._relativePath || file.name;
+
+  statusEl.className = 'status uploading';
+  statusEl.textContent = 'Pre-signed URL 요청 중...';
+
+  /* Step 1: Get pre-signed URL */
+  let presignData;
+  try {
+    presignData = await apiPost('/documents/presign', {
+      filename: displayName.split('/').pop(),
+      team: selectedTeam,
+      category: selectedCategory,
+      content_type: file.type || 'application/octet-stream'
+    });
+  } catch(e) {
+    throw new Error('Presign 실패: ' + e.message);
+  }
+
+  /* Step 2: PUT to S3 via XMLHttpRequest for progress */
+  statusEl.textContent = '업로드 중...';
+  const putToS3 = (url) => new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', url, true);
+    xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) {
+        const pct = Math.round((e.loaded / e.total) * 100);
+        progEl.style.width = pct + '%';
+        statusEl.textContent = '업로드 중... ' + pct + '%';
+      }
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) resolve(xhr);
+      else reject(new Error('S3 PUT 실패: HTTP ' + xhr.status));
+    };
+    xhr.onerror = () => reject(new Error('네트워크 오류'));
+    xhr.send(file);
+  });
+
+  try {
+    await putToS3(presignData.presigned_url);
+  } catch(e) {
+    /* Retry on 403 (expired pre-signed URL) */
+    if (e.message && e.message.includes('403')) {
+      statusEl.textContent = 'URL 만료, 재요청 중...';
+      presignData = await apiPost('/documents/presign', {
+        filename: displayName.split('/').pop(),
+        team: selectedTeam,
+        category: selectedCategory,
+        content_type: file.type || 'application/octet-stream'
+      });
+      await putToS3(presignData.presigned_url);
+    } else {
+      throw e;
+    }
+  }
+
+  /* Step 3: Confirm upload */
+  statusEl.textContent = '업로드 확인 중...';
+  const confirmResp = await apiPost('/documents/confirm', {
+    s3_key: presignData.s3_key,
+    filename: displayName.split('/').pop(),
+    team: selectedTeam,
+    category: selectedCategory,
+    skip_sync: !isLast
+  });
+
+  /* Step 4: If archive, trigger extraction */
+  if (isArchive(displayName)) {
+    statusEl.textContent = '압축 해제 요청 중...';
+    const extractResp = await apiPost('/documents/extract', {
+      s3_key: presignData.s3_key,
+      team: selectedTeam,
+      category: selectedCategory
+    });
+    statusEl.className = 'status extracting';
+    statusEl.innerHTML = '<span class="extraction-status"><span class="spinner"></span> 압축 해제 중 (task: ' + extractResp.task_id + ')</span>';
+    startPolling(extractResp.task_id, idx);
+  } else {
+    progEl.style.width = '100%';
+    progEl.style.background = '#4ade80';
+    statusEl.className = 'status done';
+    statusEl.textContent = '\\u2713 완료' + (confirmResp.kb_sync ? ' (KB sync: ' + confirmResp.kb_sync + ')' : '');
+  }
+}
+
+/* === Upload Orchestration (Task 7.2) === */
 async function startUpload() {
+  if (pendingFiles.length === 0 || isUploading) return;
+  isUploading = true;
   document.getElementById('uploadBtn').disabled = true;
   document.querySelectorAll('.btn-remove').forEach(b => b.style.display = 'none');
   document.getElementById('teamSelect').disabled = true;
   document.getElementById('categorySelect').disabled = true;
+  document.getElementById('btnSelectFiles').disabled = true;
+  document.getElementById('btnSelectDir').disabled = true;
 
-  for (let i = 0; i < pendingFiles.length; i++) {
-    await uploadFile(pendingFiles[i], i);
+  const overallEl = document.getElementById('overallProgress');
+  overallEl.style.display = 'block';
+  const total = pendingFiles.length;
+  let successCount = 0;
+  let failCount = 0;
+
+  for (let i = 0; i < total; i++) {
+    const isLast = (i === total - 1);
+    document.getElementById('overallLabel').textContent = (successCount + failCount) + '/' + total + ' 파일 완료';
+    document.getElementById('overallFill').style.width = Math.round(((successCount + failCount) / total) * 100) + '%';
+    try {
+      await uploadFilePresigned(pendingFiles[i], i, isLast);
+      successCount++;
+    } catch(e) {
+      failCount++;
+      const statusEl = document.getElementById('status-' + i);
+      const progEl = document.getElementById('prog-' + i);
+      if (statusEl) {
+        statusEl.className = 'status error';
+        statusEl.textContent = '\\u2717 오류: ' + e.message;
+      }
+      if (progEl) progEl.style.background = '#f87171';
+    }
   }
 
-  toast('모든 파일 업로드 완료', 'success');
+  /* Final overall progress */
+  document.getElementById('overallLabel').textContent = total + '/' + total + ' 파일 완료';
+  document.getElementById('overallFill').style.width = '100%';
+
+  /* Summary toast */
+  if (failCount === 0) {
+    toast('모든 파일 업로드 완료 (' + successCount + '개 성공)', 'success');
+  } else {
+    toast('업로드 완료: ' + successCount + '개 성공, ' + failCount + '개 실패', failCount === total ? 'error' : 'warning');
+  }
+
+  /* Reset UI state */
+  isUploading = false;
   pendingFiles = [];
   document.getElementById('teamSelect').disabled = false;
   document.getElementById('categorySelect').disabled = false;
-  setTimeout(() => { renderFileList(); loadDocuments(); }, 1500);
+  updateDropZone();
+  setTimeout(() => {
+    renderFileList();
+    overallEl.style.display = 'none';
+    loadDocuments();
+  }, 2000);
 }
 
-async function uploadFile(file, idx) {
-  const statusEl = document.getElementById(`status-${idx}`);
-  const progEl = document.getElementById(`prog-${idx}`);
-  try {
-    statusEl.className = 'status uploading';
-    statusEl.textContent = '업로드 준비 중...';
-
-    const initResp = await apiPost('/documents/initiate', {
-      filename: file.name,
-      content_type: file.type || 'application/octet-stream',
-      team: selectedTeam,
-      category: selectedCategory
-    });
-
-    const { upload_id, key } = initResp;
-    const totalParts = Math.ceil(file.size / CHUNK_SIZE);
-    const parts = [];
-
-    for (let partNum = 1; partNum <= totalParts; partNum++) {
-      const start = (partNum - 1) * CHUNK_SIZE;
-      const end = Math.min(start + CHUNK_SIZE, file.size);
-      const chunk = file.slice(start, end);
-      const b64 = await toBase64(chunk);
-      statusEl.textContent = `업로드 중... (${partNum}/${totalParts})`;
-      const partResp = await apiPost('/documents/upload-part', {
-        upload_id, key, part_number: partNum, data: b64
-      });
-      parts.push({ PartNumber: partNum, ETag: partResp.etag });
-      progEl.style.width = `${Math.round((partNum / totalParts) * 100)}%`;
+/* === Extraction Status Polling (Task 7.3) === */
+function startPolling(taskId, fileIdx) {
+  let attempts = 0;
+  const interval = setInterval(async () => {
+    attempts++;
+    if (attempts > 60) {
+      clearInterval(interval);
+      const statusEl = document.getElementById('status-' + fileIdx);
+      if (statusEl) {
+        statusEl.className = 'status error';
+        statusEl.textContent = '\\u2717 압축 해제 상태 확인 시간 초과';
+      }
+      return;
     }
+    try {
+      const resp = await fetch(API_BASE + '/documents/extract-status?task_id=' + encodeURIComponent(taskId));
+      if (!resp.ok) return;
+      const data = await resp.json();
+      const statusEl = document.getElementById('status-' + fileIdx);
+      if (!statusEl) { clearInterval(interval); return; }
 
-    statusEl.textContent = '완료 처리 중...';
-    const completeResp = await apiPost('/documents/complete', {
-      upload_id, key, parts
-    });
-    statusEl.className = 'status done';
-    statusEl.textContent = `✓ 완료 (KB sync: ${completeResp.kb_sync || 'done'})`;
-    progEl.style.width = '100%';
-    progEl.style.background = '#4ade80';
-  } catch (err) {
-    statusEl.className = 'status error';
-    statusEl.textContent = `✗ 오류: ${err.message}`;
-    progEl.style.background = '#f87171';
-  }
+      if (data.status === '완료') {
+        clearInterval(interval);
+        const r = data.results || {};
+        statusEl.className = 'status done';
+        statusEl.textContent = '\\u2713 압축 해제 완료 (성공: ' + (r.success_count || 0) + ', 건너뜀: ' + (r.skipped_count || 0) + ')';
+        const progEl = document.getElementById('prog-' + fileIdx);
+        if (progEl) { progEl.style.width = '100%'; progEl.style.background = '#4ade80'; }
+        loadDocuments();
+      } else if (data.status === '실패') {
+        clearInterval(interval);
+        statusEl.className = 'status error';
+        statusEl.textContent = '\\u2717 압축 해제 실패: ' + (data.error_message || '알 수 없는 오류');
+        const progEl = document.getElementById('prog-' + fileIdx);
+        if (progEl) progEl.style.background = '#f87171';
+      } else if (data.status === '처리중') {
+        statusEl.innerHTML = '<span class="extraction-status"><span class="spinner"></span> 압축 해제 처리중...</span>';
+      }
+    } catch(e) {
+      /* Network error during polling - keep trying */
+    }
+  }, 5000);
 }
 
+/* === API Helper === */
 async function apiPost(path, body) {
   const resp = await fetch(API_BASE + path, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(body)
   });
   const data = await resp.json();
@@ -624,15 +1261,7 @@ async function apiPost(path, body) {
   return data;
 }
 
-function toBase64(blob) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result.split(',')[1]);
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
-}
-
+/* === Utilities === */
 function formatSize(bytes) {
   if (bytes < 1024) return bytes + ' B';
   if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
@@ -642,12 +1271,13 @@ function formatSize(bytes) {
 
 function toast(msg, type) {
   const el = document.createElement('div');
-  el.className = `toast ${type}`;
+  el.className = 'toast ' + type;
   el.textContent = msg;
   document.body.appendChild(el);
-  setTimeout(() => el.remove(), 3000);
+  setTimeout(() => el.remove(), 4000);
 }
 
+/* === Document List (Task 7.4) === */
 async function loadDocuments() {
   try {
     const ft = document.getElementById('filterTeam').value;
@@ -663,20 +1293,18 @@ async function loadDocuments() {
       el.innerHTML = '<div class="empty">업로드된 문서가 없습니다</div>';
       return;
     }
-    el.innerHTML = data.files.map(f => `
-      <div class="doc-item">
-        <div>
-          <span class="name">${f.filename}</span>
-          <div class="tag">${f.team}/${f.category}</div>
-        </div>
-        <span class="meta">${formatSize(f.size)}<br>${new Date(f.last_modified).toLocaleString('ko-KR')}</span>
-      </div>
-    `).join('');
+    el.innerHTML = data.files.map(f => '<div class="doc-item"><div>' +
+      '<span class="name">' + f.filename + '</span>' +
+      '<div class="tag">' + f.team + '/' + f.category + '</div>' +
+      '</div><span class="meta">' + formatSize(f.size) + '<br>' +
+      new Date(f.last_modified).toLocaleString('ko-KR') + '</span></div>'
+    ).join('');
   } catch (err) {
     document.getElementById('docList').innerHTML = '<div class="empty">목록 조회 실패</div>';
   }
 }
 
+/* === Init === */
 loadCategories().then(() => loadDocuments());
 </script>
 </body>

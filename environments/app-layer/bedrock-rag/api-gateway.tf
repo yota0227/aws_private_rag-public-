@@ -309,6 +309,131 @@ resource "aws_api_gateway_integration" "categories_lambda" {
 }
 
 # ----------------------------------------------------------------------------
+# Pre-signed URL 업로드 라우트 (Multi-file Upload)
+# Requirements: 7.1, 7.6, 10.1 | Design: 5.6
+# ----------------------------------------------------------------------------
+
+# /rag/documents/presign resource
+resource "aws_api_gateway_resource" "documents_presign" {
+  provider = aws.seoul
+
+  rest_api_id = aws_api_gateway_rest_api.private_rag.id
+  parent_id   = aws_api_gateway_resource.documents.id
+  path_part   = "presign"
+}
+
+# POST /rag/documents/presign (Pre-signed URL 생성)
+resource "aws_api_gateway_method" "documents_presign_post" {
+  provider = aws.seoul
+
+  rest_api_id   = aws_api_gateway_rest_api.private_rag.id
+  resource_id   = aws_api_gateway_resource.documents_presign.id
+  http_method   = "POST"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "documents_presign_lambda" {
+  provider = aws.seoul
+
+  rest_api_id             = aws_api_gateway_rest_api.private_rag.id
+  resource_id             = aws_api_gateway_resource.documents_presign.id
+  http_method             = aws_api_gateway_method.documents_presign_post.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.document_processor.invoke_arn
+}
+
+# /rag/documents/confirm resource
+resource "aws_api_gateway_resource" "documents_confirm" {
+  provider = aws.seoul
+
+  rest_api_id = aws_api_gateway_rest_api.private_rag.id
+  parent_id   = aws_api_gateway_resource.documents.id
+  path_part   = "confirm"
+}
+
+# POST /rag/documents/confirm (업로드 완료 확인)
+resource "aws_api_gateway_method" "documents_confirm_post" {
+  provider = aws.seoul
+
+  rest_api_id   = aws_api_gateway_rest_api.private_rag.id
+  resource_id   = aws_api_gateway_resource.documents_confirm.id
+  http_method   = "POST"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "documents_confirm_lambda" {
+  provider = aws.seoul
+
+  rest_api_id             = aws_api_gateway_rest_api.private_rag.id
+  resource_id             = aws_api_gateway_resource.documents_confirm.id
+  http_method             = aws_api_gateway_method.documents_confirm_post.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.document_processor.invoke_arn
+}
+
+# /rag/documents/extract resource
+resource "aws_api_gateway_resource" "documents_extract" {
+  provider = aws.seoul
+
+  rest_api_id = aws_api_gateway_rest_api.private_rag.id
+  parent_id   = aws_api_gateway_resource.documents.id
+  path_part   = "extract"
+}
+
+# POST /rag/documents/extract (비동기 압축 해제 시작)
+resource "aws_api_gateway_method" "documents_extract_post" {
+  provider = aws.seoul
+
+  rest_api_id   = aws_api_gateway_rest_api.private_rag.id
+  resource_id   = aws_api_gateway_resource.documents_extract.id
+  http_method   = "POST"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "documents_extract_lambda" {
+  provider = aws.seoul
+
+  rest_api_id             = aws_api_gateway_rest_api.private_rag.id
+  resource_id             = aws_api_gateway_resource.documents_extract.id
+  http_method             = aws_api_gateway_method.documents_extract_post.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.document_processor.invoke_arn
+}
+
+# /rag/documents/extract-status resource
+resource "aws_api_gateway_resource" "documents_extract_status" {
+  provider = aws.seoul
+
+  rest_api_id = aws_api_gateway_rest_api.private_rag.id
+  parent_id   = aws_api_gateway_resource.documents.id
+  path_part   = "extract-status"
+}
+
+# GET /rag/documents/extract-status (압축 해제 상태 조회)
+resource "aws_api_gateway_method" "documents_extract_status_get" {
+  provider = aws.seoul
+
+  rest_api_id   = aws_api_gateway_rest_api.private_rag.id
+  resource_id   = aws_api_gateway_resource.documents_extract_status.id
+  http_method   = "GET"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "documents_extract_status_lambda" {
+  provider = aws.seoul
+
+  rest_api_id             = aws_api_gateway_rest_api.private_rag.id
+  resource_id             = aws_api_gateway_resource.documents_extract_status.id
+  http_method             = aws_api_gateway_method.documents_extract_status_get.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.document_processor.invoke_arn
+}
+
+# ----------------------------------------------------------------------------
 # Deployment & Stage
 # ----------------------------------------------------------------------------
 
@@ -328,6 +453,10 @@ resource "aws_api_gateway_deployment" "main" {
       aws_api_gateway_resource.upload.id,
       aws_api_gateway_resource.health.id,
       aws_api_gateway_resource.categories.id,
+      aws_api_gateway_resource.documents_presign.id,
+      aws_api_gateway_resource.documents_confirm.id,
+      aws_api_gateway_resource.documents_extract.id,
+      aws_api_gateway_resource.documents_extract_status.id,
       aws_api_gateway_method.query_post.id,
       aws_api_gateway_method.documents_get.id,
       aws_api_gateway_method.documents_initiate_post.id,
@@ -336,6 +465,10 @@ resource "aws_api_gateway_deployment" "main" {
       aws_api_gateway_method.upload_get.id,
       aws_api_gateway_method.health_get.id,
       aws_api_gateway_method.categories_get.id,
+      aws_api_gateway_method.documents_presign_post.id,
+      aws_api_gateway_method.documents_confirm_post.id,
+      aws_api_gateway_method.documents_extract_post.id,
+      aws_api_gateway_method.documents_extract_status_get.id,
       aws_api_gateway_integration.query_lambda.id,
       aws_api_gateway_integration.documents_get_lambda.id,
       aws_api_gateway_integration.documents_initiate_lambda.id,
@@ -344,6 +477,10 @@ resource "aws_api_gateway_deployment" "main" {
       aws_api_gateway_integration.upload_lambda.id,
       aws_api_gateway_integration.health_lambda.id,
       aws_api_gateway_integration.categories_lambda.id,
+      aws_api_gateway_integration.documents_presign_lambda.id,
+      aws_api_gateway_integration.documents_confirm_lambda.id,
+      aws_api_gateway_integration.documents_extract_lambda.id,
+      aws_api_gateway_integration.documents_extract_status_lambda.id,
     ]))
   }
 

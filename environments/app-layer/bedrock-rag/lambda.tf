@@ -88,6 +88,7 @@ resource "aws_iam_role_policy" "lambda_s3" {
         Action = [
           "s3:GetObject",
           "s3:PutObject",
+          "s3:DeleteObject",
           "s3:ListBucket",
           "s3:CreateMultipartUpload",
           "s3:UploadPart",
@@ -253,6 +254,49 @@ resource "aws_iam_role_policy" "lambda_kms" {
   })
 }
 
+# IAM Policy for Lambda - DynamoDB Access (Extraction Task 상태 추적)
+# Requirements: 7.3, 7.4, 7.5 | Design: 5.5
+resource "aws_iam_role_policy" "lambda_dynamodb" {
+  name = "lambda-dynamodb-access"
+  role = aws_iam_role.lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:PutItem",
+          "dynamodb:GetItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:Query"
+        ]
+        Resource = [
+          aws_dynamodb_table.extraction_tasks.arn
+        ]
+      }
+    ]
+  })
+}
+
+# IAM Policy for Lambda - Self Invoke (비동기 압축 해제 호출)
+# Requirements: 7.3 | Design: 5.5
+resource "aws_iam_role_policy" "lambda_self_invoke" {
+  name = "lambda-self-invoke"
+  role = aws_iam_role.lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = "lambda:InvokeFunction"
+        Resource = aws_lambda_function.document_processor.arn
+      }
+    ]
+  })
+}
+
 # Lambda Function - Seoul Private RAG VPC
 # Requirements: 2.1, 2.2, 2.11
 resource "aws_lambda_function" "document_processor" {
@@ -266,6 +310,12 @@ resource "aws_lambda_function" "document_processor" {
   runtime          = "python3.12"
   timeout          = 300
   memory_size      = 512
+
+  # /tmp 디스크 확대: 압축 파일 해제를 위해 3072MB (3GB) 할당
+  # Requirements: 3.4 | Design: 5.3
+  ephemeral_storage {
+    size = 3072
+  }
 
   # VPC Configuration - Private RAG VPC (Seoul Frontend)
   vpc_config {
@@ -288,6 +338,7 @@ resource "aws_lambda_function" "document_processor" {
       BEDROCK_KB_ID            = module.bedrock_rag.knowledge_base_id
       BEDROCK_KB_DATA_SOURCE_ID = var.bedrock_kb_data_source_id
       FOUNDATION_MODEL_ARN     = var.foundation_model_arn
+      DYNAMODB_TABLE           = aws_dynamodb_table.extraction_tasks.name
     }
   }
 
@@ -304,8 +355,22 @@ resource "aws_lambda_function" "document_processor" {
     aws_iam_role_policy.lambda_secrets,
     aws_iam_role_policy.lambda_logs,
     aws_iam_role_policy.lambda_vpc,
-    aws_iam_role_policy.lambda_kms
+    aws_iam_role_policy.lambda_kms,
+    aws_iam_role_policy.lambda_dynamodb
+    # Note: lambda_self_invoke는 Lambda ARN을 참조하므로 depends_on에 포함하면 순환 의존성 발생
+    # Lambda 생성 후 자동으로 self_invoke 정책이 적용됨
   ]
+}
+
+# Lambda Event Invocation 자동 재시도를 0으로 제한
+# AWS 기본값: 실패 시 최대 2회 자동 재시도 → 압축 해제 중복 실행/상태 꼬임 방지
+# Requirements: 7.3 | Design: 5.4
+resource "aws_lambda_function_event_invoke_config" "document_processor_async" {
+  provider = aws.seoul
+
+  function_name                = aws_lambda_function.document_processor.function_name
+  maximum_retry_attempts       = 0
+  maximum_event_age_in_seconds = 300
 }
 
 # CloudWatch Log Group for Lambda
