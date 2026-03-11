@@ -56,6 +56,7 @@ def handler(event, context):
     if event.get('action') == 'process_extraction':
         return process_extraction(event)
 
+
     logger.info(f"Event path: {event.get('path')}, method: {event.get('httpMethod')}")
 
     path = event.get('path', '')

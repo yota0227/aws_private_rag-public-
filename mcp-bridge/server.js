@@ -11,6 +11,8 @@ const { McpServer } = require("@modelcontextprotocol/sdk/server/mcp.js");
 const { StreamableHTTPServerTransport } = require("@modelcontextprotocol/sdk/server/streamableHttp.js");
 const { SSEServerTransport } = require("@modelcontextprotocol/sdk/server/sse.js");
 
+const { z } = require("zod");
+
 const RAG_API_BASE = process.env.RAG_API_BASE || "https://r0qa9lzhgi.execute-api.ap-northeast-2.amazonaws.com/dev/rag";
 const PORT = process.env.PORT || 3100;
 
@@ -45,12 +47,12 @@ function createMcpServer() {
 
   mcp.tool(
     "rag_query",
-    "BOS-AI RAG 지식 베이스에 질의합니다. 업로드된 SoC 코드, 스펙 문서 등을 검색하여 답변합니다.",
-    { query: { type: "string", description: "질의 내용 (한국어/영어 모두 가능)" } },
-    async (params) => {
+    "BOS-AI RAG 지식 베이스에 질의합니다. 문서 내용 검색, 키워드 검색, 기술 질문 등 모든 지식 검색은 이 툴을 사용하세요. 파일명을 몰라도 됩니다 — 키워드나 자연어로 질의하면 관련 문서를 찾아 답변합니다. 업로드된 SoC 코드, 스펙 문서, 주간 보고서 등을 검색합니다.",
+    { query: z.string().describe("질의 내용 (한국어/영어 모두 가능)") },
+    async (args, extra) => {
       try {
-        console.log("[TOOL] rag_query: " + params.query);
-        const resp = await ragApi("POST", "/query", { query: params.query });
+        console.log("[TOOL] rag_query: " + args.query);
+        const resp = await ragApi("POST", "/query", { query: args.query });
         if (resp.error) return { content: [{ type: "text", text: "오류: " + resp.error }], isError: true };
         let text = resp.answer || resp.message || JSON.stringify(resp);
         if (resp.citations?.length > 0) {
@@ -68,18 +70,18 @@ function createMcpServer() {
 
   mcp.tool(
     "rag_list_documents",
-    "업로드된 RAG 문서 목록을 조회합니다. 팀/카테고리로 필터링 가능합니다.",
+    "업로드된 RAG 문서의 파일 목록을 조회합니다. 어떤 파일이 등록되어 있는지 확인하거나 파일 관리(삭제 등) 목적으로만 사용하세요. 문서 내용 검색이나 질문 답변은 rag_query를 사용하세요.",
     {
-      team: { type: "string", description: "팀 필터 (예: soc). 생략 시 전체 조회" },
-      category: { type: "string", description: "카테고리 필터 (예: code, spec). 생략 시 전체 조회" }
+      team: z.string().optional().describe("팀 필터 (예: soc). 생략 시 전체 조회"),
+      category: z.string().optional().describe("카테고리 필터 (예: code, spec). 생략 시 전체 조회")
     },
-    async (params) => {
+    async (args, extra) => {
       try {
-        console.log("[TOOL] rag_list_documents: team=" + (params.team||"all") + " category=" + (params.category||"all"));
+        console.log("[TOOL] rag_list_documents: team=" + (args.team||"all") + " category=" + (args.category||"all"));
         let path = "/documents";
         const qs = [];
-        if (params.team) qs.push("team=" + encodeURIComponent(params.team));
-        if (params.category) qs.push("category=" + encodeURIComponent(params.category));
+        if (args.team) qs.push("team=" + encodeURIComponent(args.team));
+        if (args.category) qs.push("category=" + encodeURIComponent(args.category));
         if (qs.length > 0) path += "?" + qs.join("&");
         const resp = await ragApi("GET", path);
         if (resp.error) return { content: [{ type: "text", text: "오류: " + resp.error }], isError: true };
@@ -122,16 +124,16 @@ function createMcpServer() {
     "rag_upload_status",
     "최근 업로드된 RAG 문서 목록과 KB Sync 상태를 조회합니다.",
     {
-      team: { type: "string", description: "팀 필터 (선택)" },
-      category: { type: "string", description: "카테고리 필터 (선택)" }
+      team: z.string().optional().describe("팀 필터 (선택)"),
+      category: z.string().optional().describe("카테고리 필터 (선택)")
     },
-    async (params) => {
+    async (args, extra) => {
       try {
-        console.log("[TOOL] rag_upload_status: team=" + (params.team||"all") + " category=" + (params.category||"all"));
+        console.log("[TOOL] rag_upload_status: team=" + (args.team||"all") + " category=" + (args.category||"all"));
         let path = "/documents";
         const qs = [];
-        if (params.team) qs.push("team=" + encodeURIComponent(params.team));
-        if (params.category) qs.push("category=" + encodeURIComponent(params.category));
+        if (args.team) qs.push("team=" + encodeURIComponent(args.team));
+        if (args.category) qs.push("category=" + encodeURIComponent(args.category));
         if (qs.length > 0) path += "?" + qs.join("&");
         const resp = await ragApi("GET", path);
         if (resp.error) return { content: [{ type: "text", text: "오류: " + resp.error }], isError: true };
@@ -153,12 +155,12 @@ function createMcpServer() {
     "rag_extract_status",
     "압축 파일 해제 작업(Extraction Task)의 상태를 조회합니다.",
     {
-      task_id: { type: "string", description: "Extraction Task ID (필수)" }
+      task_id: z.string().describe("Extraction Task ID (필수)")
     },
-    async (params) => {
+    async (args, extra) => {
       try {
-        console.log("[TOOL] rag_extract_status: task_id=" + params.task_id);
-        const resp = await ragApi("GET", "/documents/extract-status?task_id=" + encodeURIComponent(params.task_id));
+        console.log("[TOOL] rag_extract_status: task_id=" + args.task_id);
+        const resp = await ragApi("GET", "/documents/extract-status?task_id=" + encodeURIComponent(args.task_id));
         if (resp.error) return { content: [{ type: "text", text: "오류: " + resp.error }], isError: true };
         let text = "📦 Extraction Task 상태\n";
         text += "  Task ID: " + resp.task_id + "\n";
@@ -190,12 +192,12 @@ function createMcpServer() {
     "rag_delete_document",
     "RAG 지식 베이스에서 문서를 삭제합니다. S3에서 파일을 제거하고 KB Sync를 트리거합니다.",
     {
-      s3_key: { type: "string", description: "삭제할 파일의 S3 키 (예: documents/soc/code/filename.pdf)" }
+      s3_key: z.string().describe("삭제할 파일의 S3 키 (예: documents/soc/code/filename.pdf)")
     },
-    async (params) => {
+    async (args, extra) => {
       try {
-        console.log("[TOOL] rag_delete_document: s3_key=" + params.s3_key);
-        const resp = await ragApi("POST", "/documents/delete", { s3_key: params.s3_key });
+        console.log("[TOOL] rag_delete_document: s3_key=" + args.s3_key);
+        const resp = await ragApi("POST", "/documents/delete", { s3_key: args.s3_key });
         if (resp.error) return { content: [{ type: "text", text: "오류: " + resp.error }], isError: true };
         let text = "✅ 문서 삭제 완료\n";
         text += "  삭제된 파일: " + resp.key + "\n";

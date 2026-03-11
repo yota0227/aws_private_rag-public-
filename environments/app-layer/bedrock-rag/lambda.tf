@@ -139,11 +139,14 @@ resource "aws_iam_role_policy" "lambda_bedrock" {
         Action = [
           "bedrock:InvokeModel",
           "bedrock:Retrieve",
-          "bedrock:RetrieveAndGenerate"
+          "bedrock:RetrieveAndGenerate",
+          "bedrock:GetInferenceProfile"
         ]
         Resource = [
-          "arn:aws:bedrock:us-east-1::foundation-model/*",
-          "arn:aws:bedrock:us-east-1:533335672315:knowledge-base/*"
+          "arn:aws:bedrock:*::foundation-model/*",
+          "arn:aws:bedrock:us-east-1:533335672315:knowledge-base/*",
+          "arn:aws:bedrock:*:533335672315:inference-profile/*",
+          "arn:aws:bedrock:*::inference-profile/*"
         ]
       },
       {
