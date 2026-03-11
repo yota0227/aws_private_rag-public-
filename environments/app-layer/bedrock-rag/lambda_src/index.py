@@ -759,6 +759,8 @@ input[type=file]{display:none}
 .status.extracting{color:#fbbf24}
 .btn-remove{background:none;border:none;color:#64748b;cursor:pointer;font-size:1.1rem;padding:.2rem;flex-shrink:0}
 .btn-remove:hover{color:#f87171}
+.btn-delete{background:none;border:1px solid #475569;color:#94a3b8;border-radius:6px;padding:.3rem .6rem;cursor:pointer;font-size:.75rem}
+.btn-delete:hover{border-color:#f87171;color:#f87171}
 .overall-progress{margin-top:1rem;padding:.75rem 1rem;background:#1e293b;border-radius:8px;display:none}
 .overall-progress .label{font-size:.85rem;color:#94a3b8;margin-bottom:.4rem}
 .overall-progress .progress-bar{height:8px}
@@ -1329,15 +1331,17 @@ async function loadDocuments() {
       el.innerHTML = '<div class="empty">업로드된 문서가 없습니다</div>';
       return;
     }
-    el.innerHTML = data.files.map(f => '<div class="doc-item"><div>' +
-      '<span class="name">' + f.filename + '</span>' +
-      '<div class="tag">' + f.team + '/' + f.category + '</div>' +
-      '</div><div style="display:flex;align-items:center;gap:.75rem">' +
-      '<span class="meta">' + formatSize(f.size) + '<br>' +
-      new Date(f.last_modified).toLocaleString(\'ko-KR\') + '</span>' +
-      '<button onclick="deleteDocument(\'' + f.key.replace(/\'/g, "\\\\'") + '\')" style="background:none;border:1px solid #475569;color:#94a3b8;border-radius:6px;padding:.3rem .6rem;cursor:pointer;font-size:.75rem" onmouseover="this.style.borderColor=\'#f87171\';this.style.color=\'#f87171\'" onmouseout="this.style.borderColor=\'#475569\';this.style.color=\'#94a3b8\'">🗑 삭제</button>' +
-      '</div></div>'
-    ).join('');
+    el.innerHTML = data.files.map(f => {
+      var safeKey = f.key.replace(/&/g,"&amp;").replace(/"/g,"&quot;");
+      return '<div class="doc-item"><div>' +
+        '<span class="name">' + f.filename + '</span>' +
+        '<div class="tag">' + f.team + '/' + f.category + '</div>' +
+        '</div><div style="display:flex;align-items:center;gap:.75rem">' +
+        '<span class="meta">' + formatSize(f.size) + '<br>' +
+        new Date(f.last_modified).toLocaleString("ko-KR") + '</span>' +
+        '<button class="btn-delete" data-key="' + safeKey + '" onclick="deleteDocument(this.dataset.key)">🗑 삭제</button>' +
+        '</div></div>';
+    }).join('');
   } catch (err) {
     document.getElementById('docList').innerHTML = '<div class="empty">목록 조회 실패</div>';
   }
