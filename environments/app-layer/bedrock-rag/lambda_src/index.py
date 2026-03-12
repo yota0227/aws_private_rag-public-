@@ -281,6 +281,7 @@ def confirm_upload(event):
     body = parse_body(event)
     s3_key = body.get('s3_key', '')
     skip_sync = body.get('skip_sync', False)
+    is_archive = body.get('is_archive', False)
 
     if not s3_key:
         return response(400, {'error': 's3_key is required'})
@@ -293,9 +294,9 @@ def confirm_upload(event):
             return response(404, {'error': 'File not found in S3', 's3_key': s3_key})
         raise
 
-    # KB Sync 제어
+    # KB Sync 제어: archive 파일은 extract 완료 후 sync하므로 여기서 skip
     sync_result = 'skipped'
-    if not skip_sync:
+    if not skip_sync and not is_archive:
         sync_result = trigger_kb_sync()
 
     logger.info(f"Upload confirmed: {s3_key}, kb_sync: {sync_result}")
@@ -513,7 +514,13 @@ def trigger_kb_sync():
         return 'skipped - KB ID or Data Source ID not configured'
 
     try:
-        bedrock_agent = boto3.client('bedrock-agent', region_name=BACKEND_REGION)
+        from botocore.config import Config
+        bedrock_config = Config(
+            connect_timeout=5,
+            read_timeout=10,
+            retries={'max_attempts': 1}
+        )
+        bedrock_agent = boto3.client('bedrock-agent', region_name=BACKEND_REGION, config=bedrock_config)
         resp = bedrock_agent.start_ingestion_job(
             knowledgeBaseId=BEDROCK_KB_ID,
             dataSourceId=BEDROCK_KB_DATA_SOURCE_ID
@@ -808,7 +815,7 @@ input[type=file]{display:none}
 <div class="drop-zone disabled" id="dropZone">
   <div class="icon">📁</div>
   <p id="dropZoneText">팀과 카테고리를 먼저 선택하세요</p>
-  <p style="font-size:.75rem;color:#475569">PDF, TXT, DOCX, CSV, HTML, MD, ZIP, TAR.GZ 지원 · 파일 및 폴더 드래그 가능</p>
+  <p style="font-size:.75rem;color:#475569">PDF, TXT, DOCX, CSV, HTML, MD 지원 · 파일 및 폴더 드래그 가능</p>
 </div>
 <input type="file" id="fileInput" multiple>
 <input type="file" id="dirInput" webkitdirectory>
@@ -846,12 +853,11 @@ input[type=file]{display:none}
 <script>
 /* === Constants === */
 const API_BASE = window.location.pathname.replace(/\\/upload$/, '');
-const ALLOWED_EXTENSIONS = ['pdf', 'txt', 'docx', 'csv', 'html', 'md', 'zip', 'tar.gz'];
+const ALLOWED_EXTENSIONS = ['pdf', 'txt', 'docx', 'csv', 'html', 'md'];
 const MAX_FILE_SIZE = 100 * 1024 * 1024;
-const MAX_ARCHIVE_SIZE = 500 * 1024 * 1024;
-const ARCHIVE_EXTENSIONS = ['zip', 'tar.gz'];
+const ARCHIVE_EXTENSIONS = [];
 const SYSTEM_FILES = ['__MACOSX', 'Thumbs.db', '.DS_Store'];
-const FILE_ICONS = {pdf:'📕',txt:'📝',docx:'📘',csv:'📊',html:'🌐',md:'📓',zip:'📦','tar.gz':'📦'};
+const FILE_ICONS = {pdf:'📕',txt:'📝',docx:'📘',csv:'📊',html:'🌐',md:'📓'};
 
 let pendingFiles = [];
 let teamsData = {};
@@ -1156,12 +1162,14 @@ async function uploadFilePresigned(file, idx, isLast) {
 
   /* Step 3: Confirm upload */
   statusEl.textContent = '업로드 확인 중...';
+  const archiveFile = isArchive(displayName);
   const confirmResp = await apiPost('/documents/confirm', {
     s3_key: presignData.s3_key,
     filename: displayName.split('/').pop(),
     team: selectedTeam,
     category: selectedCategory,
-    skip_sync: !isLast
+    skip_sync: !isLast || archiveFile,
+    is_archive: archiveFile
   });
 
   /* Step 4: If archive, trigger extraction */
