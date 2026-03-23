@@ -51,3 +51,10 @@ secrets/
 # Test results
 test-results/
 coverage/
+
+# Temporary output files
+out*.json
+
+# Terraform plan files
+*.tfplan
+**/tfplan
