@@ -1,0 +1,16 @@
+{
+  "enabled": true,
+  "name": "Spec → Confluence 동기화",
+  "description": "Spec 파일(requirements.md, design.md, tasks.md)이 수정되면 IT/Devops 스페이스의 Architecture > Enhanced Architecture 하부에 자동으로 동기화합니다.",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      ".kiro/specs/**/*.md"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "방금 수정된 spec 파일의 내용을 Confluence에 동기화해줘.\n\n[Confluence 설정]\n- cloudId: bos-semi.atlassian.net\n- 스페이스: IT/Devops (spaceId: 68962)\n- 부모 페이지: Enhanced Architecture (pageId: 367656965)\n\n[페이지 구조 규칙]\n1) Spec 디렉토리명으로 최상위 페이지를 Enhanced Architecture 하부에 생성. 이 페이지에는 해당 Spec의 목적을 2~3문장으로 간단히 기술한다.\n2) 최상위 페이지 하부에 Requirements, Design, Tasks 하위 페이지를 각각 생성한다.\n3) 이미 동일 제목의 페이지가 존재하면 updateConfluencePage로 업데이트하고, 없으면 createConfluencePage로 생성한다.\n\n[페이지 작성 규칙]\n4) contentFormat은 반드시 markdown을 사용한다.\n5) 페이지 제목 형식: 최상위는 디렉토리명 그대로, 하위는 'Requirements — {Spec 한국어 제목}', 'Design — {Spec 한국어 제목}', 'Tasks — {Spec 한국어 제목}'\n6) 각 페이지는 Confluence에서 너비를 넓게(full-width) 표시되도록 한다.\n\n[동기화 대상 판단]\n7) 수정된 파일이 requirements.md이면 Requirements 하위 페이지만, design.md이면 Design만, tasks.md이면 Tasks만 동기화한다. .config.kiro 등 다른 파일은 무시한다."
+  }
+}

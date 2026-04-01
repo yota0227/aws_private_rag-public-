@@ -6,15 +6,15 @@ BOS-AI Private RAG 시스템의 검색 품질을 Phase 1으로 개선한다. Lam
 
 ## Tasks
 
-- [ ] 1. Terraform 변수 및 Lambda 환경 변수 구성
-  - [ ] 1.1 `variables.tf`에 `search_type` 변수 추가
+- [x] 1. Terraform 변수 및 Lambda 환경 변수 구성
+  - [x] 1.1 `variables.tf`에 `search_type` 변수 추가
     - `string` 타입, 기본값 `"HYBRID"`, `HYBRID`/`SEMANTIC` validation 블록 포함
     - 변수 설명에 허용 값 명시
     - _Requirements: 2.1, 2.4_
-  - [ ] 1.2 `variables.tf`에 `search_results_count` 변수 추가
+  - [x] 1.2 `variables.tf`에 `search_results_count` 변수 추가
     - `number` 타입, 기본값 `5`
     - _Requirements: 2.2_
-  - [ ] 1.3 `lambda.tf` Lambda 환경 변수에 `SEARCH_TYPE`, `SEARCH_RESULTS_COUNT` 추가
+  - [x] 1.3 `lambda.tf` Lambda 환경 변수에 `SEARCH_TYPE`, `SEARCH_RESULTS_COUNT` 추가
     - `environment.variables` 블록에 `SEARCH_TYPE = var.search_type`, `SEARCH_RESULTS_COUNT = tostring(var.search_results_count)` 추가
     - _Requirements: 2.3_
   - [ ]* 1.4 Property 2 테스트 작성: Terraform 검색 변수 정의
@@ -23,8 +23,8 @@ BOS-AI Private RAG 시스템의 검색 품질을 Phase 1으로 개선한다. Lam
     - `tests/properties/rag_search_optimization_test.go`에 작성
     - `search_type`이 string 타입이고 기본값 HYBRID이며 validation 포함, `search_results_count`가 number 타입이고 기본값 5인지 검증
 
-- [ ] 2. Lambda 기반 유틸리티 함수 구현
-  - [ ] 2.1 `create_metadata_file()` 함수 추가
+- [x] 2. Lambda 기반 유틸리티 함수 구현
+  - [x] 2.1 `create_metadata_file()` 함수 추가
     - `environments/app-layer/bedrock-rag/lambda_src/index.py`에 신규 함수 추가
     - `DOCUMENT_TYPE_MAP` 상수 정의 (`.pdf`→`"pdf"`, `.txt`→`"text"`, `.md`→`"markdown"`, 그 외→`"other"`)
     - `metadataAttributes` 객체에 `team`, `category`, `document_type`, `upload_date`(ISO 8601) 포함
@@ -36,7 +36,7 @@ BOS-AI Private RAG 시스템의 검색 품질을 Phase 1으로 개선한다. Lam
     - **Property 3: 메타데이터 파일 구조 및 내용**
     - **Validates: Requirements 3.1, 3.2, 3.3, 3.4, 3.5**
     - 임의의 S3 키와 team/category 값에 대해 메타데이터 구조, 필드 존재, document_type 매핑, 빈 값 처리 검증
-  - [ ] 2.3 `build_bedrock_filter()` 함수 추가
+  - [x] 2.3 `build_bedrock_filter()` 함수 추가
     - team만 → `{"equals": {"key": "team", "value": "<값>"}}`
     - category만 → `{"equals": {"key": "category", "value": "<값>"}}`
     - 둘 다 → `{"andAll": [team필터, category필터]}`
@@ -46,7 +46,7 @@ BOS-AI Private RAG 시스템의 검색 품질을 Phase 1으로 개선한다. Lam
     - **Property 4: Bedrock 필터 구문 변환**
     - **Validates: Requirements 4.1, 4.2, 4.3, 4.4, 4.5**
     - 임의의 filter 객체에 대해 변환 규칙 정확성 검증
-  - [ ] 2.5 `parse_team_category_from_key()` 함수 추가
+  - [x] 2.5 `parse_team_category_from_key()` 함수 추가
     - `documents/{team}/{category}/{filename}` 형식에서 `(team, category)` 튜플 반환
     - 경로 깊이 3 미만이면 `('', '')` 반환
     - _Requirements: 8.2_

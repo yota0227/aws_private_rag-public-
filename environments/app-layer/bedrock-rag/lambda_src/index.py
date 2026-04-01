@@ -682,6 +682,73 @@ def serve_upload_ui():
 # Utility Functions
 # ============================================================================
 
+# ============================================================================
+# RAG Search Optimization — Utility Functions
+# ============================================================================
+
+DOCUMENT_TYPE_MAP = {'pdf': 'pdf', 'txt': 'text', 'md': 'markdown'}
+
+
+def create_metadata_file(s3_key, team='', category='', version='1.0', source_system='manual_upload', bucket=None):
+    """S3 객체에 대한 .metadata.json 사이드카 파일 생성 (Bedrock KB 메타데이터 필터링 형식)"""
+    if bucket is None:
+        bucket = S3_BUCKET_SEOUL
+
+    ext = s3_key.rsplit('.', 1)[-1].lower() if '.' in s3_key else ''
+    document_type = DOCUMENT_TYPE_MAP.get(ext, 'other')
+
+    metadata = {
+        'metadataAttributes': {
+            'team': team or '',
+            'category': category or '',
+            'document_type': document_type,
+            'upload_date': datetime.utcnow().isoformat() + 'Z',
+            'version': version or '1.0',
+            'source_system': source_system or 'manual_upload'
+        }
+    }
+
+    metadata_key = s3_key + '.metadata.json'
+    s3_client.put_object(
+        Bucket=bucket,
+        Key=metadata_key,
+        Body=json.dumps(metadata, ensure_ascii=False).encode('utf-8'),
+        ContentType='application/json'
+    )
+    logger.info(f"Metadata file created: {metadata_key}")
+    return metadata_key
+
+
+def build_bedrock_filter(filter_obj):
+    """filter 객체를 Bedrock KB 필터 구문으로 변환"""
+    conditions = []
+    if filter_obj.get('team'):
+        conditions.append({'equals': {'key': 'team', 'value': filter_obj['team']}})
+    if filter_obj.get('category'):
+        conditions.append({'equals': {'key': 'category', 'value': filter_obj['category']}})
+    if filter_obj.get('source_system'):
+        conditions.append({'equals': {'key': 'source_system', 'value': filter_obj['source_system']}})
+
+    if len(conditions) == 0:
+        return None
+    elif len(conditions) == 1:
+        return conditions[0]
+    else:
+        return {'andAll': conditions}
+
+
+def parse_team_category_from_key(s3_key):
+    """S3 키 경로에서 team/category 파싱 (documents/{team}/{category}/{filename})"""
+    parts = s3_key.replace(S3_PREFIX, '', 1).split('/')
+    if len(parts) >= 3:
+        return parts[0], parts[1]
+    return '', ''
+
+
+# ============================================================================
+# Utility Functions
+# ============================================================================
+
 def flatten_path(filepath):
     """경로 평탄화 — 디렉토리 구분자를 _로 변환, 숨김/시스템 파일 필터링"""
     # 경로 구성 요소 분리

@@ -167,18 +167,34 @@ else
 fi
 echo ""
 
-# Test 8: VPC Endpoints (Seoul)
-echo -e "${YELLOW}[TEST 8]${NC} VPC Endpoints (Seoul)"
+# Test 8: VPC Endpoints (Seoul - 두 VPC 모두 확인)
+LOGGING_VPC_ID="vpc-066c464f9c750ee9e"
+FRONTEND_VPC_ID="vpc-0a118e1bf21d0c057"
+
+echo -e "${YELLOW}[TEST 8]${NC} VPC Endpoints - Logging VPC (10.200.0.0/16)"
 ENDPOINT_COUNT=$(aws ec2 describe-vpc-endpoints \
   --region ap-northeast-2 \
-  --filters "Name=vpc-id,Values=vpc-066c464f9c750ee9e" \
+  --filters "Name=vpc-id,Values=${LOGGING_VPC_ID}" \
   --query 'VpcEndpoints[?State==`available`] | length(@)' \
   --output text)
-
-echo -e "${GREEN}✓ $ENDPOINT_COUNT VPC endpoints available in Seoul${NC}"
+echo -e "${GREEN}✓ $ENDPOINT_COUNT VPC endpoints available in Logging VPC${NC}"
 aws ec2 describe-vpc-endpoints \
   --region ap-northeast-2 \
-  --filters "Name=vpc-id,Values=vpc-066c464f9c750ee9e" \
+  --filters "Name=vpc-id,Values=${LOGGING_VPC_ID}" \
+  --query 'VpcEndpoints[?State==`available`].[ServiceName]' \
+  --output text | sed 's/^/  - /'
+echo ""
+
+echo -e "${YELLOW}[TEST 8b]${NC} VPC Endpoints - Frontend VPC (10.10.0.0/16)"
+ENDPOINT_COUNT_FE=$(aws ec2 describe-vpc-endpoints \
+  --region ap-northeast-2 \
+  --filters "Name=vpc-id,Values=${FRONTEND_VPC_ID}" \
+  --query 'VpcEndpoints[?State==`available`] | length(@)' \
+  --output text)
+echo -e "${GREEN}✓ $ENDPOINT_COUNT_FE VPC endpoints available in Frontend VPC${NC}"
+aws ec2 describe-vpc-endpoints \
+  --region ap-northeast-2 \
+  --filters "Name=vpc-id,Values=${FRONTEND_VPC_ID}" \
   --query 'VpcEndpoints[?State==`available`].[ServiceName]' \
   --output text | sed 's/^/  - /'
 echo ""

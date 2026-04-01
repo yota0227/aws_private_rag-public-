@@ -1,5 +1,6 @@
 #!/bin/bash
 # 네이밍 변경 검증 스크립트
+# Logging Pipeline VPC (vpc-066c464f9c750ee9e, 10.200.0.0/16) 태그 검증
 
 set -e
 
@@ -13,10 +14,16 @@ echo "네이밍 변경 검증"
 echo "========================================="
 echo ""
 
-# VPC 태그 확인
+# VPC 태그 확인 (기대값: vpc-bos-logging-seoul-prod-01)
 echo -e "${YELLOW}[1] VPC 태그 확인${NC}"
-aws ec2 describe-vpcs --vpc-ids vpc-066c464f9c750ee9e --region ap-northeast-2 \
-  --query 'Vpcs[0].Tags[?Key==`Name`].Value' --output text
+ACTUAL_NAME=$(aws ec2 describe-vpcs --vpc-ids vpc-066c464f9c750ee9e --region ap-northeast-2 \
+  --query 'Vpcs[0].Tags[?Key==`Name`].Value' --output text)
+echo "현재 이름: $ACTUAL_NAME"
+if [ "$ACTUAL_NAME" == "vpc-bos-logging-seoul-prod-01" ]; then
+  echo -e "${GREEN}✓ 이름 정상${NC}"
+else
+  echo -e "${RED}✗ 이름 불일치 (기대: vpc-bos-logging-seoul-prod-01)${NC}"
+fi
 echo ""
 
 # 서브넷 태그 확인

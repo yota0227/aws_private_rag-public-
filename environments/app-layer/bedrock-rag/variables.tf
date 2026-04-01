@@ -147,6 +147,24 @@ variable "acm_certificate_arn" {
   default     = ""  # Must be set before deployment
 }
 
+# RAG Search Optimization Configuration
+variable "search_type" {
+  description = "Bedrock KB 검색 유형. 허용 값: HYBRID, SEMANTIC"
+  type        = string
+  default     = "HYBRID"
+
+  validation {
+    condition     = contains(["HYBRID", "SEMANTIC"], var.search_type)
+    error_message = "search_type은 HYBRID 또는 SEMANTIC이어야 합니다."
+  }
+}
+
+variable "search_results_count" {
+  description = "Bedrock KB 검색 결과 수"
+  type        = number
+  default     = 5
+}
+
 # Bedrock KB Data Source ID (for sync after upload)
 variable "bedrock_kb_data_source_id" {
   description = "Bedrock Knowledge Base Data Source ID for triggering sync"

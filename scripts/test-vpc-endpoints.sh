@@ -107,20 +107,39 @@ echo "State: $(echo $FIREHOSE_ENDPOINT | awk '{print $2}')"
 echo "DNS: $(echo $FIREHOSE_ENDPOINT | awk '{print $3}')"
 echo ""
 
-# Private DNS 활성화 확인
-echo -e "${YELLOW}[TEST 7] Private DNS 활성화 확인${NC}"
+# Logging VPC (10.200.0.0/16) - Private DNS 활성화 확인
+LOGGING_VPC_ID="vpc-066c464f9c750ee9e"
+FRONTEND_VPC_ID="vpc-0a118e1bf21d0c057"
+
+echo -e "${YELLOW}[TEST 7] Logging VPC (10.200.0.0/16) - Private DNS 활성화 확인${NC}"
 aws ec2 describe-vpc-endpoints \
   --region ap-northeast-2 \
-  --filters "Name=vpc-id,Values=vpc-066c464f9c750ee9e" \
+  --filters "Name=vpc-id,Values=${LOGGING_VPC_ID}" \
+  --query 'VpcEndpoints[?VpcEndpointType==`Interface`].[ServiceName,PrivateDnsEnabled]' \
+  --output table
+echo ""
+
+echo -e "${YELLOW}[TEST 7b] Frontend VPC (10.10.0.0/16) - Private DNS 활성화 확인${NC}"
+aws ec2 describe-vpc-endpoints \
+  --region ap-northeast-2 \
+  --filters "Name=vpc-id,Values=${FRONTEND_VPC_ID}" \
   --query 'VpcEndpoints[?VpcEndpointType==`Interface`].[ServiceName,PrivateDnsEnabled]' \
   --output table
 echo ""
 
 # Security Group 확인
-echo -e "${YELLOW}[TEST 8] VPC 엔드포인트 Security Group 확인${NC}"
+echo -e "${YELLOW}[TEST 8] Logging VPC - VPC 엔드포인트 Security Group 확인${NC}"
 aws ec2 describe-vpc-endpoints \
   --region ap-northeast-2 \
-  --filters "Name=vpc-id,Values=vpc-066c464f9c750ee9e" \
+  --filters "Name=vpc-id,Values=${LOGGING_VPC_ID}" \
+  --query 'VpcEndpoints[?VpcEndpointType==`Interface`].[VpcEndpointId,Groups[0].GroupId,Groups[0].GroupName]' \
+  --output table
+echo ""
+
+echo -e "${YELLOW}[TEST 8b] Frontend VPC - VPC 엔드포인트 Security Group 확인${NC}"
+aws ec2 describe-vpc-endpoints \
+  --region ap-northeast-2 \
+  --filters "Name=vpc-id,Values=${FRONTEND_VPC_ID}" \
   --query 'VpcEndpoints[?VpcEndpointType==`Interface`].[VpcEndpointId,Groups[0].GroupId,Groups[0].GroupName]' \
   --output table
 echo ""

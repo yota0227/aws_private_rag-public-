@@ -18,7 +18,9 @@ echo -e "${BLUE}========================================${NC}"
 echo ""
 
 # Configuration
+# Logging Pipeline VPC (10.200.0.0/16) - 로깅 인프라 전용
 VPC_ID="vpc-066c464f9c750ee9e"
+VPC_NAME="vpc-bos-logging-seoul-prod-01"
 REGION="ap-northeast-2"
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 

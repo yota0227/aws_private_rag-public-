@@ -37,7 +37,7 @@ locals {
 resource "aws_ec2_tag" "vpc_name" {
   resource_id = "vpc-066c464f9c750ee9e"
   key         = "Name"
-  value       = "vpc-bos-ai-seoul-prod-01"
+  value       = "vpc-bos-logging-seoul-prod-01"
 }
 
 resource "aws_ec2_tag" "vpc_project" {
@@ -73,7 +73,7 @@ resource "aws_ec2_tag" "vpc_owner" {
 resource "aws_ec2_tag" "vpc_description" {
   resource_id = "vpc-066c464f9c750ee9e"
   key         = "Description"
-  value       = "Consolidated VPC for logging and AI workloads with VPN connectivity"
+  value       = "Logging Pipeline VPC - Security logging and monitoring (Kinesis Firehose, CloudWatch)"
 }
 
 # Subnet Tag Updates

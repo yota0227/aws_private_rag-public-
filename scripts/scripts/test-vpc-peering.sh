@@ -11,7 +11,10 @@ echo "=========================================="
 echo ""
 
 # Configuration
-SEOUL_VPC_ID="vpc-066c464f9c750ee9e"
+# SEOUL_VPC_ID: Logging Pipeline VPC (10.200.0.0/16) - 기존 서비스 VPC
+# NOTE: VPC Peering은 Frontend VPC(10.10.0.0/16) ↔ Virginia(10.20.0.0/16) 간 연결
+SEOUL_VPC_ID="vpc-0a118e1bf21d0c057"   # BOS-AI Frontend VPC (10.10.0.0/16)
+LOGGING_VPC_ID="vpc-066c464f9c750ee9e" # Logging Pipeline VPC (10.200.0.0/16)
 VIRGINIA_VPC_ID="vpc-0ed37ff82027c088f"
 PEERING_ID="pcx-06599e9d9a3fe573f"
 SEOUL_REGION="ap-northeast-2"
