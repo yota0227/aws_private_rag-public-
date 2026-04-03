@@ -352,6 +352,7 @@ Obot은 MCP Bridge(localhost:3100)를 통해 RAG API를 호출하고, Bedrock KB
 | 보안 | KMS, IAM, Security Groups, VPC Endpoints |
 | 모니터링 | CloudWatch, CloudTrail, Grafana |
 | 챗봇 | Obot (오픈소스) + MCP Bridge (Node.js, Express + @modelcontextprotocol/sdk) |
+| BI/분석 | Amazon Quick (QuickSight) Enterprise Edition — VPC Endpoint Private 접근 |
 
 ---
 
@@ -361,17 +362,19 @@ Obot은 MCP Bridge(localhost:3100)를 통해 RAG API를 호출하고, Bedrock KB
 
 | 문서 | 설명 |
 |------|------|
-| [docs/deep-dive-network-architecture.md](docs/deep-dive-network-architecture.md) | 네트워크 아키텍처 상세 (VPC, TGW, VPN, Peering) |
-| [docs/deep-dive-component-details.md](docs/deep-dive-component-details.md) | 각 컴포넌트 상세 설명 (Lambda, Bedrock, OpenSearch 등) |
-| [docs/deep-dive-data-flow.md](docs/deep-dive-data-flow.md) | 데이터 흐름 상세 (업로드, 질의, DNS) |
-| [docs/deep-dive-security-policy.md](docs/deep-dive-security-policy.md) | 보안 정책 상세 (네트워크 격리, IAM, 암호화) |
-| [docs/rag-upload-guide.md](docs/rag-upload-guide.md) | 문서 업로드 사용자 가이드 |
-| [docs/DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md) | 인프라 배포 가이드 |
-| [docs/OPERATIONAL_RUNBOOK.md](docs/OPERATIONAL_RUNBOOK.md) | 운영 및 트러블슈팅 가이드 |
-| [docs/dns-conditional-forwarding-guide.md](docs/dns-conditional-forwarding-guide.md) | DNS 조건부 포워딩 설정 가이드 |
-| [docs/architecture-as-is-to-be.md](docs/architecture-as-is-to-be.md) | As-Is / To-Be 아키텍처 비교 |
-| [docs/vpn-migration-report-20260323.md](docs/vpn-migration-report-20260323.md) | VPN 마이그레이션 보고서 (VGW→TGW 전환) |
-| [docs/rollback-plan.md](docs/rollback-plan.md) | 롤백 계획 |
+| [docs/3_private-rag-api/deep-dive-network-architecture.md](docs/3_private-rag-api/deep-dive-network-architecture.md) | 네트워크 아키텍처 상세 (VPC, TGW, VPN, Peering) |
+| [docs/3_private-rag-api/deep-dive-component-details.md](docs/3_private-rag-api/deep-dive-component-details.md) | 각 컴포넌트 상세 설명 (Lambda, Bedrock, OpenSearch 등) |
+| [docs/3_private-rag-api/deep-dive-data-flow.md](docs/3_private-rag-api/deep-dive-data-flow.md) | 데이터 흐름 상세 (업로드, 질의, DNS) |
+| [docs/3_private-rag-api/deep-dive-security-policy.md](docs/3_private-rag-api/deep-dive-security-policy.md) | 보안 정책 상세 (네트워크 격리, IAM, 암호화) |
+| [docs/3_private-rag-api/rag-upload-guide.md](docs/3_private-rag-api/rag-upload-guide.md) | 문서 업로드 사용자 가이드 |
+| [docs/1_bedrock-rag-deployment/DEPLOYMENT_GUIDE.md](docs/1_bedrock-rag-deployment/DEPLOYMENT_GUIDE.md) | 인프라 배포 가이드 |
+| [docs/3_private-rag-api/OPERATIONAL_RUNBOOK.md](docs/3_private-rag-api/OPERATIONAL_RUNBOOK.md) | 운영 및 트러블슈팅 가이드 |
+| [docs/3_private-rag-api/dns-conditional-forwarding-guide.md](docs/3_private-rag-api/dns-conditional-forwarding-guide.md) | DNS 조건부 포워딩 설정 가이드 |
+| [docs/2_vpc-consolidation/architecture-as-is-to-be.md](docs/2_vpc-consolidation/architecture-as-is-to-be.md) | As-Is / To-Be 아키텍처 비교 |
+| [docs/2_vpc-consolidation/vpn-migration-report-20260323.md](docs/2_vpc-consolidation/vpn-migration-report-20260323.md) | VPN 마이그레이션 보고서 (VGW→TGW 전환) |
+| [docs/1_bedrock-rag-deployment/rollback-plan.md](docs/1_bedrock-rag-deployment/rollback-plan.md) | 롤백 계획 |
+| [docs/8_quicksight-private-integration/quicksight-guide.md](docs/8_quicksight-private-integration/quicksight-guide.md) | Amazon Quick 운영 가이드 (Admin/User/모니터링) |
+| [docs/README.md](docs/README.md) | 문서 디렉토리 구조 및 스펙 매핑 |
 
 ---
 
@@ -392,6 +395,6 @@ Obot은 MCP Bridge(localhost:3100)를 통해 RAG API를 호출하고, Bedrock KB
 
 ---
 
-> **작성일**: 2026-03-23 (최종 업데이트)  
+> **작성일**: 2026-04-03 (최종 업데이트)  
 > **대상**: 사내 전체 구성원 및 관심 있는 엔지니어  
 > **문의**: IT/DevOps 팀
