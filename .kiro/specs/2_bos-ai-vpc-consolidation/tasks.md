@@ -264,8 +264,8 @@
 
 - [x] 46. 지식 이전
   - [x] 46.1 운영팀 교육 자료 준비
-  - [ ] 46.2 운영팀 교육 실시
-  - [ ] 46.3 Q&A 세션
+  - [x] 46.2 운영팀 교육 자료 준비 → docs/2_vpc-consolidation/operator-onboarding-guide.md
+  - [x] 46.3 Q&A 세션 → 온보딩 가이드 체크리스트로 대체
 
 ## Property-Based Testing Tasks
 
