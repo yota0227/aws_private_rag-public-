@@ -147,6 +147,97 @@ mcpServer.tool(
   }
 );
 
+// QuickSight 클라이언트 (VPC Endpoint 경유 - Private DNS)
+const { QuickSightClient, ListDashboardsCommand, DescribeDashboardCommand } = require("@aws-sdk/client-quicksight");
+
+const QS_REGION = process.env.QS_REGION || "ap-northeast-2";
+const QS_ACCOUNT_ID = process.env.QS_ACCOUNT_ID || "";
+
+// QuickSight 클라이언트 - VPC Endpoint Private DNS 자동 사용 (Private DNS ON 설정됨)
+const qsClient = new QuickSightClient({ region: QS_REGION });
+
+// Tool 4: Quick 대시보드 목록 조회
+mcpServer.tool(
+  "quick_dashboard_list",
+  "Amazon Quick(QuickSight) 대시보드 목록을 조회합니다. RAG 성능, 질의 현황, 시스템 모니터링 대시보드를 확인할 수 있습니다.",
+  {},
+  async () => {
+    try {
+      const cmd = new ListDashboardsCommand({ AwsAccountId: QS_ACCOUNT_ID });
+      const resp = await qsClient.send(cmd);
+      const dashboards = resp.DashboardSummaryList || [];
+
+      if (dashboards.length === 0) {
+        return { content: [{ type: "text", text: "등록된 Quick 대시보드가 없습니다." }] };
+      }
+
+      let text = `Quick 대시보드 목록 (총 ${dashboards.length}개):\n`;
+      dashboards.forEach((d, i) => {
+        text += `\n[${i + 1}] ${d.Name}`;
+        text += `\n    ID: ${d.DashboardId}`;
+        text += `\n    최종 수정: ${d.LastUpdatedTime ? new Date(d.LastUpdatedTime).toLocaleString("ko-KR") : "-"}`;
+      });
+      text += "\n\n대시보드 상세 데이터는 quick_dashboard_data 도구를 사용하세요.";
+
+      return { content: [{ type: "text", text }] };
+    } catch (err) {
+      console.error("[Quick] dashboard_list error:", err.message);
+      return { content: [{ type: "text", text: `Quick 대시보드 목록 조회 실패: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// Tool 5: Quick 대시보드 데이터 조회
+mcpServer.tool(
+  "quick_dashboard_data",
+  "지정된 Quick(QuickSight) 대시보드의 상세 정보와 데이터셋 요약을 조회합니다.",
+  {
+    dashboardId: { type: "string", description: "대시보드 ID (quick_dashboard_list로 확인 가능)" }
+  },
+  async (params) => {
+    try {
+      const cmd = new DescribeDashboardCommand({
+        AwsAccountId: QS_ACCOUNT_ID,
+        DashboardId: params.dashboardId
+      });
+      const resp = await qsClient.send(cmd);
+      const d = resp.Dashboard;
+
+      if (!d) {
+        return { content: [{ type: "text", text: `대시보드를 찾을 수 없습니다: ${params.dashboardId}` }], isError: true };
+      }
+
+      const version = d.Version || {};
+      let text = `📊 ${d.Name}\n`;
+      text += `\nID: ${d.DashboardId}`;
+      text += `\n상태: ${version.Status || "-"}`;
+      text += `\n설명: ${version.Description || "없음"}`;
+      text += `\n생성일: ${d.CreatedTime ? new Date(d.CreatedTime).toLocaleString("ko-KR") : "-"}`;
+      text += `\n최종 수정: ${d.LastUpdatedTime ? new Date(d.LastUpdatedTime).toLocaleString("ko-KR") : "-"}`;
+
+      if (version.DataSetArns && version.DataSetArns.length > 0) {
+        text += `\n\n연결된 데이터셋 (${version.DataSetArns.length}개):`;
+        version.DataSetArns.forEach((arn, i) => {
+          const datasetId = arn.split("/").pop();
+          text += `\n  [${i + 1}] ${datasetId}`;
+        });
+      }
+
+      if (version.Errors && version.Errors.length > 0) {
+        text += `\n\n⚠️ 오류 (${version.Errors.length}개):`;
+        version.Errors.forEach((e) => {
+          text += `\n  - ${e.Type}: ${e.Message}`;
+        });
+      }
+
+      return { content: [{ type: "text", text }] };
+    } catch (err) {
+      console.error("[Quick] dashboard_data error:", err.message);
+      return { content: [{ type: "text", text: `Quick 대시보드 데이터 조회 실패: ${err.message}` }], isError: true };
+    }
+  }
+);
+
 // Express + SSE Transport
 const app = express();
 app.use(express.json());
