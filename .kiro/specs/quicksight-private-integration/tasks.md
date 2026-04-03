@@ -262,24 +262,24 @@ Global IAM → Network Layer → App Layer → Lambda 소스 → MCP Bridge → 
     - `tests/properties/quicksight_opa_test.go`에 gopter 기반 테스트 추가
     - 위반 케이스(deny 트리거), 정상 케이스(deny 미발생), 엣지 케이스 모두 포함
 
-- [ ] 11. 통합 테스트 작성 — `tests/integration/quicksight_test.go`
-  - [ ] 11.1 VPC Endpoint 연결성 테스트
+- [x] 11. 통합 테스트 작성 — `tests/integration/quicksight_test.go`
+  - [x] 11.1 VPC Endpoint 연결성 테스트
     - Quick API/Website VPC Endpoint를 통한 실제 연결 확인
     - _요구사항: 1.1, 1.2_
 
-  - [ ] 11.2 VPC Connection 경로 테스트
+  - [x] 11.2 VPC Connection 경로 테스트
     - Quick ENI → VPC Peering → Virginia OpenSearch 경로 확인
     - _요구사항: 4.4, 4.6_
 
-  - [ ] 11.3 DNS 해석 테스트
+  - [x] 11.3 DNS 해석 테스트
     - `quick.rag.corp.bos-semi.com` → VPC Endpoint Private IP 해석 확인
     - _요구사항: 8.1, 8.3_
 
-  - [ ] 11.4 Lambda 실행 테스트
+  - [x] 11.4 Lambda 실행 테스트
     - RAG Connector Lambda 실제 호출 및 JSON 배열 응답 형식 확인
     - _요구사항: 5.2, 5.4_
 
-  - [ ] 11.5 RBAC 동기화 테스트
+  - [x] 11.5 RBAC 동기화 테스트
     - IAM Identity Center 그룹 변경 → Quick 역할 매핑 자동 반영 확인
     - _요구사항: 2.8, 2.9_
 
@@ -308,7 +308,7 @@ Global IAM → Network Layer → App Layer → Lambda 소스 → MCP Bridge → 
     - CloudTrail에서 Quick API 호출 감사 방법
     - SPICE 새로고침 실패 시 수동 트리거 방법
 
-- [ ] 13. 최종 체크포인트 — 전체 검증
+- [x] 13. 최종 체크포인트 — 전체 검증
   - `bash scripts/terraform-validate.sh` 실행하여 모든 환경 Terraform 구성 확인
   - `bash scripts/run-policy-tests.sh` 실행하여 OPA 정책 테스트 통과 확인
   - `bash scripts/run-integration-tests.sh` 실행하여 통합 테스트 통과 확인
