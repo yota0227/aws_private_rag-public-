@@ -12,6 +12,13 @@ services:
       - PORT=3100
       - RAG_API_BASE=https://r0qa9lzhgi.execute-api.ap-northeast-2.amazonaws.com/dev/rag
       - NODE_ENV=production
+      # QuickSight 연동 (VPC Endpoint Private DNS 자동 사용)
+      - QS_REGION=ap-northeast-2
+      - QS_ACCOUNT_ID=533335672315
+      # AWS 자격 증명은 인스턴스 프로파일 또는 환경 변수로 주입
+      # - AWS_ACCESS_KEY_ID=
+      # - AWS_SECRET_ACCESS_KEY=
+      # - AWS_SESSION_TOKEN=
     restart: always
     networks:
       - obot-network
