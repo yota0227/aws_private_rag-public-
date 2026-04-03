@@ -55,6 +55,8 @@ def handler(event, context):
     # 비동기 Lambda Event Invocation 처리
     if event.get('action') == 'process_extraction':
         return process_extraction(event)
+    if event.get('action') == 'backfill_metadata':
+        return backfill_metadata(event, context)
 
 
     logger.info(f"Event path: {event.get('path')}, method: {event.get('httpMethod')}")
@@ -277,11 +279,15 @@ def presign_upload(event):
 
 
 def confirm_upload(event):
-    """업로드 완료 확인 — S3 파일 존재 확인 + 선택적 KB Sync"""
+    """업로드 완료 확인 — S3 파일 존재 확인 + 메타데이터 생성 + 선택적 KB Sync"""
     body = parse_body(event)
     s3_key = body.get('s3_key', '')
     skip_sync = body.get('skip_sync', False)
     is_archive = body.get('is_archive', False)
+    team = body.get('team', '')
+    category = body.get('category', '')
+    version = body.get('version', '1.0')
+    source_system = body.get('source_system', 'manual_upload')
 
     if not s3_key:
         return response(400, {'error': 's3_key is required'})
@@ -294,15 +300,26 @@ def confirm_upload(event):
             return response(404, {'error': 'File not found in S3', 's3_key': s3_key})
         raise
 
+    # 메타데이터 파일 생성
+    metadata_created = False
+    if not is_archive:
+        try:
+            create_metadata_file(s3_key, team=team, category=category,
+                                 version=version, source_system=source_system)
+            metadata_created = True
+        except Exception as e:
+            logger.warning(f"Metadata creation failed (non-blocking): {str(e)}")
+
     # KB Sync 제어: archive 파일은 extract 완료 후 sync하므로 여기서 skip
     sync_result = 'skipped'
     if not skip_sync and not is_archive:
         sync_result = trigger_kb_sync()
 
-    logger.info(f"Upload confirmed: {s3_key}, kb_sync: {sync_result}")
+    logger.info(f"Upload confirmed: {s3_key}, metadata: {metadata_created}, kb_sync: {sync_result}")
     return response(200, {
         'message': 'Upload confirmed',
         'key': s3_key,
+        'metadata_created': metadata_created,
         'kb_sync': sync_result
     })
 
@@ -422,6 +439,11 @@ def process_extraction(event):
                 try:
                     dest_key = f"{S3_PREFIX}{team}/{category}/{flat_name}"
                     s3_client.upload_file(filepath, S3_BUCKET_SEOUL, dest_key)
+                    # 메타데이터 파일 생성
+                    try:
+                        create_metadata_file(dest_key, team=team, category=category)
+                    except Exception as meta_err:
+                        logger.warning(f"Metadata creation failed for {flat_name} (non-blocking): {meta_err}")
                     success_files.append(flat_name)
                 except Exception as upload_err:
                     logger.error(f"Failed to upload {flat_name}: {upload_err}")
@@ -515,6 +537,7 @@ def trigger_kb_sync():
 
     try:
         from botocore.config import Config
+        from botocore.exceptions import ClientError
         bedrock_config = Config(
             connect_timeout=5,
             read_timeout=10,
@@ -528,6 +551,13 @@ def trigger_kb_sync():
         job_id = resp['ingestionJob']['ingestionJobId']
         logger.info(f"KB sync started: job_id={job_id}")
         return f'sync started - job_id: {job_id}'
+    except ClientError as e:
+        error_code = e.response.get('Error', {}).get('Code', '')
+        if error_code == 'ConflictException':
+            logger.warning(f"KB sync skipped - already in progress: {str(e)}")
+            return 'sync skipped - already in progress'
+        logger.error(f"KB sync failed: {str(e)}")
+        return f'sync failed - {str(e)}'
     except Exception as e:
         logger.error(f"KB sync failed: {str(e)}")
         return f'sync failed - {str(e)}'
@@ -620,7 +650,8 @@ def list_documents(event=None):
 
 
 def handle_query(event):
-    """RAG 질의 처리"""
+    """RAG 질의 처리 - Hybrid Search, 필터, 구조화 로그 지원"""
+    start_time = time.time()
     body = parse_body(event)
     query = body.get('query', '')
     if not query:
@@ -632,8 +663,25 @@ def handle_query(event):
             'query': query
         })
 
+    # 검색 설정 (환경 변수에서 읽기)
+    search_type = os.environ.get('SEARCH_TYPE', 'HYBRID')
+    results_count = int(os.environ.get('SEARCH_RESULTS_COUNT', '5'))
+
+    # 필터 구성
+    filter_obj = body.get('filter', None)
+    bedrock_filter = build_bedrock_filter(filter_obj) if filter_obj else None
+
     try:
         bedrock_runtime = boto3.client('bedrock-agent-runtime', region_name=BACKEND_REGION)
+
+        # vectorSearchConfiguration 구성
+        vector_config = {
+            'searchType': search_type,
+            'numberOfResults': results_count
+        }
+        if bedrock_filter:
+            vector_config['filter'] = bedrock_filter
+
         resp = bedrock_runtime.retrieve_and_generate(
             input={'text': query},
             retrieveAndGenerateConfiguration={
@@ -641,24 +689,72 @@ def handle_query(event):
                 'knowledgeBaseConfiguration': {
                     'knowledgeBaseId': BEDROCK_KB_ID,
                     'modelArn': os.environ.get('FOUNDATION_MODEL_ARN',
-                        'arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-v2')
+                        'us.anthropic.claude-3-5-haiku-20241022-v1:0'),
+                    'retrievalConfiguration': {
+                        'vectorSearchConfiguration': vector_config
+                    }
                 }
             }
         )
+
+        response_time_ms = int((time.time() - start_time) * 1000)
+
+        # 응답 구조 개선 - score, version, source_system 포함
+        citations = []
+        for c in resp.get('citations', []):
+            refs = []
+            for r in c.get('retrievedReferences', []):
+                ref = {
+                    'uri': r.get('location', {}).get('s3Location', {}).get('uri', ''),
+                    'score': r.get('metadata', {}).get('score', r.get('score', None))
+                }
+                meta = r.get('metadata', {})
+                if meta.get('version'):
+                    ref['version'] = meta['version']
+                if meta.get('source_system'):
+                    ref['source_system'] = meta['source_system']
+                refs.append(ref)
+            citations.append({
+                'text': c.get('generatedResponsePart', {}).get('textResponsePart', {}).get('text', ''),
+                'references': refs
+            })
+
+        citation_count = sum(len(c.get('references', [])) for c in citations)
+
+        # 구조화 로그
+        logger.info(json.dumps({
+            'event': 'rag_query', 'query_length': len(query), 'search_type': search_type,
+            'citation_count': citation_count, 'response_time_ms': response_time_ms,
+            'has_filter': bedrock_filter is not None
+        }))
+
+        if citation_count == 0:
+            logger.warning(json.dumps({'event': 'no_citation_query', 'query_length': len(query), 'search_type': search_type}))
+
+        if response_time_ms > 30000:
+            logger.warning(json.dumps({'event': 'slow_query', 'response_time_ms': response_time_ms, 'query_length': len(query)}))
+
         return response(200, {
             'answer': resp['output']['text'],
-            'citations': [
-                {
-                    'text': c.get('generatedResponsePart', {}).get('textResponsePart', {}).get('text', ''),
-                    'references': [
-                        r.get('location', {}).get('s3Location', {}).get('uri', '')
-                        for r in c.get('retrievedReferences', [])
-                    ]
-                }
-                for c in resp.get('citations', [])
-            ]
+            'citations': citations,
+            'metadata': {
+                'search_type': search_type,
+                'results_count': results_count,
+                'query_length': len(query),
+                'response_time_ms': response_time_ms
+            }
         })
+
     except Exception as e:
+        from botocore.exceptions import ClientError
+        if isinstance(e, ClientError):
+            error_code = e.response.get('Error', {}).get('Code', '')
+            if error_code == 'ValidationException':
+                logger.error(json.dumps({'event': 'query_error', 'error_type': 'ValidationException', 'message': str(e)}))
+                return response(400, {'error': f'Validation error: {str(e)}'})
+            elif error_code == 'ThrottlingException':
+                logger.warning(json.dumps({'event': 'query_error', 'error_type': 'ThrottlingException', 'message': str(e)}))
+                return response(429, {'error': f'Rate limit exceeded: {str(e)}'})
         logger.error(f"RAG query error: {str(e)}")
         return response(500, {'error': str(e)})
 
@@ -743,6 +839,80 @@ def parse_team_category_from_key(s3_key):
     if len(parts) >= 3:
         return parts[0], parts[1]
     return '', ''
+
+
+def backfill_metadata(event, context):
+    """기존 문서에 대한 메타데이터 일괄 생성 (Lambda Event 비동기 호출 전용)"""
+    continuation_token = event.get('continuation_token', None)
+    max_items = 500
+    processed_count = 0
+    skipped_count = 0
+    error_count = 0
+
+    list_params = {
+        'Bucket': S3_BUCKET_SEOUL,
+        'Prefix': S3_PREFIX,
+        'MaxKeys': 1000
+    }
+    if continuation_token:
+        list_params['StartAfter'] = continuation_token
+
+    last_key = None
+
+    try:
+        resp = s3_client.list_objects_v2(**list_params)
+        objects = resp.get('Contents', [])
+
+        for obj in objects:
+            if context and context.get_remaining_time_in_millis() < 30000:
+                logger.info(f"Backfill paused: remaining time < 30s, processed={processed_count}")
+                break
+
+            if processed_count >= max_items:
+                break
+
+            key = obj['Key']
+            last_key = key
+
+            if key.endswith('.metadata.json') or key.endswith('/'):
+                continue
+
+            # 이미 메타데이터가 있는지 확인
+            metadata_key = key + '.metadata.json'
+            try:
+                s3_client.head_object(Bucket=S3_BUCKET_SEOUL, Key=metadata_key)
+                skipped_count += 1
+                continue
+            except Exception:
+                pass
+
+            try:
+                team, category = parse_team_category_from_key(key)
+                create_metadata_file(key, team=team, category=category)
+                processed_count += 1
+            except Exception as e:
+                logger.error(f"Backfill error for {key}: {str(e)}")
+                error_count += 1
+
+        if processed_count > 0:
+            trigger_kb_sync()
+
+        has_more = (processed_count >= max_items) or (context and context.get_remaining_time_in_millis() < 30000)
+        result = {
+            'processed_count': processed_count,
+            'skipped_count': skipped_count,
+            'error_count': error_count,
+            'has_more': has_more
+        }
+        if has_more and last_key:
+            result['continuation_token'] = last_key
+
+        logger.info(f"Backfill complete: {json.dumps(result)}")
+        return result
+
+    except Exception as e:
+        logger.error(f"Backfill failed: {str(e)}", exc_info=True)
+        return {'error': str(e), 'processed_count': processed_count, 'error_count': error_count + 1}
 
 
 # ============================================================================
