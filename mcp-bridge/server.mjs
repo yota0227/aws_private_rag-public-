@@ -60,13 +60,23 @@ const mcpServer = new McpServer({
 // Tool 1: RAG 질의
 mcpServer.tool(
   "rag_query",
-  "BOS-AI RAG 지식 베이스에 질의합니다. 업로드된 SoC 코드, 스펙 문서 등을 검색하여 답변합니다.",
+  "BOS-AI RAG 지식 베이스에 질의합니다. 업로드된 SoC 코드, 스펙 문서 등을 검색하여 답변합니다. team/category로 검색 범위를 좁힐 수 있습니다.",
   {
-    query: { type: "string", description: "질의 내용 (한국어/영어 모두 가능)" }
+    query: { type: "string", description: "질의 내용 (한국어/영어 모두 가능)" },
+    team: { type: "string", description: "팀 필터 (예: soc). 생략 시 전체 검색" },
+    category: { type: "string", description: "카테고리 필터 (예: code, spec). 생략 시 전체 검색" },
+    source_system: { type: "string", description: "소스 시스템 필터 (예: manual_upload, codebeamer). 생략 시 전체 검색" }
   },
   async (params) => {
     try {
-      const resp = await ragApi("POST", "/query", { query: params.query });
+      const body = { query: params.query };
+      const filter = {};
+      if (params.team) filter.team = params.team;
+      if (params.category) filter.category = params.category;
+      if (params.source_system) filter.source_system = params.source_system;
+      if (Object.keys(filter).length > 0) body.filter = filter;
+
+      const resp = await ragApi("POST", "/query", body);
       if (resp.error) {
         return { content: [{ type: "text", text: "오류: " + resp.error }], isError: true };
       }
@@ -75,9 +85,16 @@ mcpServer.tool(
         text += "\n\n--- 참조 문서 ---";
         resp.citations.forEach((c, i) => {
           if (c.references && c.references.length > 0) {
-            text += "\n[" + (i + 1) + "] " + c.references.join(", ");
+            c.references.forEach((ref, j) => {
+              const uri = typeof ref === "string" ? ref : ref.uri || "";
+              const score = ref.score ? ` (score: ${ref.score})` : "";
+              text += `\n[${i + 1}.${j + 1}] ${uri}${score}`;
+            });
           }
         });
+      }
+      if (resp.metadata) {
+        text += `\n\n검색 유형: ${resp.metadata.search_type}, 응답 시간: ${resp.metadata.response_time_ms}ms`;
       }
       return { content: [{ type: "text", text: text }] };
     } catch(err) {

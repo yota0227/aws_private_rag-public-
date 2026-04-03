@@ -391,6 +391,21 @@ resource "aws_cloudwatch_log_group" "lambda" {
   }
 }
 
+# CloudWatch Metric Filter - RAG 인용 0건 질의 감지
+# Requirements: 7.3
+resource "aws_cloudwatch_log_metric_filter" "no_citation_query" {
+  name           = "rag-no-citation-query"
+  log_group_name = aws_cloudwatch_log_group.lambda.name
+  pattern        = "{ $.event = \"no_citation_query\" }"
+
+  metric_transformation {
+    name          = "RAGNoCitationCount"
+    namespace     = "BOS-AI/RAG"
+    value         = "1"
+    default_value = "0"
+  }
+}
+
 # S3 Event Notification (to be configured on Virginia S3 bucket)
 # Note: This needs to be configured separately on the Virginia S3 bucket
 # resource "aws_s3_bucket_notification" "bucket_notification" {
