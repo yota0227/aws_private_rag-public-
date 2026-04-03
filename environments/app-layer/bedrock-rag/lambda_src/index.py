@@ -45,7 +45,7 @@ s3_client = boto3.client('s3', region_name='ap-northeast-2')
 DYNAMODB_TABLE = os.environ.get('DYNAMODB_TABLE', 'rag-extraction-tasks-dev')
 dynamodb = boto3.resource('dynamodb', region_name='ap-northeast-2')
 lambda_client = boto3.client('lambda', region_name='ap-northeast-2')
-ALLOWED_EXTENSIONS = ['pdf', 'txt', 'docx', 'csv', 'html', 'md']
+ALLOWED_EXTENSIONS = ['pdf', 'txt', 'docx', 'csv', 'html', 'md', 'v', 'sv', 'vhd', 'vhdl', 'vh', 'svh', 'py', 'c', 'h', 'cpp', 'hpp', 'json', 'yaml', 'yml', 'xml', 'tcl', 'sdc', 'xdc']
 ARCHIVE_EXTENSIONS = ['zip', 'tar.gz']
 SYSTEM_FILES = ['__MACOSX', 'Thumbs.db', '.DS_Store']
 
@@ -782,7 +782,7 @@ def serve_upload_ui():
 # RAG Search Optimization — Utility Functions
 # ============================================================================
 
-DOCUMENT_TYPE_MAP = {'pdf': 'pdf', 'txt': 'text', 'md': 'markdown'}
+DOCUMENT_TYPE_MAP = {'pdf': 'pdf', 'txt': 'text', 'md': 'markdown', 'v': 'rtl', 'sv': 'rtl', 'vhd': 'rtl', 'vhdl': 'rtl', 'vh': 'rtl', 'svh': 'rtl', 'py': 'code', 'c': 'code', 'h': 'code', 'cpp': 'code', 'hpp': 'code', 'tcl': 'script', 'sdc': 'constraint', 'xdc': 'constraint'}
 
 
 def create_metadata_file(s3_key, team='', category='', version='1.0', source_system='manual_upload', bucket=None):
@@ -1090,7 +1090,7 @@ input[type=file]{display:none}
 <script>
 /* === Constants === */
 const API_BASE = window.location.pathname.replace(/\\/upload$/, '');
-const ALLOWED_EXTENSIONS = ['pdf', 'txt', 'docx', 'csv', 'html', 'md'];
+const ALLOWED_EXTENSIONS = ['pdf', 'txt', 'docx', 'csv', 'html', 'md', 'v', 'sv', 'vhd', 'vhdl', 'vh', 'svh', 'py', 'c', 'h', 'cpp', 'hpp', 'json', 'yaml', 'yml', 'xml', 'tcl', 'sdc', 'xdc'];
 const MAX_FILE_SIZE = 100 * 1024 * 1024;
 const ARCHIVE_EXTENSIONS = [];
 const SYSTEM_FILES = ['__MACOSX', 'Thumbs.db', '.DS_Store'];
