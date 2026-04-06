@@ -343,4 +343,6 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
 - OpenSearch 인덱스 생성은 `scripts/create-opensearch-index.py` 별도 실행 (Terraform local-exec 미사용)
 - DynamoDB 모든 쓰기 작업에 optimistic locking 적용
 - IAM Explicit Deny로 Source of Truth 버킷 보호
+- Confluence/Jira는 Cloud 환경이므로 별도 연동 방식 검토 (이 스펙 범위 외)
+- Codebeamer 연동은 Spec 6 (codebeamer-aspice-rag-integration)에서 처리
 
