@@ -13,6 +13,7 @@ docs/
 ├── 5_rag-search-optimization/    # Spec 5: RAG 검색 최적화
 ├── 7_enterprise-rbac-pipeline/   # Spec 7: Enterprise RBAC 파이프라인
 ├── 8_quicksight-private-integration/  # QuickSight Private 통합
+├── enhanced-rag-optimization/        # Enhanced RAG Optimization (RTL 파이프라인, Claim DB)
 └── common/                       # 공통 (네이밍, 태깅, 연락처)
 ```
 
@@ -27,6 +28,7 @@ docs/
 | 5 | `.kiro/specs/5_rag-search-optimization/` | `docs/5_rag-search-optimization/` | (구현 중) |
 | 7 | `.kiro/specs/7_enterprise-rbac-pipeline/` | `docs/7_enterprise-rbac-pipeline/` | (구현 예정) |
 | QS | `.kiro/specs/quicksight-private-integration/` | `docs/8_quicksight-private-integration/` | quicksight-guide, quick-suite-adoption-plan |
+| E-RAG | `.kiro/specs/enhanced-rag-optimization/` | `docs/enhanced-rag-optimization/` | rtl-upload-guide |
 | - | - | `docs/common/` | naming-conventions, tagging-strategy, emergency-contacts |
 
 ## 상위 문서
