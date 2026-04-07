@@ -331,6 +331,58 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
   - `cd tests && go test -v ./properties/ -run TestEnhancedRagOptimization -count=1`
   - 전체 5 Phase 통합 동작 확인
 
+
+- [ ] 11. Phase 6: RTL Knowledge Graph (Neptune Graph DB)
+  - [ ] 11.1 Neptune Terraform 모듈 구현 (`modules/ai-workload/graph-knowledge/`)
+    - `neptune.tf`: aws_neptune_cluster + aws_neptune_cluster_instance (db.t4g.medium)
+    - `security_group.tf`: 내부망(10.0.0.0/8) 8182 포트 허용
+    - `variables.tf`, `outputs.tf`
+    - KMS CMK 암호화 (`storage_encrypted = true`)
+    - 필수 태그 적용
+    - _Requirements: 16.1, 16.2, 16.3, 16.14_
+
+  - [ ] 11.2 Neptune 환경 배포 구성 (`environments/app-layer/knowledge-graph/`)
+    - `remote_state.tf`: network-layer 상태 참조 (VPC ID, Subnet ID)
+    - `main.tf`: modules/ai-workload/graph-knowledge 호출, vpc_security_group_ids와 neptune_subnet_group_name은 terraform_remote_state 참조
+    - `iam_readonly.tf`: LLM/MCP용 Read-Only Role (neptune-db:ReadDataViaQuery만)
+    - `variables.tf`, `outputs.tf`
+    - VPC Endpoint 네트워크 격리
+    - _Requirements: 16.4, 16.5, 16.15_
+
+  - [ ] 11.3 RTL Parser Lambda → Neptune 관계 적재 확장 (`rtl_parser_src/handler.py` 수정)
+    - 파싱 결과에서 관계 추출: Module→Module(INSTANTIATES), Module→Port(HAS_PORT), Port→Port(CONNECTS_TO), Parameter→Parameter(PROPAGATES_TO)
+    - Neptune에 노드/엣지로 적재 (Gremlin 또는 openCypher)
+    - 노드 타입: Module, Port, Signal, Parameter, ClockDomain
+    - 엣지 타입: INSTANTIATES, HAS_PORT, CONNECTS_TO, DRIVES, PROPAGATES_TO, BELONGS_TO_DOMAIN
+    - _Requirements: 16.6, 16.7, 16.8_
+
+  - [ ] 11.4 MCP Bridge Graph 도구 추가 (`mcp-bridge/server.js` 수정)
+    - `trace_signal_path`: module_name(필수) + signal_name(필수) → 신호 전파 경로 반환
+    - `find_instantiation_tree`: module_name(필수) + depth(선택, 기본3) → 인스턴스화 트리 반환
+    - `find_clock_crossings`: module_name(필수) → 클럭 도메인 크로싱 신호 목록 반환
+    - _Requirements: 16.9, 16.10, 16.11_
+
+  - [ ] 11.5 3저장소 통합 질의 구현 (`environments/app-layer/bedrock-rag/lambda_src/index.py` 수정)
+    - Verification Pipeline 확장: Graph DB 관계 탐색 + Claim DB 사실 조회 + OpenSearch 임베딩 검색 조합
+    - _Requirements: 16.12_
+
+  - [ ] 11.6 PyVerilog AST 파서 교체 준비 (`rtl_parser_src/handler.py`)
+    - Phase 6b: always_ff/always_comb 블록 분석 → 클럭 도메인 식별
+    - assign 문 분석 → 신호 구동 관계(DRIVES) 추출
+    - ECR 컨테이너 이미지 배포 전환
+    - _Requirements: 16.13_
+
+- [ ] 12. Phase 6 Checkpoint
+  - Ensure all tests pass, ask the user if questions arise.
+  - Neptune Cluster + 관계 추출 + 3저장소 통합 질의 동작 확인
+  - `terraform validate` (knowledge-graph 환경)
+
+- [ ] 13. Final Checkpoint - 전체 6 Phase 통합 테스트
+  - 전체 시스템 통합 동작 확인
+  - `cd environments/app-layer/bedrock-rag && terraform validate`
+  - `cd environments/app-layer/knowledge-graph && terraform validate`
+  - `cd tests && go test -v ./properties/ -run TestEnhancedRagOptimization -count=1`
+
 ## Notes
 
 - `*` 표시된 태스크는 선택적이며 빠른 MVP를 위해 건너뛸 수 있음
