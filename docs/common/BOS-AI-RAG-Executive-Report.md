@@ -39,6 +39,7 @@ graph TB
             ClaimDB["📋 Claim DB\n(검증된 지식)"]
             BedrockKB["🔍 Bedrock KB\n(벡터 검색)"]
             RTL_OS["🔍 RTL OpenSearch\n(코드 구조 검색)"]
+            Neptune["🕸️ Neptune\n(모듈 관계 그래프)"]
         end
 
         subgraph LAYER1["1층. 원본 저장소 (불변)"]
@@ -57,10 +58,12 @@ graph TB
     Lambda -->|"검증된 지식 검색"| ClaimDB
     Lambda -->|"문서 검색"| BedrockKB
     Lambda -->|"RTL 구조 검색"| RTL_OS
+    Lambda -->|"관계 탐색"| Neptune
 
     DocS3 -->|"임베딩"| BedrockKB
     RTLS3 -->|"S3 Event"| RTLParser
     RTLParser -->|"메타데이터 인덱싱"| RTL_OS
+    RTLParser -->|"관계 적재"| Neptune
 
     Lambda -.->|"근거 추적"| DocS3
     Lambda -.->|"근거 추적"| RTLS3
@@ -132,6 +135,7 @@ flowchart LR
 | 정보 검증 | 다른 AI에 다시 물어보거나 동료에게 확인 | 시스템이 자동으로 3단계 교차 검증 수행 |
 | 오류 추적 | 어떤 문서에서 온 정보인지 추적 어려움 | 모든 답변에 원본 문서 출처와 라인 번호까지 첨부 |
 | 정보 오염 | 잘못된 정보가 archive에 남아 전파 | Claim 상태 관리(초안→검증→충돌→폐기)로 오염 차단 |
+| 설계 관계 대조 | 엑셀에 모듈 관계를 수동 정리 후 하나하나 대조 | Graph DB가 RTL 코드에서 관계를 자동 추출, 신호 경로/인스턴스 트리 즉시 탐색 |
 
 ---
 
