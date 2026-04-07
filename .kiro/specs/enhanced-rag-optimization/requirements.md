@@ -32,9 +32,9 @@ v0.2 변경 사항 (아키텍트 리뷰 반영):
 9. Human Review Gate (critical topic 출판 전 승인 게이트) (v0.2 신규)
 10. Operational KPI Metrics (CloudWatch 커스텀 메트릭 발행) (v0.2 신규)
 
-단계적 도입: Phase 1(문서 ingestion 분리 + RTL 파이프라인) → Phase 2(Claim DB 구축) → Phase 3(MCP Tool 오픈) → Phase 4(문서 생성 + Human Review) → Phase 5(conflict detector + cross-check + KPI 모니터링)
+단계적 도입: Phase 1(문서 ingestion 분리 + RTL 파이프라인) → Phase 2(Claim DB 구축) → Phase 3(MCP Tool 오픈) → Phase 4(문서 생성 + Human Review) → Phase 5(conflict detector + cross-check + KPI 모니터링) → Phase 6(Neptune Graph DB + 관계 추출 파이프라인 + 3저장소 통합 질의)
 
-보류 항목: Neptune Graph DB(Phase 3 이후 검증), Aurora PostgreSQL(DynamoDB 대체), Step Functions(Lambda 내부 오케스트레이션), ECS/Fargate MCP 서버(온프렘 Node.js 유지)
+보류 항목: Aurora PostgreSQL(DynamoDB 대체), Step Functions(Lambda 내부 오케스트레이션), ECS/Fargate MCP 서버(온프렘 Node.js 유지)
 
 ## 용어집
 
@@ -282,3 +282,25 @@ v0.2 변경 사항 (아키텍트 리뷰 반영):
 6. THE Lambda_Handler SHALL `StaleClaimRatio` 메트릭을 계산하기 위해, `last_verified_at`이 현재 시점으로부터 30일 이상 경과한 `verified` 상태 claim의 비율을 주기적으로(질의 처리 시 또는 별도 스케줄) 산출하여 발행한다.
 7. THE Lambda_Handler SHALL `TopicCoverageRatio` 메트릭을 계산하기 위해, `verified` 상태 claim이 존재하는 고유 topic 수를 전체 등록된 topic 수로 나눈 비율을 발행한다.
 8. THE Terraform 구성 SHALL CloudWatch 커스텀 네임스페이스 `BOS-AI/ClaimDB`에 대한 Lambda_Handler의 `cloudwatch:PutMetricData` 권한을 IAM 정책에 포함한다.
+
+### 요구사항 16: RTL Knowledge Graph (Neptune Graph DB)
+
+**사용자 스토리:** 반도체 설계 엔지니어로서, RTL 코드의 모듈 간 인스턴스화 관계, 포트 연결, 파라미터 전파, 클럭 도메인 등 구조적 관계를 자동으로 추출하고 그래프로 탐색하여, 현재 엑셀에서 수동으로 수행하는 설계 관계 대조 작업을 자동화하고 싶다.
+
+#### 인수 조건
+
+1. THE Terraform 구성 SHALL AWS Neptune Cluster를 Seoul 리전의 Private Subnet에 생성하며, 비용 최적화를 위해 `db.t4g.medium` 인스턴스를 사용한다.
+2. THE Terraform 구성 SHALL Neptune Cluster에 KMS CMK 암호화를 적용하고, `storage_encrypted = true`를 설정한다.
+3. THE Terraform 구성 SHALL Neptune 전용 Security Group을 생성하여, 내부망(10.0.0.0/8)에서 8182 포트 접근만 허용한다.
+4. THE Terraform 구성 SHALL Neptune Subnet Group을 생성하며, `terraform_remote_state`를 사용하여 network-layer의 VPC ID, Subnet ID를 동적으로 참조한다.
+5. THE Terraform 구성 SHALL LLM/MCP Gateway용 Read-Only IAM Role을 별도 생성하며, `neptune-db:ReadDataViaQuery` 권한만 부여한다. 원본 RTL 코드가 아닌 노드/엣지 그래프에만 Read-Only 쿼리를 수행하도록 통제한다.
+6. WHEN RTL 파일이 RTL Parser Lambda에 의해 파싱되면, THE RTL Parser Lambda SHALL 파싱 결과에서 다음 관계를 추출하여 Neptune에 노드/엣지로 적재한다: Module→Module(`INSTANTIATES`), Module→Port(`HAS_PORT`), Port→Port(`CONNECTS_TO`), Parameter→Parameter(`PROPAGATES_TO`).
+7. THE Neptune 데이터 모델 SHALL 다음 노드 타입을 지원한다: `Module`(속성: name, file_path, parameter_list), `Port`(속성: name, direction, width, type), `Signal`(속성: name, width, type), `Parameter`(속성: name, default_value), `ClockDomain`(속성: name, frequency).
+8. THE Neptune 데이터 모델 SHALL 다음 엣지 타입을 지원한다: `INSTANTIATES`(Module→Module), `HAS_PORT`(Module→Port), `CONNECTS_TO`(Port→Port), `DRIVES`(Signal→Signal), `PROPAGATES_TO`(Parameter→Parameter), `BELONGS_TO_DOMAIN`(Module→ClockDomain).
+9. THE MCP_Bridge SHALL `trace_signal_path` 도구를 제공하며, 입력으로 `module_name`(필수 문자열), `signal_name`(필수 문자열)을 수용하고, Neptune에서 해당 신호의 전파 경로(노드/엣지 체인)를 반환한다.
+10. THE MCP_Bridge SHALL `find_instantiation_tree` 도구를 제공하며, 입력으로 `module_name`(필수 문자열), `depth`(선택적 정수, 기본값 3)를 수용하고, 해당 모듈의 인스턴스화 트리(상위/하위 모듈 계층)를 반환한다.
+11. THE MCP_Bridge SHALL `find_clock_crossings` 도구를 제공하며, 입력으로 `module_name`(필수 문자열)을 수용하고, 해당 모듈 내에서 클럭 도메인 간 크로싱이 발생하는 신호 목록을 반환한다.
+12. WHEN Verification Pipeline이 질의를 처리할 때, THE Lambda_Handler SHALL Graph DB 관계 탐색 결과 + Claim DB 사실 조회 결과 + OpenSearch 임베딩 검색 결과를 조합하여 통합 답변을 생성한다 (3저장소 통합 질의).
+13. THE RTL Parser Lambda SHALL Phase 6b에서 PyVerilog AST 파서로 교체되어, `always_ff`/`always_comb` 블록 분석을 통한 클럭 도메인 식별과 `assign` 문 분석을 통한 신호 구동 관계 추출을 지원한다.
+14. THE Terraform 구성 SHALL Neptune Cluster에 필수 태그(Project: BOS-AI, Environment: prod, ManagedBy: terraform, Layer: app)를 적용한다.
+15. THE Terraform 구성 SHALL 모든 Neptune 접근이 VPC Endpoint를 통해서만 이루어지도록 네트워크 격리를 유지한다.
