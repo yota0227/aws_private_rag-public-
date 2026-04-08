@@ -130,9 +130,6 @@ sequenceDiagram
         Titan-->>Parser: embedding vector (1024 dim)
         Parser->>RTL_OS: 인덱싱(embedding + metadata)
         Parser->>Neptune: 관계 적재(Gremlin Write: Module/Port/Instance 노드+엣지)
-        Parser->>Titan: InvokeModel(truncated summary)
-        Titan-->>Parser: embedding vector (1024 dim)
-        Parser->>RTL_OS: 인덱싱(embedding + metadata)
         Parser->>CW: INFO 로그
     else 파싱 실패
         Parser->>CW: ERROR 로그(파일 경로 + 실패 사유)

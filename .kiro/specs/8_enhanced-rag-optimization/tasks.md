@@ -84,14 +84,14 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
 
   - [ ] 1.12 IAM Explicit Deny 정책 구성 (`environments/app-layer/bedrock-rag/lambda.tf` 수정)
     - Lambda_Handler IAM 역할에 Explicit Deny 정책 추가
-    - Seoul_S3 `documents/*` 접두사에 대한 `s3:PutObject`, `s3:DeleteObject` 거부
-    - RTL_S3_Bucket `rtl-sources/*` 접두사에 대한 `s3:PutObject`, `s3:DeleteObject` 거부
+    - Seoul_S3 `documents/*` 접두사에 대한 `s3:PutObject`, `s3:DeleteObject`, `s3:DeleteObjectVersion`, `s3:BypassGovernanceRetention`, `s3:PutObjectRetention` 거부
+    - RTL_S3_Bucket `rtl-sources/*` 접두사에 대한 동일 5개 액션 거부
     - _Requirements: 12.1, 13.9_
 
   - [ ]* 1.13 Property 22 테스트 작성: IAM Explicit Deny
     - **Property 22: IAM Explicit Deny로 Source of Truth 보호**
     - **Validates: Requirements 13.9**
-    - Lambda_Handler IAM 정책에 Source of Truth 버킷 PutObject/DeleteObject Explicit Deny 존재 검증
+    - Lambda_Handler IAM 정책에 Source of Truth 버킷 PutObject/DeleteObject/DeleteObjectVersion/BypassGovernanceRetention/PutObjectRetention Explicit Deny 존재 검증
 
 - [ ] 2. Phase 1 Checkpoint
   - Ensure all tests pass, ask the user if questions arise.
@@ -335,7 +335,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
 - [ ] 11. Phase 6: RTL Knowledge Graph (Neptune Graph DB)
   - [ ] 11.1 Neptune Terraform 모듈 구현 (`modules/ai-workload/graph-knowledge/`)
     - `neptune.tf`: aws_neptune_cluster + aws_neptune_cluster_instance (db.t4g.medium)
-    - `security_group.tf`: 내부망(10.0.0.0/8) 8182 포트 허용
+    - `security_group.tf`: Inbound TCP 8182를 RTL_Parser_Lambda SG와 Lambda_Handler SG에서만 허용 (내부망 전체 허용 금지)
     - `variables.tf`, `outputs.tf`
     - KMS CMK 암호화 (`storage_encrypted = true`)
     - 필수 태그 적용
@@ -345,6 +345,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - `remote_state.tf`: network-layer 상태 참조 (VPC ID, Subnet ID)
     - `main.tf`: modules/ai-workload/graph-knowledge 호출, vpc_security_group_ids와 neptune_subnet_group_name은 terraform_remote_state 참조
     - `iam_readonly.tf`: LLM/MCP용 Read-Only Role (neptune-db:ReadDataViaQuery만)
+    - `iam_write.tf`: RTL_Parser_Lambda용 Write Role (neptune-db:WriteDataViaQuery) — 태스크 1.3의 RTL Parser Lambda IAM에 추가
     - `variables.tf`, `outputs.tf`
     - VPC Endpoint 네트워크 격리
     - _Requirements: 16.4, 16.5, 16.15_
@@ -363,8 +364,16 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - _Requirements: 16.9, 16.10, 16.11_
 
   - [ ] 11.5 3저장소 통합 질의 구현 (`environments/app-layer/bedrock-rag/lambda_src/index.py` 수정)
-    - Verification Pipeline 확장: Graph DB 관계 탐색 + Claim DB 사실 조회 + OpenSearch 임베딩 검색 조합
+    - Verification Pipeline 확장: asyncio를 사용하여 Graph DB(Neptune) + Claim DB + OpenSearch 3개 DB를 병렬 비동기 호출
+    - 개별 DB 쿼리 Timeout: 30초 제한
+    - Neptune 쿼리 실패/Timeout 시 Fallback: OpenSearch + Claim DB 결과만으로 답변 생성 (시스템 중단 없음)
+    - Neptune Fallback 발생 시 `verification_metadata.neptune_fallback = true` 설정
     - _Requirements: 16.12_
+
+  - [ ]* 11.7 Property 25 테스트 작성: Neptune 통합 질의 Fallback 및 병렬 호출
+    - **Property 25: Neptune 통합 질의 Fallback 및 병렬 호출**
+    - **Validates: Requirements 16.3, 16.5, 16.12, 16.15**
+    - 3개 DB 병렬 비동기 호출, 개별 Timeout 30초, Neptune 실패 시 Fallback + neptune_fallback=true, Neptune SG 8182 포트 제한 검증
 
   - [ ] 11.6 PyVerilog AST 파서 교체 준비 (`rtl_parser_src/handler.py`)
     - Phase 6b: always_ff/always_comb 블록 분석 → 클럭 도메인 식별
