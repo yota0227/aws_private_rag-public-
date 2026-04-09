@@ -27,6 +27,7 @@ RTL_OPENSEARCH_ENDPOINT = os.environ.get("RTL_OPENSEARCH_ENDPOINT", "")
 RTL_OPENSEARCH_INDEX = os.environ.get("RTL_OPENSEARCH_INDEX", "rtl-knowledge-base-index")
 ERROR_TABLE_NAME = os.environ.get("ERROR_TABLE_NAME", "bos-ai-rtl-parse-errors")
 BEDROCK_REGION = os.environ.get("BEDROCK_REGION", "us-east-1")
+NEPTUNE_ENDPOINT = os.environ.get("NEPTUNE_ENDPOINT", "")
 TITAN_MODEL_ID = "amazon.titan-embed-text-v2:0"
 MAX_TOKENS = 8000
 
@@ -59,7 +60,12 @@ def _process_rtl_file(bucket: str, key: str):
         _record_error(key, f"S3 GetObject 실패: {e}")
         raise
 
-    metadata = parse_rtl_to_ast(rtl_content)
+    # Phase 6b: PyVerilog AST 파서 점진적 롤아웃 (환경 변수 기반 feature flag)
+    use_pyverilog = os.environ.get("USE_PYVERILOG", "false").lower() == "true"
+    if use_pyverilog:
+        metadata = _parse_rtl_pyverilog(rtl_content)
+    else:
+        metadata = parse_rtl_to_ast(rtl_content)
     metadata["file_path"] = key
 
     # parsed JSON 저장
@@ -77,6 +83,9 @@ def _process_rtl_file(bucket: str, key: str):
     embedding = _generate_embedding(truncated)
     if embedding:
         _index_to_opensearch(metadata, embedding)
+
+    # Neptune Graph DB 관계 적재 (Phase 6)
+    _load_to_neptune(metadata)
 
     logger.info(json.dumps({
         "event": "rtl_parse_success",
@@ -163,6 +172,55 @@ def parse_rtl_to_ast(rtl_content: str) -> dict:
         if module_type not in keywords and instance_name not in keywords:
             instances.append(f"{instance_name}: {module_type}")
     result["instance_list"] = list(dict.fromkeys(instances))
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Phase 6b: PyVerilog AST 파서 스텁 (ECR 컨테이너 전환 후 활성화)
+# ---------------------------------------------------------------------------
+
+def _parse_rtl_pyverilog(rtl_content: str) -> dict:
+    """PyVerilog AST 기반 RTL 파서 — Phase 6b 플레이스홀더.
+
+    현재 정규식 기반 parse_rtl_to_ast()를 대체할 예정이며,
+    ECR 컨테이너 이미지 배포 전환 후 PyVerilog 의존성을 활성화하여
+    AST 수준의 정밀한 RTL 구조 분석을 수행한다.
+
+    추가 분석 항목 (Phase 6b 구현 예정):
+    - always_ff/always_comb 블록 분석 → 클럭 도메인 식별
+    - assign 문 분석 → 신호 구동 관계(DRIVES) 추출
+
+    현재는 기존 parse_rtl_to_ast() 폴백 + 확장 필드 빈 값 반환.
+
+    Args:
+        rtl_content: RTL 소스 코드 문자열
+
+    Returns:
+        parse_rtl_to_ast() 결과에 다음 필드를 추가한 dict:
+        - clock_domains: list[dict]   — 클럭 도메인 정보 (Phase 6b)
+        - signal_drives: list[dict]   — 신호 구동 관계 (Phase 6b)
+        - assign_statements: list[dict] — assign 문 분석 결과 (Phase 6b)
+    """
+    # TODO: Phase 6b — PyVerilog AST 파서로 교체
+    # from pyverilog.vparser.parser import parse as pyverilog_parse
+    # from pyverilog.dataflow.dataflow_analyzer import VerilogDataflowAnalyzer
+
+    # TODO: always_ff/always_comb 블록 분석 → 클럭 도메인 식별
+    # AST에서 always 블록의 sensitivity list를 파싱하여
+    # posedge/negedge 클럭 신호를 추출하고 ClockDomain 노드 생성
+
+    # TODO: assign 문 분석 → 신호 구동 관계(DRIVES) 추출
+    # continuous assignment의 LHS/RHS를 파싱하여
+    # Signal→Signal DRIVES 엣지를 Neptune에 적재
+
+    # 현재는 기존 정규식 파서를 폴백으로 사용
+    result = parse_rtl_to_ast(rtl_content)
+
+    # Phase 6b 확장 필드 (빈 값으로 초기화)
+    result["clock_domains"] = []       # list[dict]: {"name": str, "frequency": str, "signals": list[str]}
+    result["signal_drives"] = []       # list[dict]: {"source": str, "target": str, "type": str}
+    result["assign_statements"] = []   # list[dict]: {"lhs": str, "rhs": str, "line": int}
 
     return result
 
@@ -282,6 +340,159 @@ def _index_to_opensearch(metadata: dict, embedding: list):
         logger.info(json.dumps({"event": "opensearch_indexed", "doc_id": doc_id}))
     except Exception as e:
         logger.error(json.dumps({"event": "opensearch_error", "error": str(e)}))
+
+
+# ---------------------------------------------------------------------------
+# Neptune Graph DB 관계 적재
+# ---------------------------------------------------------------------------
+
+def _load_to_neptune(metadata: dict):
+    """파싱된 메타데이터에서 관계를 추출하여 Neptune Graph DB에 노드/엣지로 적재.
+
+    노드 타입: Module, Port, Signal, Parameter, ClockDomain
+    엣지 타입: INSTANTIATES, HAS_PORT, CONNECTS_TO, DRIVES, PROPAGATES_TO, BELONGS_TO_DOMAIN
+
+    SigV4 IAM DB 인증을 사용하며, Neptune 엔드포인트 미설정 또는 연결 실패 시
+    경고 로그만 남기고 파이프라인을 중단하지 않는다.
+    """
+    # Neptune 엔드포인트 미설정 시 조용히 건너뜀
+    if not NEPTUNE_ENDPOINT:
+        logger.debug("NEPTUNE_ENDPOINT not set, skipping Neptune loading")
+        return
+
+    try:
+        import requests
+        from requests_aws4auth import AWS4Auth
+
+        session = boto3.Session()
+        credentials = session.get_credentials().get_frozen_credentials()
+        region = session.region_name or "ap-northeast-2"
+        auth = AWS4Auth(
+            credentials.access_key,
+            credentials.secret_key,
+            region,
+            "neptune-db",
+            session_token=credentials.token,
+        )
+
+        neptune_url = f"https://{NEPTUNE_ENDPOINT}:8182/openCypher"
+        module_name = metadata.get("module_name", "")
+        file_path = metadata.get("file_path", "")
+
+        if not module_name:
+            logger.warning("module_name이 비어있어 Neptune 적재를 건너뜁니다")
+            return
+
+        # openCypher 쿼리 배치 구성
+        queries = []
+
+        # (a) Module 노드 생성 (MERGE로 중복 방지)
+        queries.append({
+            "query": (
+                "MERGE (m:Module {name: $name}) "
+                "SET m.file_path = $file_path"
+            ),
+            "parameters": {"name": module_name, "file_path": file_path},
+        })
+
+        # (b) Port 노드 + HAS_PORT 엣지 생성
+        for port_entry in metadata.get("port_list", []):
+            # port_entry 형식: "direction name" (예: "input clk")
+            parts = port_entry.split(None, 1)
+            if len(parts) == 2:
+                direction, port_name = parts
+            else:
+                direction, port_name = "", port_entry
+            queries.append({
+                "query": (
+                    "MERGE (m:Module {name: $module_name}) "
+                    "MERGE (p:Port {name: $port_name, module: $module_name}) "
+                    "SET p.direction = $direction "
+                    "MERGE (m)-[:HAS_PORT]->(p)"
+                ),
+                "parameters": {
+                    "module_name": module_name,
+                    "port_name": port_name,
+                    "direction": direction,
+                },
+            })
+
+        # (c) Parameter 노드 + PROPAGATES_TO 엣지 준비
+        for param_entry in metadata.get("parameter_list", []):
+            # param_entry 형식: "NAME=VALUE" (예: "DATA_WIDTH=32")
+            if "=" in param_entry:
+                param_name, default_value = param_entry.split("=", 1)
+            else:
+                param_name, default_value = param_entry, ""
+            queries.append({
+                "query": (
+                    "MERGE (m:Module {name: $module_name}) "
+                    "MERGE (p:Parameter {name: $param_name, module: $module_name}) "
+                    "SET p.default_value = $default_value "
+                    "MERGE (m)-[:HAS_PORT]->(p)"
+                ),
+                "parameters": {
+                    "module_name": module_name,
+                    "param_name": param_name.strip(),
+                    "default_value": default_value.strip(),
+                },
+            })
+
+        # (d) Instance → INSTANTIATES 엣지 생성
+        for inst_entry in metadata.get("instance_list", []):
+            # inst_entry 형식: "instance_name: module_type" (예: "u_phy: UCIE_PHY")
+            if ": " in inst_entry:
+                _inst_name, inst_module_type = inst_entry.split(": ", 1)
+            else:
+                continue
+            queries.append({
+                "query": (
+                    "MERGE (m:Module {name: $module_name}) "
+                    "MERGE (t:Module {name: $target_module}) "
+                    "MERGE (m)-[:INSTANTIATES {instance_name: $instance_name}]->(t)"
+                ),
+                "parameters": {
+                    "module_name": module_name,
+                    "target_module": inst_module_type.strip(),
+                    "instance_name": _inst_name.strip(),
+                },
+            })
+
+        # 배치 실행 — 개별 쿼리 실패 시 나머지 계속 처리
+        success_count = 0
+        fail_count = 0
+        for q in queries:
+            try:
+                resp = requests.post(
+                    neptune_url,
+                    auth=auth,
+                    json=q,
+                    timeout=10,
+                )
+                resp.raise_for_status()
+                success_count += 1
+            except Exception as qe:
+                fail_count += 1
+                logger.warning(json.dumps({
+                    "event": "neptune_query_error",
+                    "query": q.get("query", "")[:100],
+                    "error": str(qe),
+                }))
+
+        logger.info(json.dumps({
+            "event": "neptune_load_complete",
+            "module_name": module_name,
+            "queries_success": success_count,
+            "queries_failed": fail_count,
+        }))
+
+    except Exception as e:
+        # Neptune 적재 실패는 파이프라인을 중단하지 않음
+        logger.error(json.dumps({
+            "event": "neptune_load_error",
+            "module_name": metadata.get("module_name", ""),
+            "error": str(e),
+        }))
 
 
 # ---------------------------------------------------------------------------

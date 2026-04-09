@@ -2,3 +2,6 @@ boto3>=1.34.0
 tiktoken>=0.7.0
 requests>=2.31.0
 requests-aws4auth>=1.3.0
+
+# Phase 6b: PyVerilog AST 파서 (ECR 컨테이너 전환 후 활성화)
+# pyverilog>=1.3.0

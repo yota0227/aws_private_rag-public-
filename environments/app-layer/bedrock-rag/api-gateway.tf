@@ -748,6 +748,101 @@ resource "aws_api_gateway_integration" "publish_markdown_lambda" {
 }
 
 # ----------------------------------------------------------------------------
+# Phase 6: Neptune Graph DB 엔드포인트
+# Requirements: 16.9, 16.10, 16.11
+# ----------------------------------------------------------------------------
+
+# /rag/trace-signal-path resource
+resource "aws_api_gateway_resource" "trace_signal_path" {
+  provider = aws.seoul
+
+  rest_api_id = aws_api_gateway_rest_api.private_rag.id
+  parent_id   = aws_api_gateway_resource.rag.id
+  path_part   = "trace-signal-path"
+}
+
+# POST /rag/trace-signal-path (신호 전파 경로 추적)
+resource "aws_api_gateway_method" "trace_signal_path_post" {
+  provider = aws.seoul
+
+  rest_api_id   = aws_api_gateway_rest_api.private_rag.id
+  resource_id   = aws_api_gateway_resource.trace_signal_path.id
+  http_method   = "POST"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "trace_signal_path_lambda" {
+  provider = aws.seoul
+
+  rest_api_id             = aws_api_gateway_rest_api.private_rag.id
+  resource_id             = aws_api_gateway_resource.trace_signal_path.id
+  http_method             = aws_api_gateway_method.trace_signal_path_post.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.document_processor.invoke_arn
+}
+
+# /rag/find-instantiation-tree resource
+resource "aws_api_gateway_resource" "find_instantiation_tree" {
+  provider = aws.seoul
+
+  rest_api_id = aws_api_gateway_rest_api.private_rag.id
+  parent_id   = aws_api_gateway_resource.rag.id
+  path_part   = "find-instantiation-tree"
+}
+
+# POST /rag/find-instantiation-tree (모듈 인스턴스화 트리 조회)
+resource "aws_api_gateway_method" "find_instantiation_tree_post" {
+  provider = aws.seoul
+
+  rest_api_id   = aws_api_gateway_rest_api.private_rag.id
+  resource_id   = aws_api_gateway_resource.find_instantiation_tree.id
+  http_method   = "POST"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "find_instantiation_tree_lambda" {
+  provider = aws.seoul
+
+  rest_api_id             = aws_api_gateway_rest_api.private_rag.id
+  resource_id             = aws_api_gateway_resource.find_instantiation_tree.id
+  http_method             = aws_api_gateway_method.find_instantiation_tree_post.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.document_processor.invoke_arn
+}
+
+# /rag/find-clock-crossings resource
+resource "aws_api_gateway_resource" "find_clock_crossings" {
+  provider = aws.seoul
+
+  rest_api_id = aws_api_gateway_rest_api.private_rag.id
+  parent_id   = aws_api_gateway_resource.rag.id
+  path_part   = "find-clock-crossings"
+}
+
+# POST /rag/find-clock-crossings (클럭 도메인 크로싱 조회)
+resource "aws_api_gateway_method" "find_clock_crossings_post" {
+  provider = aws.seoul
+
+  rest_api_id   = aws_api_gateway_rest_api.private_rag.id
+  resource_id   = aws_api_gateway_resource.find_clock_crossings.id
+  http_method   = "POST"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "find_clock_crossings_lambda" {
+  provider = aws.seoul
+
+  rest_api_id             = aws_api_gateway_rest_api.private_rag.id
+  resource_id             = aws_api_gateway_resource.find_clock_crossings.id
+  http_method             = aws_api_gateway_method.find_clock_crossings_post.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.document_processor.invoke_arn
+}
+
+# ----------------------------------------------------------------------------
 # Deployment & Stage
 # ----------------------------------------------------------------------------
 
@@ -781,6 +876,9 @@ resource "aws_api_gateway_deployment" "main" {
       aws_api_gateway_resource.list_verified_claims.id,
       aws_api_gateway_resource.generate_hdd.id,
       aws_api_gateway_resource.publish_markdown.id,
+      aws_api_gateway_resource.trace_signal_path.id,
+      aws_api_gateway_resource.find_instantiation_tree.id,
+      aws_api_gateway_resource.find_clock_crossings.id,
       aws_api_gateway_method.query_post.id,
       aws_api_gateway_method.documents_get.id,
       aws_api_gateway_method.documents_initiate_post.id,
@@ -803,6 +901,9 @@ resource "aws_api_gateway_deployment" "main" {
       aws_api_gateway_method.list_verified_claims_post.id,
       aws_api_gateway_method.generate_hdd_post.id,
       aws_api_gateway_method.publish_markdown_post.id,
+      aws_api_gateway_method.trace_signal_path_post.id,
+      aws_api_gateway_method.find_instantiation_tree_post.id,
+      aws_api_gateway_method.find_clock_crossings_post.id,
       aws_api_gateway_integration.query_lambda.id,
       aws_api_gateway_integration.documents_get_lambda.id,
       aws_api_gateway_integration.documents_initiate_lambda.id,
@@ -825,6 +926,9 @@ resource "aws_api_gateway_deployment" "main" {
       aws_api_gateway_integration.list_verified_claims_lambda.id,
       aws_api_gateway_integration.generate_hdd_lambda.id,
       aws_api_gateway_integration.publish_markdown_lambda.id,
+      aws_api_gateway_integration.trace_signal_path_lambda.id,
+      aws_api_gateway_integration.find_instantiation_tree_lambda.id,
+      aws_api_gateway_integration.find_clock_crossings_lambda.id,
     ]))
   }
 

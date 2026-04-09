@@ -405,6 +405,136 @@ function createMcpServer() {
     }
   );
 
+  // ========================================================================
+  // Phase 6: MCP Tool 확장 — Neptune Graph DB 도구
+  // Requirements: 16.9, 16.10, 16.11
+  // ========================================================================
+
+  mcp.tool(
+    "trace_signal_path",
+    "RTL 모듈의 신호 전파 경로를 추적합니다. Neptune Graph DB에서 신호가 어떤 모듈/포트를 거쳐 전파되는지 경로를 반환합니다.",
+    {
+      module_name: z.string().describe("시작 모듈명 (예: BLK_UCIE)"),
+      signal_name: z.string().describe("추적할 신호명 (예: tx_data)")
+    },
+    async (args, extra) => {
+      const startTime = Date.now();
+      try {
+        console.log("[TOOL] trace_signal_path: module_name=" + args.module_name + " signal_name=" + args.signal_name);
+        const resp = await ragApi("POST", "/trace-signal-path", { module_name: args.module_name, signal_name: args.signal_name });
+        const execution_time_ms = Date.now() - startTime;
+        if (resp.error) return { content: [{ type: "text", text: JSON.stringify({ error: resp.error, execution_time_ms }) }], isError: true };
+        let text = "🔍 신호 전파 경로 추적\n";
+        text += "  모듈: " + args.module_name + "\n";
+        text += "  신호: " + args.signal_name + "\n";
+        text += "  경로 노드 수: " + (resp.path_nodes ? resp.path_nodes.length : 0) + "\n";
+        if (resp.path_nodes && resp.path_nodes.length > 0) {
+          text += "\n--- 경로 노드 ---\n";
+          resp.path_nodes.forEach((node, i) => {
+            text += "  [" + (i+1) + "] " + (node.type || "unknown") + ": " + (node.name || "unknown");
+            if (node.module) text += " (모듈: " + node.module + ")";
+            text += "\n";
+          });
+        }
+        if (resp.path_edges && resp.path_edges.length > 0) {
+          text += "\n--- 경로 엣지 ---\n";
+          resp.path_edges.forEach((edge, i) => {
+            text += "  [" + (i+1) + "] " + (edge.from || "?") + " —[" + (edge.type || "?") + "]→ " + (edge.to || "?") + "\n";
+          });
+        }
+        if (!resp.path_nodes?.length && !resp.path_edges?.length) {
+          text += "\n해당 신호의 전파 경로를 찾을 수 없습니다.";
+        }
+        text += "\n\nexecution_time_ms: " + execution_time_ms;
+        return { content: [{ type: "text", text }] };
+      } catch(err) {
+        const execution_time_ms = Date.now() - startTime;
+        return { content: [{ type: "text", text: JSON.stringify({ error: "trace_signal_path 실패: " + err.message, execution_time_ms }) }], isError: true };
+      }
+    }
+  );
+
+  mcp.tool(
+    "find_instantiation_tree",
+    "RTL 모듈의 인스턴스화 트리를 조회합니다. 지정된 모듈이 어떤 하위 모듈을 인스턴스화하는지 트리 구조로 반환합니다.",
+    {
+      module_name: z.string().describe("조회할 모듈명 (예: BLK_UCIE)"),
+      depth: z.number().optional().default(3).describe("탐색 깊이 (기본값 3)")
+    },
+    async (args, extra) => {
+      const startTime = Date.now();
+      try {
+        console.log("[TOOL] find_instantiation_tree: module_name=" + args.module_name + " depth=" + args.depth);
+        const resp = await ragApi("POST", "/find-instantiation-tree", { module_name: args.module_name, depth: args.depth });
+        const execution_time_ms = Date.now() - startTime;
+        if (resp.error) return { content: [{ type: "text", text: JSON.stringify({ error: resp.error, execution_time_ms }) }], isError: true };
+        let text = "🌳 인스턴스화 트리\n";
+        text += "  루트 모듈: " + args.module_name + "\n";
+        text += "  탐색 깊이: " + args.depth + "\n";
+        text += "  총 노드 수: " + (resp.total_nodes || 0) + "\n";
+        if (resp.tree) {
+          text += "\n--- 트리 구조 ---\n";
+          const renderTree = (node, indent) => {
+            text += indent + (node.instance_name ? node.instance_name + ": " : "") + (node.module_name || "unknown") + "\n";
+            if (node.children && node.children.length > 0) {
+              node.children.forEach((child) => { renderTree(child, indent + "  "); });
+            }
+          };
+          renderTree(resp.tree, "  ");
+        } else if (resp.nodes && resp.nodes.length > 0) {
+          text += "\n--- 트리 노드 ---\n";
+          resp.nodes.forEach((node, i) => {
+            const indent = "  ".repeat((node.depth || 0) + 1);
+            text += indent + (node.instance_name ? node.instance_name + ": " : "") + (node.module_name || "unknown") + "\n";
+          });
+        } else {
+          text += "\n해당 모듈의 인스턴스화 트리를 찾을 수 없습니다.";
+        }
+        text += "\n\nexecution_time_ms: " + execution_time_ms;
+        return { content: [{ type: "text", text }] };
+      } catch(err) {
+        const execution_time_ms = Date.now() - startTime;
+        return { content: [{ type: "text", text: JSON.stringify({ error: "find_instantiation_tree 실패: " + err.message, execution_time_ms }) }], isError: true };
+      }
+    }
+  );
+
+  mcp.tool(
+    "find_clock_crossings",
+    "RTL 모듈의 클럭 도메인 크로싱 신호 목록을 조회합니다. 서로 다른 클럭 도메인 간 전달되는 신호를 식별합니다.",
+    {
+      module_name: z.string().describe("조회할 모듈명 (예: BLK_UCIE)")
+    },
+    async (args, extra) => {
+      const startTime = Date.now();
+      try {
+        console.log("[TOOL] find_clock_crossings: module_name=" + args.module_name);
+        const resp = await ragApi("POST", "/find-clock-crossings", { module_name: args.module_name });
+        const execution_time_ms = Date.now() - startTime;
+        if (resp.error) return { content: [{ type: "text", text: JSON.stringify({ error: resp.error, execution_time_ms }) }], isError: true };
+        let text = "⚡ 클럭 도메인 크로싱 신호\n";
+        text += "  모듈: " + args.module_name + "\n";
+        text += "  크로싱 신호 수: " + (resp.crossings ? resp.crossings.length : 0) + "\n";
+        if (resp.crossings && resp.crossings.length > 0) {
+          text += "\n--- 크로싱 신호 목록 ---\n";
+          resp.crossings.forEach((c, i) => {
+            text += "  [" + (i+1) + "] " + (c.signal_name || "unknown") + "\n";
+            text += "      Source Domain: " + (c.source_domain || "unknown") + "\n";
+            text += "      Destination Domain: " + (c.destination_domain || "unknown") + "\n";
+            if (c.synchronizer) text += "      Synchronizer: " + c.synchronizer + "\n";
+          });
+        } else {
+          text += "\n해당 모듈에서 클럭 도메인 크로싱 신호를 찾을 수 없습니다.";
+        }
+        text += "\n\nexecution_time_ms: " + execution_time_ms;
+        return { content: [{ type: "text", text }] };
+      } catch(err) {
+        const execution_time_ms = Date.now() - startTime;
+        return { content: [{ type: "text", text: JSON.stringify({ error: "find_clock_crossings 실패: " + err.message, execution_time_ms }) }], isError: true };
+      }
+    }
+  );
+
   return mcp;
 }
 
