@@ -209,6 +209,123 @@ function createMcpServer() {
     }
   );
 
+  // ========================================================================
+  // Phase 3: MCP Tool 분리 — search_archive, get_evidence, list_verified_claims
+  // Requirements: 8.1, 8.2, 8.3, 8.6
+  // ========================================================================
+
+  mcp.tool(
+    "search_archive",
+    "Archive 문서를 검색합니다. Bedrock KB 벡터 검색 + topic/source 메타데이터 필터를 지원합니다. 특정 주제나 출처의 문서를 찾을 때 사용하세요.",
+    {
+      query: z.string().describe("검색 질의 (한국어/영어 모두 가능)"),
+      topic: z.string().optional().describe("topic 필터 (예: ucie/phy/ltssm)"),
+      source: z.string().optional().describe("source 필터 (예: archive_md, rtl_parsed, manual_upload)"),
+      max_results: z.number().optional().default(5).describe("최대 결과 수 (기본값 5)")
+    },
+    async (args, extra) => {
+      const startTime = Date.now();
+      try {
+        console.log("[TOOL] search_archive: query=" + args.query + " topic=" + (args.topic||"all") + " source=" + (args.source||"all"));
+        const body = { query: args.query };
+        if (args.topic) body.topic = args.topic;
+        if (args.source) body.source = args.source;
+        if (args.max_results) body.max_results = args.max_results;
+        const resp = await ragApi("POST", "/search-archive", body);
+        const execution_time_ms = Date.now() - startTime;
+        if (resp.error) return { content: [{ type: "text", text: JSON.stringify({ error: resp.error, execution_time_ms }) }], isError: true };
+        let text = "📚 Archive 검색 결과 (" + (resp.count || 0) + "건)\n";
+        text += "질의: " + args.query + "\n";
+        if (resp.filters) text += "필터: " + JSON.stringify(resp.filters) + "\n";
+        text += "\n" + (resp.answer || "결과 없음");
+        if (resp.results && resp.results.length > 0) {
+          text += "\n\n--- 참조 문서 ---";
+          resp.results.forEach((r, i) => {
+            text += "\n[" + (i+1) + "] " + (r.uri || "unknown");
+            if (r.score) text += " (score: " + r.score + ")";
+          });
+        }
+        text += "\n\nexecution_time_ms: " + execution_time_ms;
+        return { content: [{ type: "text", text }] };
+      } catch(err) {
+        const execution_time_ms = Date.now() - startTime;
+        return { content: [{ type: "text", text: JSON.stringify({ error: "search_archive 실패: " + err.message, execution_time_ms }) }], isError: true };
+      }
+    }
+  );
+
+  mcp.tool(
+    "get_evidence",
+    "특정 Claim의 근거(evidence) 배열을 조회합니다. claim_id로 해당 claim의 원본 문서 참조, 인용 텍스트, 페이지 번호 등을 확인할 수 있습니다.",
+    {
+      claim_id: z.string().describe("조회할 Claim ID (UUID)")
+    },
+    async (args, extra) => {
+      const startTime = Date.now();
+      try {
+        console.log("[TOOL] get_evidence: claim_id=" + args.claim_id);
+        const resp = await ragApi("POST", "/get-evidence", { claim_id: args.claim_id });
+        const execution_time_ms = Date.now() - startTime;
+        if (resp.error) return { content: [{ type: "text", text: JSON.stringify({ error: resp.error, execution_time_ms }) }], isError: true };
+        let text = "📋 Evidence 조회 결과\n";
+        text += "  Claim ID: " + resp.claim_id + "\n";
+        text += "  Version: " + resp.version + "\n";
+        text += "  Evidence 수: " + (resp.evidence_count || 0) + "\n";
+        if (resp.evidence && resp.evidence.length > 0) {
+          resp.evidence.forEach((ev, i) => {
+            text += "\n  [Evidence " + (i+1) + "]\n";
+            text += "    Source: " + (ev.source_document_id || "unknown") + "\n";
+            text += "    Type: " + (ev.source_type || "unknown") + "\n";
+            text += "    Chunk: " + (ev.source_chunk || "").substring(0, 200) + "\n";
+            if (ev.page_number) text += "    Page: " + ev.page_number + "\n";
+            if (ev.source_path) text += "    Path: " + ev.source_path + "\n";
+            if (ev.line_start) text += "    Lines: " + ev.line_start + "-" + (ev.line_end || "") + "\n";
+          });
+        }
+        text += "\nexecution_time_ms: " + execution_time_ms;
+        return { content: [{ type: "text", text }] };
+      } catch(err) {
+        const execution_time_ms = Date.now() - startTime;
+        return { content: [{ type: "text", text: JSON.stringify({ error: "get_evidence 실패: " + err.message, execution_time_ms }) }], isError: true };
+      }
+    }
+  );
+
+  mcp.tool(
+    "list_verified_claims",
+    "특정 topic의 검증된(verified) Claim 목록을 조회합니다. 해당 주제에 대해 검증 완료된 지식 단위를 확인할 수 있습니다.",
+    {
+      topic: z.string().describe("topic 식별자 (예: ucie/phy/ltssm)")
+    },
+    async (args, extra) => {
+      const startTime = Date.now();
+      try {
+        console.log("[TOOL] list_verified_claims: topic=" + args.topic);
+        const resp = await ragApi("POST", "/list-verified-claims", { topic: args.topic });
+        const execution_time_ms = Date.now() - startTime;
+        if (resp.error) return { content: [{ type: "text", text: JSON.stringify({ error: resp.error, execution_time_ms }) }], isError: true };
+        let text = "✅ 검증된 Claim 목록 (topic: " + resp.topic + ")\n";
+        text += "총 " + (resp.count || 0) + "건\n";
+        if (resp.claims && resp.claims.length > 0) {
+          resp.claims.forEach((c, i) => {
+            text += "\n[" + (i+1) + "] " + c.claim_id + " (v" + c.version + ")\n";
+            text += "    Statement: " + (c.statement || "").substring(0, 150) + "\n";
+            text += "    Confidence: " + c.confidence + "\n";
+            text += "    Last Verified: " + (c.last_verified_at || "unknown") + "\n";
+            text += "    Evidence Count: " + (c.evidence_count || 0) + "\n";
+          });
+        } else {
+          text += "\n해당 topic에 검증된 claim이 없습니다.";
+        }
+        text += "\n\nexecution_time_ms: " + execution_time_ms;
+        return { content: [{ type: "text", text }] };
+      } catch(err) {
+        const execution_time_ms = Date.now() - startTime;
+        return { content: [{ type: "text", text: JSON.stringify({ error: "list_verified_claims 실패: " + err.message, execution_time_ms }) }], isError: true };
+      }
+    }
+  );
+
   return mcp;
 }
 

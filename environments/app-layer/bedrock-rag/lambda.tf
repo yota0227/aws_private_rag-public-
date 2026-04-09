@@ -300,6 +300,31 @@ resource "aws_iam_role_policy" "lambda_self_invoke" {
   })
 }
 
+# IAM Policy for Lambda - CloudWatch PutMetricData (KPI 메트릭 발행)
+# Requirements: 15.8 — BOS-AI/ClaimDB 네임스페이스 커스텀 메트릭 발행 권한
+resource "aws_iam_role_policy" "lambda_cloudwatch_metrics" {
+  name = "lambda-cloudwatch-metrics"
+  role = aws_iam_role.lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "cloudwatch:PutMetricData"
+        ]
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "cloudwatch:namespace" = "BOS-AI/ClaimDB"
+          }
+        }
+      }
+    ]
+  })
+}
+
 # IAM Explicit Deny - Source of Truth 버킷 보호
 # prompt injection 공격으로 인한 원본 문서 변조를 인프라 수준에서 차단
 # Versioning + Object Lock 환경에서 버전 삭제 및 Lock 우회도 차단

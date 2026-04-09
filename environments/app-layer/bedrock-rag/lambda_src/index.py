@@ -8,8 +8,13 @@ Endpoints:
   POST /rag/documents/upload-part   - chunk 업로드
   POST /rag/documents/complete      - multipart upload 완료 + KB sync
   GET  /rag/documents               - 업로드된 파일 목록
-  POST /rag/query                   - RAG 질의
+  POST /rag/query                   - RAG 질의 (Verification Pipeline 우선)
   GET  /rag/health                  - 헬스체크
+  POST /rag/claims                  - Claim 생성
+  POST /rag/claims/update-status    - Claim 상태 전이
+  POST /rag/search-archive          - Archive 문서 검색 (Bedrock KB + 필터)
+  POST /rag/get-evidence            - Claim evidence 조회
+  POST /rag/list-verified-claims    - 검증된 Claim 목록 조회
 """
 import json
 import os
@@ -148,6 +153,8 @@ def handler(event, context):
             return create_claim(event)
 
         # MCP Tool 엔드포인트 (Phase 3)
+        if '/search-archive' in path and method == 'POST':
+            return search_archive(event)
         if '/get-evidence' in path and method == 'POST':
             return get_evidence(event)
         if '/list-verified-claims' in path and method == 'POST':
@@ -686,7 +693,9 @@ def list_documents(event=None):
 
 
 def handle_query(event):
-    """RAG 질의 처리 - Hybrid Search, 필터, 구조화 로그 지원"""
+    """RAG 질의 처리 — Verification Pipeline 우선 실행, 폴백 시 Bedrock KB 검색
+    Requirements: 9.1, 9.7
+    """
     start_time = time.time()
     body = parse_body(event)
     query = body.get('query', '')
@@ -699,18 +708,55 @@ def handle_query(event):
             'query': query
         })
 
-    # 검색 설정 (환경 변수에서 읽기)
+    variant = body.get('variant', None)
+
+    # Verification Pipeline 우선 실행 (Task 5.4)
+    try:
+        pipeline_result = verification_pipeline(query, variant=variant)
+        response_time_ms = int((time.time() - start_time) * 1000)
+
+        # 구조화 로그
+        logger.info(json.dumps({
+            'event': 'rag_query',
+            'query_length': len(query),
+            'response_time_ms': response_time_ms,
+            'verification_pipeline': True,
+            'fallback': pipeline_result.get('verification_metadata', {}).get('fallback', False),
+            'claims_used': len(pipeline_result.get('verification_metadata', {}).get('claims_used', []))
+        }))
+
+        if response_time_ms > 30000:
+            logger.warning(json.dumps({'event': 'slow_query', 'response_time_ms': response_time_ms, 'query_length': len(query)}))
+
+        result = {
+            'answer': pipeline_result.get('answer', ''),
+            'citations': pipeline_result.get('citations', []),
+            'verification_metadata': pipeline_result.get('verification_metadata', {}),
+            'metadata': {
+                'search_type': 'verification_pipeline',
+                'query_length': len(query),
+                'response_time_ms': response_time_ms
+            }
+        }
+
+        return response(200, result)
+
+    except Exception as e:
+        logger.error(f"Verification Pipeline failed, falling back to direct Bedrock KB: {e}")
+        return _handle_query_bedrock_kb(query, start_time, body)
+
+
+def _handle_query_bedrock_kb(query, start_time, body):
+    """기존 Bedrock KB 직접 검색 (Verification Pipeline 실패 시 폴백)"""
     search_type = os.environ.get('SEARCH_TYPE', 'HYBRID')
     results_count = int(os.environ.get('SEARCH_RESULTS_COUNT', '5'))
 
-    # 필터 구성
     filter_obj = body.get('filter', None)
     bedrock_filter = build_bedrock_filter(filter_obj) if filter_obj else None
 
     try:
         bedrock_runtime = boto3.client('bedrock-agent-runtime', region_name=BACKEND_REGION)
 
-        # vectorSearchConfiguration 구성
         vector_config = {
             'searchType': search_type,
             'numberOfResults': results_count
@@ -735,7 +781,6 @@ def handle_query(event):
 
         response_time_ms = int((time.time() - start_time) * 1000)
 
-        # 응답 구조 개선 - score, version, source_system 포함
         citations = []
         for c in resp.get('citations', []):
             refs = []
@@ -757,11 +802,10 @@ def handle_query(event):
 
         citation_count = sum(len(c.get('references', [])) for c in citations)
 
-        # 구조화 로그
         logger.info(json.dumps({
             'event': 'rag_query', 'query_length': len(query), 'search_type': search_type,
             'citation_count': citation_count, 'response_time_ms': response_time_ms,
-            'has_filter': bedrock_filter is not None
+            'has_filter': bedrock_filter is not None, 'verification_pipeline': False
         }))
 
         if citation_count == 0:
@@ -1362,6 +1406,90 @@ def _cascade_deprecated(table, deprecated_claim_id):
         logger.error(f"Deprecated cascade scan failed: {e}")
 
 
+def search_archive(event):
+    """POST /rag/search-archive — Bedrock KB 검색 + topic/source 메타데이터 필터
+    Requirements: 8.1, 8.4, 8.5
+    """
+    body = parse_body(event)
+    query = body.get('query', '')
+
+    if not query:
+        return response(400, {'error': 'missing required parameter: query'})
+
+    topic = body.get('topic', '')
+    source = body.get('source', '')
+    max_results = int(body.get('max_results', 5))
+
+    if not BEDROCK_KB_ID:
+        return response(200, {
+            'message': 'Bedrock KB ID not configured',
+            'query': query,
+            'results': []
+        })
+
+    try:
+        bedrock_runtime = boto3.client('bedrock-agent-runtime', region_name=BACKEND_REGION)
+
+        # 메타데이터 필터 구성 (topic/source)
+        filter_conditions = []
+        if topic:
+            filter_conditions.append({'equals': {'key': 'topic', 'value': topic}})
+        if source:
+            if source not in VALID_SOURCES:
+                return response(400, {'error': f'invalid source value: {source}. allowed: {sorted(VALID_SOURCES)}'})
+            filter_conditions.append({'equals': {'key': 'source', 'value': source}})
+
+        bedrock_filter = None
+        if len(filter_conditions) == 1:
+            bedrock_filter = filter_conditions[0]
+        elif len(filter_conditions) > 1:
+            bedrock_filter = {'andAll': filter_conditions}
+
+        vector_config = {
+            'searchType': os.environ.get('SEARCH_TYPE', 'HYBRID'),
+            'numberOfResults': max_results
+        }
+        if bedrock_filter:
+            vector_config['filter'] = bedrock_filter
+
+        resp = bedrock_runtime.retrieve_and_generate(
+            input={'text': query},
+            retrieveAndGenerateConfiguration={
+                'type': 'KNOWLEDGE_BASE',
+                'knowledgeBaseConfiguration': {
+                    'knowledgeBaseId': BEDROCK_KB_ID,
+                    'modelArn': os.environ.get('FOUNDATION_MODEL_ARN',
+                        'us.anthropic.claude-3-5-haiku-20241022-v1:0'),
+                    'retrievalConfiguration': {
+                        'vectorSearchConfiguration': vector_config
+                    }
+                }
+            }
+        )
+
+        # 응답 구조화
+        results = []
+        for c in resp.get('citations', []):
+            for r in c.get('retrievedReferences', []):
+                results.append({
+                    'uri': r.get('location', {}).get('s3Location', {}).get('uri', ''),
+                    'score': r.get('metadata', {}).get('score', r.get('score', None)),
+                    'text': c.get('generatedResponsePart', {}).get('textResponsePart', {}).get('text', '')
+                })
+
+        return response(200, {
+            'query': query,
+            'answer': resp.get('output', {}).get('text', ''),
+            'results': results,
+            'count': len(results),
+            'filters': {'topic': topic, 'source': source} if (topic or source) else None
+        })
+
+    except Exception as e:
+        logger.error(f"search_archive error: {e}")
+        return response(500, {'error': str(e)})
+
+
 def get_evidence(event):
     """POST /rag/get-evidence — claim의 evidence 배열 반환
     Requirements: 8.2
@@ -1432,6 +1560,372 @@ def list_verified_claims(event):
         'claims': claims,
         'count': len(claims)
     })
+
+
+# ============================================================================
+# Verification Pipeline (Task 5.4)
+# Requirements: 9.1~9.9
+# ============================================================================
+
+def verification_pipeline(query, variant=None):
+    """8단계 Verification Pipeline 실행
+    (1) 질문 수신 → (2) topic 식별 → (3) claim 검색 → (3.5) Neptune placeholder
+    → (4) evidence 추적 → (5) 충돌 검사 → (6) 버전 확인 → (7) 답변 생성 → (8) evidence 첨부
+    Requirements: 9.1~9.9
+    """
+    pipeline_start = time.time()
+    step_times = {}
+
+    # CloudWatch 메트릭 클라이언트
+    try:
+        cloudwatch = boto3.client('cloudwatch', region_name='ap-northeast-2')
+    except Exception:
+        cloudwatch = None
+
+    def _log_step(step_name, start_ts):
+        elapsed_ms = int((time.time() - start_ts) * 1000)
+        step_times[step_name] = elapsed_ms
+        logger.info(json.dumps({
+            'event': 'verification_pipeline_step',
+            'step': step_name,
+            'execution_time_ms': elapsed_ms,
+            'query_length': len(query)
+        }))
+
+    # (1) 질문 수신
+    step_start = time.time()
+    logger.info(json.dumps({'event': 'verification_pipeline_start', 'query_length': len(query), 'variant': variant}))
+    _log_step('1_receive_query', step_start)
+
+    # (2) Foundation Model로 topic 식별 (최대 3개)
+    step_start = time.time()
+    topics_identified = _identify_topics(query)
+    _log_step('2_topic_identification', step_start)
+
+    if not topics_identified:
+        # topic 식별 실패 시 Bedrock KB 폴백
+        return _bedrock_kb_fallback(query, pipeline_start, step_times, topics_identified)
+
+    # (3) Claim DB에서 verified claim 검색
+    step_start = time.time()
+    table = dynamodb.Table(CLAIM_DB_TABLE)
+    verified_claims = []
+
+    for topic in topics_identified:
+        try:
+            if variant:
+                # variant 파라미터 포함 시 topic-variant-index GSI 사용 (Requirements 9.9)
+                topic_variant_key = f"{topic}#{variant}"
+                result = table.query(
+                    IndexName='topic-variant-index',
+                    KeyConditionExpression='topic_variant = :tv',
+                    FilterExpression='#s = :v AND is_latest = :il',
+                    ExpressionAttributeNames={'#s': 'status'},
+                    ExpressionAttributeValues={':tv': topic_variant_key, ':v': 'verified', ':il': True}
+                )
+            else:
+                # topic-index GSI 사용 (Requirements 9.3)
+                result = table.query(
+                    IndexName='topic-index',
+                    KeyConditionExpression='topic = :t',
+                    FilterExpression='#s = :v AND is_latest = :il',
+                    ExpressionAttributeNames={'#s': 'status'},
+                    ExpressionAttributeValues={':t': topic, ':v': 'verified', ':il': True}
+                )
+            verified_claims.extend(result.get('Items', []))
+        except Exception as e:
+            logger.error(f"Claim DB query failed for topic {topic}: {e}")
+
+    _log_step('3_claim_search', step_start)
+
+    # Claim 없으면 Bedrock KB 폴백 (Requirements 9.7)
+    if not verified_claims:
+        return _bedrock_kb_fallback(query, pipeline_start, step_times, topics_identified)
+
+    # (3.5) Neptune graph traversal — Phase 6 placeholder
+    step_start = time.time()
+    # TODO: Phase 6에서 Neptune Gremlin Read-Only 쿼리 추가
+    _log_step('3.5_neptune_graph', step_start)
+
+    # (4) Evidence 근거 추적
+    step_start = time.time()
+    all_evidence = []
+    for claim in verified_claims:
+        evidence_list = claim.get('evidence', [])
+        for ev in evidence_list:
+            ev['claim_id'] = claim.get('claim_id')
+            all_evidence.append(ev)
+    _log_step('4_evidence_tracking', step_start)
+
+    # (5) 충돌 검사 — conflicted claim 존재 여부 확인 (Requirements 9.4)
+    step_start = time.time()
+    has_conflicts = False
+    for topic in topics_identified:
+        try:
+            conflict_result = table.query(
+                IndexName='topic-index',
+                KeyConditionExpression='topic = :t',
+                FilterExpression='#s = :cs',
+                ExpressionAttributeNames={'#s': 'status'},
+                ExpressionAttributeValues={':t': topic, ':cs': 'conflicted'}
+            )
+            if conflict_result.get('Items'):
+                has_conflicts = True
+                break
+        except Exception as e:
+            logger.error(f"Conflict check failed for topic {topic}: {e}")
+    _log_step('5_conflict_check', step_start)
+
+    # (6) 버전 확인 — is_latest=true만 사용 (이미 필터링됨)
+    step_start = time.time()
+    latest_claims = [c for c in verified_claims if c.get('is_latest', False)]
+    _log_step('6_version_check', step_start)
+
+    # (7) Foundation Model로 답변 생성 (Requirements 9.5)
+    step_start = time.time()
+    answer = _generate_answer_from_claims(query, latest_claims, has_conflicts)
+    _log_step('7_answer_generation', step_start)
+
+    # (8) Evidence 첨부
+    step_start = time.time()
+    claims_used = list(set(c.get('claim_id', '') for c in latest_claims))
+    citations = []
+    for claim in latest_claims:
+        for ev in claim.get('evidence', []):
+            citations.append({
+                'text': ev.get('source_chunk', ''),
+                'references': [{
+                    'uri': ev.get('source_document_id', ''),
+                    'claim_id': claim.get('claim_id', ''),
+                    'source_type': ev.get('source_type', ''),
+                    'page_number': ev.get('page_number')
+                }]
+            })
+    _log_step('8_evidence_attachment', step_start)
+
+    pipeline_execution_time_ms = int((time.time() - pipeline_start) * 1000)
+
+    # KPI: AvgEvidenceCountPerAnswer (Requirements 15.5)
+    avg_evidence = len(all_evidence) / max(len(latest_claims), 1)
+    _publish_metric(cloudwatch, 'AvgEvidenceCountPerAnswer', avg_evidence, 'Count')
+
+    logger.info(json.dumps({
+        'event': 'verification_pipeline_complete',
+        'pipeline_execution_time_ms': pipeline_execution_time_ms,
+        'claims_used': len(claims_used),
+        'topics_identified': topics_identified,
+        'has_conflicts': has_conflicts,
+        'fallback': False,
+        'step_times': step_times
+    }))
+
+    return {
+        'answer': answer,
+        'citations': citations,
+        'verification_metadata': {
+            'claims_used': claims_used,
+            'topics_identified': topics_identified,
+            'has_conflicts': has_conflicts,
+            'pipeline_execution_time_ms': pipeline_execution_time_ms,
+            'fallback': False
+        }
+    }
+
+
+def _identify_topics(query):
+    """Foundation Model로 질의에서 topic 식별 (최대 3개)
+    Requirements: 9.2
+    """
+    try:
+        bedrock_runtime = boto3.client('bedrock-runtime', region_name=BACKEND_REGION)
+        model_id = os.environ.get('FOUNDATION_MODEL_ARN', 'us.anthropic.claude-3-5-haiku-20241022-v1:0')
+
+        prompt = f"""다음 질문에서 관련 기술 주제(topic)를 최대 3개 식별하세요.
+topic은 계층적 형식(슬래시 구분)으로 반환하세요.
+예: ["ucie/phy/ltssm", "ahb/signal/haddr", "soc/clock"]
+
+JSON 배열만 반환하세요. 다른 텍스트는 포함하지 마세요.
+
+질문: {query}"""
+
+        resp = bedrock_runtime.invoke_model(
+            modelId=model_id,
+            contentType='application/json',
+            accept='application/json',
+            body=json.dumps({
+                'anthropic_version': 'bedrock-2023-05-31',
+                'max_tokens': 256,
+                'messages': [{'role': 'user', 'content': prompt}]
+            })
+        )
+
+        resp_body = json.loads(resp['body'].read())
+        content_text = resp_body.get('content', [{}])[0].get('text', '[]')
+
+        json_match = re.search(r'\[.*?\]', content_text, re.DOTALL)
+        if json_match:
+            topics = json.loads(json_match.group())
+            # 최대 3개로 제한
+            return [t for t in topics if isinstance(t, str) and '/' in t][:3]
+        return []
+
+    except Exception as e:
+        logger.error(f"Topic identification failed: {e}")
+        return []
+
+
+def _generate_answer_from_claims(query, claims, has_conflicts):
+    """Verified claim 기반 답변 생성 (Requirements 9.5)"""
+    try:
+        bedrock_runtime = boto3.client('bedrock-runtime', region_name=BACKEND_REGION)
+        model_id = os.environ.get('FOUNDATION_MODEL_ARN', 'us.anthropic.claude-3-5-haiku-20241022-v1:0')
+
+        # claim context 구성
+        claims_context = ""
+        for i, claim in enumerate(claims):
+            claims_context += f"\n[Claim {i+1}] (confidence: {claim.get('confidence', 'N/A')})\n"
+            claims_context += f"  Statement: {claim.get('statement', '')}\n"
+            for ev in claim.get('evidence', []):
+                claims_context += f"  Evidence: {ev.get('source_chunk', '')[:200]}\n"
+
+        conflict_warning = ""
+        if has_conflicts:
+            conflict_warning = "\n주의: 일부 정보에 충돌이 감지되었습니다. 답변에 이 사실을 언급하세요."
+
+        prompt = f"""다음 검증된 claim들을 기반으로 질문에 답변하세요.
+claim의 statement와 evidence만 사용하여 정확한 답변을 생성하세요.{conflict_warning}
+
+검증된 Claim 목록:
+{claims_context}
+
+질문: {query}"""
+
+        resp = bedrock_runtime.invoke_model(
+            modelId=model_id,
+            contentType='application/json',
+            accept='application/json',
+            body=json.dumps({
+                'anthropic_version': 'bedrock-2023-05-31',
+                'max_tokens': 2048,
+                'messages': [{'role': 'user', 'content': prompt}]
+            })
+        )
+
+        resp_body = json.loads(resp['body'].read())
+        answer = resp_body.get('content', [{}])[0].get('text', '')
+
+        # 충돌 경고 메시지 추가 (Requirements 9.4)
+        if has_conflicts and '충돌' not in answer:
+            answer += "\n\n⚠️ 일부 정보에 충돌이 감지되었습니다. 최신 검증 결과를 확인하세요."
+
+        return answer
+
+    except Exception as e:
+        logger.error(f"Answer generation from claims failed: {e}")
+        return f"검증된 claim을 기반으로 답변을 생성하지 못했습니다: {str(e)}"
+
+
+def _bedrock_kb_fallback(query, pipeline_start, step_times, topics_identified):
+    """Claim DB에 관련 claim 없을 때 Bedrock KB 폴백 (Requirements 9.7)"""
+    try:
+        cloudwatch = boto3.client('cloudwatch', region_name='ap-northeast-2')
+    except Exception:
+        cloudwatch = None
+
+    # KPI: BedrockKBFallbackRate 증가 (Requirements 15.4)
+    _publish_metric(cloudwatch, 'BedrockKBFallbackRate', 1, 'Count')
+
+    try:
+        bedrock_runtime = boto3.client('bedrock-agent-runtime', region_name=BACKEND_REGION)
+
+        vector_config = {
+            'searchType': os.environ.get('SEARCH_TYPE', 'HYBRID'),
+            'numberOfResults': int(os.environ.get('SEARCH_RESULTS_COUNT', '5'))
+        }
+
+        resp = bedrock_runtime.retrieve_and_generate(
+            input={'text': query},
+            retrieveAndGenerateConfiguration={
+                'type': 'KNOWLEDGE_BASE',
+                'knowledgeBaseConfiguration': {
+                    'knowledgeBaseId': BEDROCK_KB_ID,
+                    'modelArn': os.environ.get('FOUNDATION_MODEL_ARN',
+                        'us.anthropic.claude-3-5-haiku-20241022-v1:0'),
+                    'retrievalConfiguration': {
+                        'vectorSearchConfiguration': vector_config
+                    }
+                }
+            }
+        )
+
+        citations = []
+        for c in resp.get('citations', []):
+            refs = []
+            for r in c.get('retrievedReferences', []):
+                refs.append({
+                    'uri': r.get('location', {}).get('s3Location', {}).get('uri', ''),
+                    'score': r.get('metadata', {}).get('score', r.get('score', None))
+                })
+            citations.append({
+                'text': c.get('generatedResponsePart', {}).get('textResponsePart', {}).get('text', ''),
+                'references': refs
+            })
+
+        pipeline_execution_time_ms = int((time.time() - pipeline_start) * 1000)
+
+        logger.info(json.dumps({
+            'event': 'verification_pipeline_fallback',
+            'pipeline_execution_time_ms': pipeline_execution_time_ms,
+            'topics_identified': topics_identified,
+            'step_times': step_times
+        }))
+
+        return {
+            'answer': resp.get('output', {}).get('text', ''),
+            'citations': citations,
+            'verification_metadata': {
+                'claims_used': [],
+                'topics_identified': topics_identified,
+                'has_conflicts': False,
+                'pipeline_execution_time_ms': pipeline_execution_time_ms,
+                'fallback': True
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"Bedrock KB fallback failed: {e}")
+        pipeline_execution_time_ms = int((time.time() - pipeline_start) * 1000)
+        return {
+            'answer': f'Verification Pipeline 및 Bedrock KB 폴백 모두 실패: {str(e)}',
+            'citations': [],
+            'verification_metadata': {
+                'claims_used': [],
+                'topics_identified': topics_identified,
+                'has_conflicts': False,
+                'pipeline_execution_time_ms': pipeline_execution_time_ms,
+                'fallback': True
+            }
+        }
+
+
+def _publish_metric(cloudwatch, metric_name, value, unit):
+    """CloudWatch 커스텀 메트릭 발행 (BOS-AI/ClaimDB 네임스페이스)
+    Requirements: 15.1~15.8
+    """
+    if not cloudwatch:
+        return
+    try:
+        cloudwatch.put_metric_data(
+            Namespace='BOS-AI/ClaimDB',
+            MetricData=[{
+                'MetricName': metric_name,
+                'Value': float(value),
+                'Unit': unit,
+                'Timestamp': datetime.utcnow()
+            }]
+        )
+    except Exception as e:
+        logger.warning(f"Failed to publish metric {metric_name}: {e}")
 
 
 # ============================================================================

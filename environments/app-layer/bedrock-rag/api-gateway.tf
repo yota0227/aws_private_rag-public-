@@ -468,6 +468,161 @@ resource "aws_api_gateway_integration" "documents_delete_lambda" {
 }
 
 # ----------------------------------------------------------------------------
+# Phase 2/3: Claim DB + MCP Tool 라우트
+# Requirements: 5.1~5.3, 8.1~8.5
+# ----------------------------------------------------------------------------
+
+# /rag/claims resource
+resource "aws_api_gateway_resource" "claims" {
+  provider = aws.seoul
+
+  rest_api_id = aws_api_gateway_rest_api.private_rag.id
+  parent_id   = aws_api_gateway_resource.rag.id
+  path_part   = "claims"
+}
+
+# POST /rag/claims (Claim 생성)
+resource "aws_api_gateway_method" "claims_post" {
+  provider = aws.seoul
+
+  rest_api_id   = aws_api_gateway_rest_api.private_rag.id
+  resource_id   = aws_api_gateway_resource.claims.id
+  http_method   = "POST"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "claims_lambda" {
+  provider = aws.seoul
+
+  rest_api_id             = aws_api_gateway_rest_api.private_rag.id
+  resource_id             = aws_api_gateway_resource.claims.id
+  http_method             = aws_api_gateway_method.claims_post.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.document_processor.invoke_arn
+}
+
+# /rag/claims/update-status resource
+resource "aws_api_gateway_resource" "claims_update_status" {
+  provider = aws.seoul
+
+  rest_api_id = aws_api_gateway_rest_api.private_rag.id
+  parent_id   = aws_api_gateway_resource.claims.id
+  path_part   = "update-status"
+}
+
+# POST /rag/claims/update-status (Claim 상태 전이)
+resource "aws_api_gateway_method" "claims_update_status_post" {
+  provider = aws.seoul
+
+  rest_api_id   = aws_api_gateway_rest_api.private_rag.id
+  resource_id   = aws_api_gateway_resource.claims_update_status.id
+  http_method   = "POST"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "claims_update_status_lambda" {
+  provider = aws.seoul
+
+  rest_api_id             = aws_api_gateway_rest_api.private_rag.id
+  resource_id             = aws_api_gateway_resource.claims_update_status.id
+  http_method             = aws_api_gateway_method.claims_update_status_post.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.document_processor.invoke_arn
+}
+
+# /rag/search-archive resource
+resource "aws_api_gateway_resource" "search_archive" {
+  provider = aws.seoul
+
+  rest_api_id = aws_api_gateway_rest_api.private_rag.id
+  parent_id   = aws_api_gateway_resource.rag.id
+  path_part   = "search-archive"
+}
+
+# POST /rag/search-archive (Archive 검색)
+resource "aws_api_gateway_method" "search_archive_post" {
+  provider = aws.seoul
+
+  rest_api_id   = aws_api_gateway_rest_api.private_rag.id
+  resource_id   = aws_api_gateway_resource.search_archive.id
+  http_method   = "POST"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "search_archive_lambda" {
+  provider = aws.seoul
+
+  rest_api_id             = aws_api_gateway_rest_api.private_rag.id
+  resource_id             = aws_api_gateway_resource.search_archive.id
+  http_method             = aws_api_gateway_method.search_archive_post.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.document_processor.invoke_arn
+}
+
+# /rag/get-evidence resource
+resource "aws_api_gateway_resource" "get_evidence" {
+  provider = aws.seoul
+
+  rest_api_id = aws_api_gateway_rest_api.private_rag.id
+  parent_id   = aws_api_gateway_resource.rag.id
+  path_part   = "get-evidence"
+}
+
+# POST /rag/get-evidence (Evidence 조회)
+resource "aws_api_gateway_method" "get_evidence_post" {
+  provider = aws.seoul
+
+  rest_api_id   = aws_api_gateway_rest_api.private_rag.id
+  resource_id   = aws_api_gateway_resource.get_evidence.id
+  http_method   = "POST"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "get_evidence_lambda" {
+  provider = aws.seoul
+
+  rest_api_id             = aws_api_gateway_rest_api.private_rag.id
+  resource_id             = aws_api_gateway_resource.get_evidence.id
+  http_method             = aws_api_gateway_method.get_evidence_post.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.document_processor.invoke_arn
+}
+
+# /rag/list-verified-claims resource
+resource "aws_api_gateway_resource" "list_verified_claims" {
+  provider = aws.seoul
+
+  rest_api_id = aws_api_gateway_rest_api.private_rag.id
+  parent_id   = aws_api_gateway_resource.rag.id
+  path_part   = "list-verified-claims"
+}
+
+# POST /rag/list-verified-claims (검증된 Claim 목록)
+resource "aws_api_gateway_method" "list_verified_claims_post" {
+  provider = aws.seoul
+
+  rest_api_id   = aws_api_gateway_rest_api.private_rag.id
+  resource_id   = aws_api_gateway_resource.list_verified_claims.id
+  http_method   = "POST"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "list_verified_claims_lambda" {
+  provider = aws.seoul
+
+  rest_api_id             = aws_api_gateway_rest_api.private_rag.id
+  resource_id             = aws_api_gateway_resource.list_verified_claims.id
+  http_method             = aws_api_gateway_method.list_verified_claims_post.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.document_processor.invoke_arn
+}
+
+# ----------------------------------------------------------------------------
 # Deployment & Stage
 # ----------------------------------------------------------------------------
 
@@ -492,6 +647,11 @@ resource "aws_api_gateway_deployment" "main" {
       aws_api_gateway_resource.documents_extract.id,
       aws_api_gateway_resource.documents_extract_status.id,
       aws_api_gateway_resource.documents_delete.id,
+      aws_api_gateway_resource.claims.id,
+      aws_api_gateway_resource.claims_update_status.id,
+      aws_api_gateway_resource.search_archive.id,
+      aws_api_gateway_resource.get_evidence.id,
+      aws_api_gateway_resource.list_verified_claims.id,
       aws_api_gateway_method.query_post.id,
       aws_api_gateway_method.documents_get.id,
       aws_api_gateway_method.documents_initiate_post.id,
@@ -505,6 +665,11 @@ resource "aws_api_gateway_deployment" "main" {
       aws_api_gateway_method.documents_extract_post.id,
       aws_api_gateway_method.documents_extract_status_get.id,
       aws_api_gateway_method.documents_delete_post.id,
+      aws_api_gateway_method.claims_post.id,
+      aws_api_gateway_method.claims_update_status_post.id,
+      aws_api_gateway_method.search_archive_post.id,
+      aws_api_gateway_method.get_evidence_post.id,
+      aws_api_gateway_method.list_verified_claims_post.id,
       aws_api_gateway_integration.query_lambda.id,
       aws_api_gateway_integration.documents_get_lambda.id,
       aws_api_gateway_integration.documents_initiate_lambda.id,
@@ -518,6 +683,11 @@ resource "aws_api_gateway_deployment" "main" {
       aws_api_gateway_integration.documents_extract_lambda.id,
       aws_api_gateway_integration.documents_extract_status_lambda.id,
       aws_api_gateway_integration.documents_delete_lambda.id,
+      aws_api_gateway_integration.claims_lambda.id,
+      aws_api_gateway_integration.claims_update_status_lambda.id,
+      aws_api_gateway_integration.search_archive_lambda.id,
+      aws_api_gateway_integration.get_evidence_lambda.id,
+      aws_api_gateway_integration.list_verified_claims_lambda.id,
     ]))
   }
 

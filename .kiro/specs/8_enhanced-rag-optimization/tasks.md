@@ -189,15 +189,15 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
   - Claim CRUD 함수 및 Ingestion 파이프라인 동작 확인
 
 
-- [ ] 5. Phase 3: MCP Tool 분리 및 Verification Pipeline
-  - [ ] 5.1 MCP Tool API 엔드포인트 구현 (`environments/app-layer/bedrock-rag/lambda_src/index.py` 수정)
+- [x] 5. Phase 3: MCP Tool 분리 및 Verification Pipeline
+  - [x] 5.1 MCP Tool API 엔드포인트 구현 (`environments/app-layer/bedrock-rag/lambda_src/index.py` 수정)
     - `search_archive()`: query(필수) + topic/source/max_results(선택) → Bedrock_KB 검색 + 필터
     - `handler()` 라우팅에 POST `/rag/search-archive`, `/rag/get-evidence`, `/rag/list-verified-claims` 추가
     - 잘못된 파라미터 시 HTTP 400 + 누락/잘못된 파라미터 명시
     - API Gateway에 3개 라우트 추가 (`environments/app-layer/bedrock-rag/api-gateway.tf` 수정)
     - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5_
 
-  - [ ] 5.2 MCP Bridge 도구 확장 (`mcp-bridge/server.js` 수정)
+  - [x] 5.2 MCP Bridge 도구 확장 (`mcp-bridge/server.js` 수정)
     - `search_archive` 도구 추가: query(필수), topic/source/max_results(선택) → POST /rag/search-archive
     - `get_evidence` 도구 추가: claim_id(필수) → POST /rag/get-evidence
     - `list_verified_claims` 도구 추가: topic(필수) → POST /rag/list-verified-claims
@@ -209,7 +209,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - **Validates: Requirements 8.6**
     - 모든 MCP Tool 응답에 execution_time_ms 존재 및 양의 정수 검증
 
-  - [ ] 5.4 Verification Pipeline 구현 (`environments/app-layer/bedrock-rag/lambda_src/index.py` 수정)
+  - [x] 5.4 Verification Pipeline 구현 (`environments/app-layer/bedrock-rag/lambda_src/index.py` 수정)
     - `verification_pipeline(query, variant=None)`: 8단계 순차 실행
     - (1) 질문 수신 → (2) Foundation_Model로 topic 식별(최대 3개) → (3) topic-index GSI로 verified claim 조회 → (4) evidence 근거 추적 → (5) 충돌 검사(conflicted claim 존재 시 경고) → (6) 버전 확인(is_latest=true) → (7) Foundation_Model로 답변 생성 → (8) evidence 첨부
     - variant 파라미터 포함 시 topic-variant-index GSI 사용
@@ -229,7 +229,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - **Validates: Requirements 9.4**
     - conflicted claim 존재 시 has_conflicts=true + 답변에 충돌 경고 메시지 포함 검증
 
-  - [ ] 5.7 3계층 RAG 분리 IAM 역할 구성 (`environments/app-layer/bedrock-rag/lambda.tf` 수정)
+  - [x] 5.7 3계층 RAG 분리 IAM 역할 구성 (`environments/app-layer/bedrock-rag/lambda.tf` 수정)
     - RTL_Parser_Lambda: RTL_S3_Bucket 읽기 + RTL_OpenSearch_Index 쓰기만
     - Lambda_Handler: Seoul_S3 읽기/쓰기 + Claim_DB 읽기/쓰기 + Bedrock_KB 호출만
     - CloudWatch PutMetricData 권한 추가 (BOS-AI/ClaimDB 네임스페이스)
