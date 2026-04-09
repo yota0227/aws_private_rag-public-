@@ -6,8 +6,8 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
 
 ## Tasks
 
-- [ ] 1. Phase 1: RTL 파이프라인 및 인프라 격리
-  - [ ] 1.1 RTL 전용 S3 버킷 Terraform 구성 (`environments/app-layer/bedrock-rag/rtl-s3.tf`)
+- [-] 1. Phase 1: RTL 파이프라인 및 인프라 격리
+  - [x] 1.1 RTL 전용 S3 버킷 Terraform 구성 (`environments/app-layer/bedrock-rag/rtl-s3.tf`)
     - `aws_s3_bucket.rtl_codes` 리소스 생성 (버킷명: `bos-ai-rtl-codes-${account_id}`, Seoul 리전)
     - `object_lock_enabled = true` + Governance 모드 365일 retention
     - 버전 관리(versioning) 활성화
@@ -25,7 +25,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - `tests/properties/enhanced_rag_optimization_test.go`에 작성
     - Object Lock Governance 모드, KMS CMK 암호화, Block Public Access 4개 true, 필수 태그 검증
 
-  - [ ] 1.3 RTL Parser Lambda Terraform 구성 (`environments/app-layer/bedrock-rag/rtl-parser-lambda.tf`)
+  - [x] 1.3 RTL Parser Lambda Terraform 구성 (`environments/app-layer/bedrock-rag/rtl-parser-lambda.tf`)
     - Lambda 함수 리소스: Python 3.12, 메모리 2048MB, 타임아웃 300초
     - VPC 구성: BOS-AI Frontend VPC (10.10.0.0/16) 내 실행
     - IAM 역할: RTL_S3_Bucket GetObject(`rtl-sources/*`)/PutObject(`rtl-parsed/*`), OpenSearch 인덱싱, CloudWatch Logs, KMS, Bedrock InvokeModel, DynamoDB PutItem(에러 테이블)
@@ -38,7 +38,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - **Validates: Requirements 2.8, 13.1, 13.2**
     - Python 3.12 런타임, 2048MB 메모리, 300초 타임아웃, Frontend VPC, IAM 최소 권한 검증
 
-  - [ ] 1.5 RTL Parser Lambda 소스 코드 구현 (`environments/app-layer/bedrock-rag/rtl_parser_src/handler.py`)
+  - [x] 1.5 RTL Parser Lambda 소스 코드 구현 (`environments/app-layer/bedrock-rag/rtl_parser_src/handler.py`)
     - `handler(event, context)`: S3 Event Notification 핸들러
     - `parse_rtl_to_ast(rtl_content: str) -> dict`: 정규식 기반 RTL 파싱 (module_name, parent_module, port_list, parameter_list, instance_list, file_path)
     - `generate_parsed_summary(metadata: dict) -> str`: 메타데이터 텍스트 요약 (모듈 선언부 + 포트 선언부만, 원본 RTL 소스 전체 미포함)
@@ -65,13 +65,13 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - **Validates: Requirements 2.6, 2.7**
     - 파싱 불가 콘텐츠에 대해 에러 레코드 생성 + parsed_summary에 원본 전체 미포함 검증
 
-  - [ ] 1.9 OpenSearch 데이터 액세스 정책 Terraform 구성 (`environments/app-layer/bedrock-rag/opensearch.tf` 수정)
+  - [x] 1.9 OpenSearch 데이터 액세스 정책 Terraform 구성 (`environments/app-layer/bedrock-rag/opensearch.tf` 수정)
     - RTL_Parser_Lambda IAM 역할에 인덱싱 권한 부여
     - Bedrock_KB 서비스 프린시펄에 검색 권한 부여
     - 기존 문서 인덱스와 RTL 인덱스 독립 유지
     - _Requirements: 3.1, 3.5, 3.6_
 
-  - [ ] 1.10 RTL OpenSearch 인덱스 생성 스크립트 (`scripts/create-opensearch-index.py`)
+  - [x] 1.10 RTL OpenSearch 인덱스 생성 스크립트 (`scripts/create-opensearch-index.py`)
     - SigV4 인증(`requests-aws4auth`)으로 OpenSearch Serverless 접근
     - `rtl-knowledge-base-index` 인덱스 생성
     - 필드 매핑: embedding(knn_vector, 1024, faiss, l2), module_name(keyword), parent_module(keyword), port_list(text), parameter_list(text), instance_list(text), file_path(keyword), parsed_summary(text)
@@ -82,7 +82,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - **Validates: Requirements 3.3, 3.4**
     - 8개 필드 존재 및 올바른 타입, knn_vector dimension=1024, engine=faiss, space_type=l2 검증
 
-  - [ ] 1.12 IAM Explicit Deny 정책 구성 (`environments/app-layer/bedrock-rag/lambda.tf` 수정)
+  - [x] 1.12 IAM Explicit Deny 정책 구성 (`environments/app-layer/bedrock-rag/lambda.tf` 수정)
     - Lambda_Handler IAM 역할에 Explicit Deny 정책 추가
     - Seoul_S3 `documents/*` 접두사에 대한 `s3:PutObject`, `s3:DeleteObject`, `s3:DeleteObjectVersion`, `s3:BypassGovernanceRetention`, `s3:PutObjectRetention` 거부
     - RTL_S3_Bucket `rtl-sources/*` 접두사에 대한 동일 5개 액션 거부

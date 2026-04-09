@@ -69,3 +69,52 @@ output "opensearch_security_group_id" {
   description = "OpenSearch VPC Endpoint SG ID"
   value       = aws_security_group.opensearch.id
 }
+
+# ---------------------------------------------------------------------------
+# RTL OpenSearch Index 데이터 액세스 정책 (Phase 1 - Requirements 3.1, 3.5, 3.6)
+# ---------------------------------------------------------------------------
+
+resource "aws_opensearchserverless_access_policy" "rtl_index" {
+  name        = "rtl-index-access-${var.environment}"
+  type        = "data"
+  description = "RTL Parser Lambda 인덱싱 + Bedrock KB 검색 권한"
+
+  policy = jsonencode([
+    {
+      Rules = [
+        {
+          # RTL Parser Lambda: 인덱싱 권한
+          ResourceType = "index"
+          Resource     = ["index/bos-ai-vectors/rtl-knowledge-base-index"]
+          Permission   = [
+            "aoss:CreateIndex",
+            "aoss:WriteDocument",
+            "aoss:UpdateIndex",
+            "aoss:DescribeIndex",
+          ]
+          Principal = [aws_iam_role.rtl_parser_lambda.arn]
+        },
+        {
+          # Bedrock KB 서비스 프린시펄: 검색 권한
+          ResourceType = "index"
+          Resource     = ["index/bos-ai-vectors/rtl-knowledge-base-index"]
+          Permission   = [
+            "aoss:ReadDocument",
+            "aoss:DescribeIndex",
+          ]
+          Principal = ["bedrock.amazonaws.com"]
+        },
+        {
+          # Lambda Handler: 검색 권한 (Verification Pipeline)
+          ResourceType = "index"
+          Resource     = ["index/bos-ai-vectors/rtl-knowledge-base-index"]
+          Permission   = [
+            "aoss:ReadDocument",
+            "aoss:DescribeIndex",
+          ]
+          Principal = [aws_iam_role.lambda.arn]
+        },
+      ]
+    }
+  ])
+}

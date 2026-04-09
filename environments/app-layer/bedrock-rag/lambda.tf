@@ -300,6 +300,38 @@ resource "aws_iam_role_policy" "lambda_self_invoke" {
   })
 }
 
+# IAM Explicit Deny - Source of Truth 버킷 보호
+# prompt injection 공격으로 인한 원본 문서 변조를 인프라 수준에서 차단
+# Versioning + Object Lock 환경에서 버전 삭제 및 Lock 우회도 차단
+# Requirements: 12.1, 13.9
+resource "aws_iam_role_policy" "lambda_source_of_truth_deny" {
+  name = "lambda-source-of-truth-deny"
+  role = aws_iam_role.lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "DenySourceOfTruthWrite"
+        Effect = "Deny"
+        Action = [
+          "s3:PutObject",
+          "s3:DeleteObject",
+          "s3:DeleteObjectVersion",
+          "s3:BypassGovernanceRetention",
+          "s3:PutObjectRetention",
+        ]
+        Resource = [
+          # Seoul_S3 원본 문서 접두사
+          "${aws_s3_bucket.documents_seoul.arn}/documents/*",
+          # RTL_S3_Bucket 원본 코드 접두사
+          "arn:aws:s3:::bos-ai-rtl-codes-${data.aws_caller_identity.current.account_id}/rtl-sources/*",
+        ]
+      }
+    ]
+  })
+}
+
 # Lambda Function - Seoul Private RAG VPC
 # Requirements: 2.1, 2.2, 2.11
 resource "aws_lambda_function" "document_processor" {
