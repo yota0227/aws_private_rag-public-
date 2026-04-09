@@ -275,8 +275,8 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
   - Human Review Gate + HDD 생성 + 마크다운 출판 통합 동작 확인
 
 
-- [ ] 9. Phase 5: Cross-Check 파이프라인 및 KPI 모니터링
-  - [ ] 9.1 Cross-Check 파이프라인 구현 (`environments/app-layer/bedrock-rag/lambda_src/index.py` 수정)
+- [x] 9. Phase 5: Cross-Check 파이프라인 및 KPI 모니터링
+  - [x] 9.1 Cross-Check 파이프라인 구현 (`environments/app-layer/bedrock-rag/lambda_src/index.py` 수정)
     - `cross_check_claims()`: Lambda Event 비동기 호출, 지정 topic의 draft claim 대상
     - 1차: Foundation_Model로 claim 정확성 평가 → score_1 (0.0~1.0)
     - 2차: 다른 프롬프트 템플릿으로 재검증 → score_2 (0.0~1.0)
@@ -303,7 +303,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - **Validates: Requirements 11.9**
     - claims_verified + claims_conflicted + claims_pending == total_processed 검증
 
-  - [ ] 9.5 KPI Metrics 발행 구현 (`environments/app-layer/bedrock-rag/lambda_src/index.py` 수정)
+  - [x] 9.5 KPI Metrics 발행 구현 (`environments/app-layer/bedrock-rag/lambda_src/index.py` 수정)
     - `publish_kpi_metrics()`: CloudWatch 커스텀 메트릭 발행 (네임스페이스: BOS-AI/ClaimDB)
     - ClaimIngestionSuccessRate: ingest_claims 완료 시 발행
     - ClaimVerificationPassRate + ContradictionDetectionRate: cross_check_claims 완료 시 발행
@@ -319,7 +319,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - **Validates: Requirements 15.2, 15.3, 15.4, 15.5, 15.6, 15.7**
     - 7개 메트릭 계산 공식 정확성, BOS-AI/ClaimDB 네임스페이스 발행 검증
 
-  - [ ] 9.7 Terraform 변수 및 IAM 최종 정리 (`environments/app-layer/bedrock-rag/variables.tf` 수정)
+  - [x] 9.7 Terraform 변수 및 IAM 최종 정리 (`environments/app-layer/bedrock-rag/variables.tf` 수정)
     - Claim DB 테이블명, RTL S3 버킷명 등 신규 변수 추가
     - Lambda_Handler IAM에 `cloudwatch:PutMetricData` 권한 추가 (BOS-AI/ClaimDB 네임스페이스)
     - 모든 신규 리소스 필수 태그 최종 확인

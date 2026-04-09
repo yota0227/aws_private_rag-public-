@@ -171,3 +171,22 @@ variable "bedrock_kb_data_source_id" {
   type        = string
   default     = ""  # Set after KB data source is created
 }
+
+# Claim DB Configuration (Phase 5)
+variable "claim_db_table_name" {
+  description = "Claim DB DynamoDB 테이블명"
+  type        = string
+  default     = "bos-ai-claim-db-prod"
+}
+
+variable "rtl_s3_bucket_name" {
+  description = "RTL 전용 S3 버킷명 (접두사, account_id 자동 추가)"
+  type        = string
+  default     = "bos-ai-rtl-codes"
+}
+
+variable "cloudwatch_metric_namespace" {
+  description = "CloudWatch 커스텀 메트릭 네임스페이스 (KPI 발행용)"
+  type        = string
+  default     = "BOS-AI/ClaimDB"
+}

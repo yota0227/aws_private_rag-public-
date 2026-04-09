@@ -84,6 +84,8 @@ def handler(event, context):
         return backfill_metadata(event, context)
     if event.get('action') == 'ingest_claims':
         return ingest_claims(event, context)
+    if event.get('action') == 'cross_check_claims':
+        return cross_check_claims(event, context)
 
 
     logger.info(f"Event path: {event.get('path')}, method: {event.get('httpMethod')}")
@@ -2513,6 +2515,17 @@ def ingest_claims(event, context):
             result['continuation_token'] = last_key
 
         logger.info(json.dumps({'event': 'ingest_claims_complete', **result}))
+
+        # KPI 메트릭 발행 (Requirements 15.2)
+        try:
+            cw = boto3.client('cloudwatch', region_name='ap-northeast-2')
+            total_attempts = claims_created + documents_failed
+            if total_attempts > 0:
+                success_rate = (claims_created / total_attempts) * 100
+                _publish_metric(cw, 'ClaimIngestionSuccessRate', success_rate, 'Percent')
+        except Exception as metric_err:
+            logger.warning(f"KPI metric publish failed after ingest_claims: {metric_err}")
+
         return result
 
     except Exception as e:
@@ -2609,6 +2622,411 @@ def _extract_claims_from_document(doc_content, s3_key, topic):
     except Exception as e:
         logger.error(f"LLM claim extraction failed for {s3_key}: {e}")
         return []
+
+
+# ============================================================================
+# Cross-Check 파이프라인 (Task 9.1)
+# Requirements: 11.1~11.10
+# ============================================================================
+
+def _exponential_backoff_jitter(attempt, base_ms=100, max_ms=2000):
+    """Exponential Backoff + Full Jitter (Requirements 5.10, 11.x)
+    sleep = random(0, min(max_ms, base_ms * 2^attempt))
+    """
+    cap = min(max_ms, base_ms * (2 ** attempt))
+    sleep_ms = random.uniform(0, cap)
+    time.sleep(sleep_ms / 1000.0)
+
+
+def _update_claim_with_retry(table, claim_id, current_version, update_expr,
+                              expr_attr_names, expr_attr_values, max_retries=3):
+    """Optimistic locking DynamoDB 업데이트 + Exponential Backoff (Requirements 5.9, 5.10)"""
+    for attempt in range(max_retries):
+        try:
+            table.update_item(
+                Key={'claim_id': claim_id, 'version': current_version},
+                UpdateExpression=update_expr,
+                ExpressionAttributeNames=expr_attr_names,
+                ExpressionAttributeValues=expr_attr_values,
+                ConditionExpression='version = :expected_version'
+            )
+            return True
+        except Exception as e:
+            if 'ConditionalCheckFailedException' in str(e):
+                if attempt < max_retries - 1:
+                    _exponential_backoff_jitter(attempt)
+                    # 최신 버전 다시 읽기
+                    try:
+                        resp = table.get_item(Key={'claim_id': claim_id, 'version': current_version})
+                        item = resp.get('Item')
+                        if item:
+                            current_version = item.get('version', current_version)
+                            expr_attr_values[':expected_version'] = current_version
+                    except Exception:
+                        pass
+                    continue
+                logger.error(f"Optimistic locking failed after {max_retries} retries: claim_id={claim_id}")
+                return False
+            raise
+    return False
+
+
+def _llm_evaluate_claim(bedrock_runtime, claim, prompt_template, model_id):
+    """Foundation Model로 claim 정확성 평가 → score (0.0~1.0)"""
+    try:
+        prompt = prompt_template.format(
+            statement=claim.get('statement', ''),
+            evidence=json.dumps(claim.get('evidence', []), ensure_ascii=False, default=str),
+            topic=claim.get('topic', '')
+        )
+        resp = bedrock_runtime.invoke_model(
+            modelId=model_id,
+            contentType='application/json',
+            accept='application/json',
+            body=json.dumps({
+                'anthropic_version': 'bedrock-2023-05-31',
+                'max_tokens': 256,
+                'messages': [{'role': 'user', 'content': prompt}]
+            })
+        )
+        resp_body = json.loads(resp['body'].read())
+        content_text = resp_body.get('content', [{}])[0].get('text', '0.5')
+        # 숫자 추출
+        score_match = re.search(r'(\d+\.?\d*)', content_text)
+        if score_match:
+            score = float(score_match.group(1))
+            return max(0.0, min(1.0, score))
+        return 0.5
+    except Exception as e:
+        logger.warning(f"LLM claim evaluation failed: {e}")
+        return 0.5
+
+
+def _rule_based_check(claim):
+    """Rule-based checker → score_3 (0.0~1.0) (Requirements 11.4)
+    - evidence S3 존재 확인
+    - statement 10~500자
+    - topic 형식 유효
+    """
+    checks_passed = 0
+    total_checks = 3
+
+    # 1) statement 길이 검증
+    stmt = claim.get('statement', '')
+    if 10 <= len(stmt) <= 500:
+        checks_passed += 1
+
+    # 2) topic 형식 유효성 (비어있지 않고 슬래시 구분 계층적 형식)
+    topic = claim.get('topic', '')
+    if topic and re.match(r'^[a-zA-Z0-9_\-]+(/[a-zA-Z0-9_\-]+)*$', topic):
+        checks_passed += 1
+
+    # 3) evidence S3 존재 확인
+    evidence = claim.get('evidence', [])
+    if evidence:
+        evidence_valid = True
+        for ev in evidence:
+            source_doc = ev.get('source_document_id', '')
+            if source_doc:
+                try:
+                    s3_client.head_object(Bucket=S3_BUCKET_SEOUL, Key=source_doc)
+                except Exception:
+                    evidence_valid = False
+                    break
+            else:
+                evidence_valid = False
+                break
+        if evidence_valid:
+            checks_passed += 1
+    # evidence 없으면 해당 체크 실패
+
+    return checks_passed / total_checks if total_checks > 0 else 0.0
+
+
+def _compute_claim_similarity(stmt_a, stmt_b):
+    """두 claim statement 간 단순 유사도 계산 (0.0~1.0)
+    단어 기반 Jaccard 유사도 사용
+    """
+    words_a = set(stmt_a.lower().split())
+    words_b = set(stmt_b.lower().split())
+    if not words_a or not words_b:
+        return 0.0
+    intersection = words_a & words_b
+    union = words_a | words_b
+    return len(intersection) / len(union) if union else 0.0
+
+
+def cross_check_claims(event, context):
+    """Lambda Event 비동기 호출 — draft claim 교차 검증 (Requirements 11.1~11.10)
+    3단계 Cross-Check:
+      1차: Foundation_Model로 claim 정확성 평가 → score_1
+      2차: 다른 프롬프트 템플릿으로 재검증 → score_2
+      3차: rule-based checker → score_3
+    validation_risk_score = 1.0 - (score_1 * 0.4 + score_2 * 0.4 + score_3 * 0.2)
+    """
+    topic = event.get('topic', '')
+    if not topic:
+        return {'error': 'topic is required', 'total_processed': 0}
+
+    claims_verified = 0
+    claims_conflicted = 0
+    claims_pending = 0
+    total_processed = 0
+
+    table = dynamodb.Table(CLAIM_DB_TABLE)
+    model_id = os.environ.get('FOUNDATION_MODEL_ARN', 'us.anthropic.claude-3-5-haiku-20241022-v1:0')
+
+    try:
+        bedrock_runtime = boto3.client('bedrock-runtime', region_name=BACKEND_REGION)
+
+        # 지정 topic의 draft claim 조회 (topic-index GSI 사용)
+        draft_claims = []
+        query_params = {
+            'IndexName': 'topic-index',
+            'KeyConditionExpression': 'topic = :t',
+            'FilterExpression': '#s = :draft_status',
+            'ExpressionAttributeNames': {'#s': 'status'},
+            'ExpressionAttributeValues': {
+                ':t': topic,
+                ':draft_status': 'draft'
+            }
+        }
+        resp = table.query(**query_params)
+        draft_claims.extend(resp.get('Items', []))
+        while resp.get('LastEvaluatedKey'):
+            query_params['ExclusiveStartKey'] = resp['LastEvaluatedKey']
+            resp = table.query(**query_params)
+            draft_claims.extend(resp.get('Items', []))
+
+        if not draft_claims:
+            return {
+                'claims_verified': 0,
+                'claims_conflicted': 0,
+                'claims_pending': 0,
+                'total_processed': 0
+            }
+
+        # 1차 검증 프롬프트 템플릿
+        prompt_1 = """다음 claim의 정확성을 평가하세요.
+
+Topic: {topic}
+Statement: {statement}
+Evidence: {evidence}
+
+이 claim이 evidence에 의해 뒷받침되는 정도를 0.0~1.0 사이의 숫자로만 답하세요.
+1.0은 완벽히 뒷받침됨, 0.0은 전혀 뒷받침되지 않음을 의미합니다.
+숫자만 답하세요."""
+
+        # 2차 검증 프롬프트 템플릿 (다른 관점)
+        prompt_2 = """기술 문서 검증자로서 다음 claim을 검토하세요.
+
+주제: {topic}
+진술: {statement}
+근거 자료: {evidence}
+
+다음 기준으로 평가하세요:
+- 진술이 근거 자료와 일치하는가?
+- 기술적으로 정확한 표현인가?
+- 모호하거나 오해의 소지가 있는 부분이 없는가?
+
+정확도를 0.0~1.0 사이의 숫자로만 답하세요."""
+
+        for claim in draft_claims:
+            try:
+                claim_id = claim.get('claim_id', '')
+                current_version = claim.get('version', 1)
+
+                # 1차: LLM 정확성 평가 → score_1
+                score_1 = _llm_evaluate_claim(bedrock_runtime, claim, prompt_1, model_id)
+
+                # 2차: 다른 프롬프트로 재검증 → score_2
+                score_2 = _llm_evaluate_claim(bedrock_runtime, claim, prompt_2, model_id)
+
+                # 3차: rule-based checker → score_3
+                score_3 = _rule_based_check(claim)
+
+                # validation_risk_score 계산 (Requirements 11.5)
+                validation_risk_score = 1.0 - (score_1 * 0.4 + score_2 * 0.4 + score_3 * 0.2)
+                now = datetime.utcnow().isoformat() + 'Z'
+
+                if validation_risk_score < 0.3:
+                    # verified + confidence 업데이트 (Requirements 11.6)
+                    new_confidence = Decimal(str(round(1.0 - validation_risk_score, 4)))
+                    _update_claim_with_retry(
+                        table, claim_id, current_version,
+                        'SET #s = :new_status, confidence = :conf, last_verified_at = :now, approval_status = :pending',
+                        {'#s': 'status'},
+                        {
+                            ':new_status': 'verified',
+                            ':conf': new_confidence,
+                            ':now': now,
+                            ':pending': 'pending_review',
+                            ':expected_version': current_version
+                        }
+                    )
+                    claims_verified += 1
+                    logger.info(json.dumps({
+                        'event': 'claim_verified',
+                        'claim_id': claim_id,
+                        'validation_risk_score': validation_risk_score,
+                        'scores': {'s1': score_1, 's2': score_2, 's3': score_3}
+                    }))
+
+                elif validation_risk_score < 0.7:
+                    # draft 유지 + 수동 검토 경고 (Requirements 11.7)
+                    claims_pending += 1
+                    logger.warning(json.dumps({
+                        'event': 'claim_manual_review_needed',
+                        'claim_id': claim_id,
+                        'validation_risk_score': validation_risk_score,
+                        'scores': {'s1': score_1, 's2': score_2, 's3': score_3}
+                    }))
+
+                else:
+                    # conflicted + ERROR 로그 (Requirements 11.8)
+                    _update_claim_with_retry(
+                        table, claim_id, current_version,
+                        'SET #s = :new_status, last_verified_at = :now',
+                        {'#s': 'status'},
+                        {
+                            ':new_status': 'conflicted',
+                            ':now': now,
+                            ':expected_version': current_version
+                        }
+                    )
+                    claims_conflicted += 1
+                    logger.error(json.dumps({
+                        'event': 'claim_conflicted',
+                        'claim_id': claim_id,
+                        'validation_risk_score': validation_risk_score,
+                        'scores': {'s1': score_1, 's2': score_2, 's3': score_3}
+                    }))
+
+                total_processed += 1
+
+            except Exception as e:
+                logger.error(f"Cross-check failed for claim {claim.get('claim_id', 'unknown')}: {e}")
+                total_processed += 1
+
+        # 중복 감지: 동일 topic verified claim 간 유사도 >= 0.9 (Requirements 11.10)
+        try:
+            verified_query = {
+                'IndexName': 'topic-index',
+                'KeyConditionExpression': 'topic = :t',
+                'FilterExpression': '#s = :verified_status',
+                'ExpressionAttributeNames': {'#s': 'status'},
+                'ExpressionAttributeValues': {
+                    ':t': topic,
+                    ':verified_status': 'verified'
+                }
+            }
+            v_resp = table.query(**verified_query)
+            verified_claims = v_resp.get('Items', [])
+
+            # 유사도 비교 — O(n^2) 이지만 topic 단위이므로 규모 제한적
+            seen_deprecated = set()
+            for i in range(len(verified_claims)):
+                if verified_claims[i]['claim_id'] in seen_deprecated:
+                    continue
+                for j in range(i + 1, len(verified_claims)):
+                    if verified_claims[j]['claim_id'] in seen_deprecated:
+                        continue
+                    sim = _compute_claim_similarity(
+                        verified_claims[i].get('statement', ''),
+                        verified_claims[j].get('statement', '')
+                    )
+                    if sim >= 0.9:
+                        # 최신 유지, 이전 deprecated
+                        ts_i = verified_claims[i].get('created_at', '')
+                        ts_j = verified_claims[j].get('created_at', '')
+                        if ts_i >= ts_j:
+                            older = verified_claims[j]
+                        else:
+                            older = verified_claims[i]
+                        now = datetime.utcnow().isoformat() + 'Z'
+                        _update_claim_with_retry(
+                            table, older['claim_id'], older.get('version', 1),
+                            'SET #s = :dep_status, last_verified_at = :now',
+                            {'#s': 'status'},
+                            {
+                                ':dep_status': 'deprecated',
+                                ':now': now,
+                                ':expected_version': older.get('version', 1)
+                            }
+                        )
+                        seen_deprecated.add(older['claim_id'])
+                        logger.info(json.dumps({
+                            'event': 'duplicate_claim_deprecated',
+                            'deprecated_claim_id': older['claim_id'],
+                            'similarity': sim
+                        }))
+        except Exception as e:
+            logger.warning(f"Duplicate detection failed: {e}")
+
+        result = {
+            'claims_verified': claims_verified,
+            'claims_conflicted': claims_conflicted,
+            'claims_pending': claims_pending,
+            'total_processed': total_processed
+        }
+
+        logger.info(json.dumps({'event': 'cross_check_claims_complete', **result}))
+
+        # KPI 메트릭 발행 (Requirements 15.3)
+        try:
+            cw = boto3.client('cloudwatch', region_name='ap-northeast-2')
+            if total_processed > 0:
+                _publish_metric(cw, 'ClaimVerificationPassRate',
+                                (claims_verified / total_processed) * 100, 'Percent')
+                _publish_metric(cw, 'ContradictionDetectionRate',
+                                (claims_conflicted / total_processed) * 100, 'Percent')
+        except Exception as metric_err:
+            logger.warning(f"KPI metric publish failed after cross_check: {metric_err}")
+
+        return result
+
+    except Exception as e:
+        logger.error(f"cross_check_claims failed: {e}", exc_info=True)
+        return {
+            'error': str(e),
+            'claims_verified': claims_verified,
+            'claims_conflicted': claims_conflicted,
+            'claims_pending': claims_pending,
+            'total_processed': total_processed
+        }
+
+
+# ============================================================================
+# KPI Metrics 발행 (Task 9.5)
+# Requirements: 15.1~15.7
+# ============================================================================
+
+def publish_kpi_metrics(metrics):
+    """CloudWatch 커스텀 메트릭 일괄 발행 (네임스페이스: BOS-AI/ClaimDB)
+    Requirements: 15.1~15.7
+
+    metrics: dict — 메트릭 이름 → (값, 단위) 매핑
+    예: {'ClaimIngestionSuccessRate': (95.0, 'Percent'), ...}
+
+    지원 메트릭:
+      - ClaimIngestionSuccessRate: (claims_created / (claims_created + documents_failed)) * 100
+      - ClaimVerificationPassRate: (claims_verified / total_processed) * 100
+      - ContradictionDetectionRate: (claims_conflicted / total_processed) * 100
+      - BedrockKBFallbackRate: 폴백 발생 시 1 증가 (Count)
+      - AvgEvidenceCountPerAnswer: 사용된 claim의 evidence 수 평균 (Count)
+      - StaleClaimRatio: 30일 미검증 verified claim 비율 (Percent)
+      - TopicCoverageRatio: verified claim 존재 topic 비율 (Percent)
+    """
+    if not metrics:
+        return
+
+    try:
+        cw = boto3.client('cloudwatch', region_name='ap-northeast-2')
+        for metric_name, (value, unit) in metrics.items():
+            _publish_metric(cw, metric_name, value, unit)
+        logger.info(f"Published {len(metrics)} KPI metrics to BOS-AI/ClaimDB")
+    except Exception as e:
+        logger.warning(f"publish_kpi_metrics failed: {e}")
 
 
 def get_upload_html():
