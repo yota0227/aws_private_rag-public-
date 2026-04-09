@@ -374,6 +374,7 @@ resource "aws_lambda_function" "document_processor" {
       BEDROCK_KB_DATA_SOURCE_ID = var.bedrock_kb_data_source_id
       FOUNDATION_MODEL_ARN     = var.foundation_model_arn
       DYNAMODB_TABLE           = aws_dynamodb_table.extraction_tasks.name
+      CLAIM_DB_TABLE           = aws_dynamodb_table.claim_db.name
       SEARCH_TYPE              = var.search_type
       SEARCH_RESULTS_COUNT     = tostring(var.search_results_count)
     }

@@ -6,7 +6,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
 
 ## Tasks
 
-- [-] 1. Phase 1: RTL 파이프라인 및 인프라 격리
+- [x] 1. Phase 1: RTL 파이프라인 및 인프라 격리
   - [x] 1.1 RTL 전용 S3 버킷 Terraform 구성 (`environments/app-layer/bedrock-rag/rtl-s3.tf`)
     - `aws_s3_bucket.rtl_codes` 리소스 생성 (버킷명: `bos-ai-rtl-codes-${account_id}`, Seoul 리전)
     - `object_lock_enabled = true` + Governance 모드 365일 retention
@@ -99,8 +99,8 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
   - `cd tests && go test -v ./properties/ -run TestEnhancedRagOptimization -count=1` (Phase 1 관련 테스트)
 
 
-- [ ] 3. Phase 2: Claim DB 구축 및 Ingestion 파이프라인
-  - [ ] 3.1 Claim DB DynamoDB 테이블 Terraform 구성 (`environments/app-layer/bedrock-rag/claim-db.tf`)
+- [x] 3. Phase 2: Claim DB 구축 및 Ingestion 파이프라인
+  - [x] 3.1 Claim DB DynamoDB 테이블 Terraform 구성 (`environments/app-layer/bedrock-rag/claim-db.tf`)
     - 테이블명: `bos-ai-claim-db-prod`, 파티션 키: `claim_id`(S), 정렬 키: `version`(N)
     - 5개 GSI: `topic-index`, `status-index`, `topic-variant-index`, `source-document-index`, `family-index`
     - PAY_PER_REQUEST 과금 모드
@@ -115,7 +115,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - **Validates: Requirements 4.1, 4.2, 4.5, 4.6, 4.7**
     - PK/SK, 5 GSI 키 스키마, PAY_PER_REQUEST, PITR, KMS CMK 검증
 
-  - [ ] 3.3 Claim CRUD 함수 구현 (`environments/app-layer/bedrock-rag/lambda_src/index.py` 수정)
+  - [x] 3.3 Claim CRUD 함수 구현 (`environments/app-layer/bedrock-rag/lambda_src/index.py` 수정)
     - `create_claim()`: evidence 최소 1개 검증(HTTP 400), confidence 0.0~1.0 검증(HTTP 400), topic 계층적 형식 검증, statement 10~500자 검증, source_chunk 10~1000자 검증, chunk_hash SHA-256 생성, status=draft/version=1 초기화, optimistic locking
     - `update_claim_status()`: 6가지 허용 전이만 수행(불허 시 HTTP 409), optimistic locking(`version = :expected_version`), ConditionalCheckFailedException 최대 3회 재시도, deprecated 전이 시 하위 claim cascading(status→conflicted)
     - `get_evidence()`: claim_id로 evidence 배열 반환
@@ -149,7 +149,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - **Validates: Requirements 5.5, 5.8**
     - contradiction_score >= 0.7 시 기존 claim conflicted + derived_from 기록, deprecated cascading 검증
 
-  - [ ] 3.9 문서 Ingestion 분리 구현 (`environments/app-layer/bedrock-rag/lambda_src/index.py` 수정)
+  - [x] 3.9 문서 Ingestion 분리 구현 (`environments/app-layer/bedrock-rag/lambda_src/index.py` 수정)
     - 문서 업로드 시 `topic`, `variant`(기본값 "default"), `doc_version`(기본값 "1.0") 파라미터 수용
     - 메타데이터 파일에 topic/variant/doc_version/source 필드 추가
     - 동일 topic+variant에 새 doc_version 업로드 시 이전 버전 메타데이터에 `superseded_by` 추가
@@ -168,7 +168,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - **Validates: Requirements 6.6**
     - documents/{team}/{category}/{filename} 형식에서 유효한 계층적 topic 생성 검증
 
-  - [ ] 3.12 Claim Ingestion 파이프라인 구현 (`environments/app-layer/bedrock-rag/lambda_src/index.py` 수정)
+  - [x] 3.12 Claim Ingestion 파이프라인 구현 (`environments/app-layer/bedrock-rag/lambda_src/index.py` 수정)
     - `ingest_claims()`: Lambda Event 비동기 호출, S3 문서 → Foundation_Model로 claim 분해
     - statement: LLM 재구성 정규화 1문장(10~500자), evidence.source_chunk: 원본 정확 인용(10~1000자)
     - 각 claim을 Claim_DB에 status=draft, version=1로 저장
