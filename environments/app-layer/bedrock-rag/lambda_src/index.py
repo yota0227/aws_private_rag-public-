@@ -12,9 +12,13 @@ Endpoints:
   GET  /rag/health                  - 헬스체크
   POST /rag/claims                  - Claim 생성
   POST /rag/claims/update-status    - Claim 상태 전이
+  POST /rag/claims/approve          - Claim 승인 (Human Review Gate)
+  POST /rag/claims/reject           - Claim 거부 (Human Review Gate)
   POST /rag/search-archive          - Archive 문서 검색 (Bedrock KB + 필터)
   POST /rag/get-evidence            - Claim evidence 조회
   POST /rag/list-verified-claims    - 검증된 Claim 목록 조회
+  POST /rag/generate-hdd            - HDD 섹션 자동 생성
+  POST /rag/publish-markdown        - 마크다운 출판
 """
 import json
 import os
@@ -149,8 +153,21 @@ def handler(event, context):
         # Claim CRUD 엔드포인트 (Phase 2)
         if '/claims/update-status' in path and method == 'POST':
             return update_claim_status(event)
+
+        # Human Review Gate 엔드포인트 (Phase 4)
+        if '/claims/approve' in path and method == 'POST':
+            return approve_claim(event)
+        if '/claims/reject' in path and method == 'POST':
+            return reject_claim(event)
+
         if '/claims' in path and method == 'POST' and '/claims/' not in path:
             return create_claim(event)
+
+        # HDD 생성 및 마크다운 출판 엔드포인트 (Phase 4)
+        if '/generate-hdd' in path and method == 'POST':
+            return generate_hdd_section(event)
+        if '/publish-markdown' in path and method == 'POST':
+            return publish_markdown(event)
 
         # MCP Tool 엔드포인트 (Phase 3)
         if '/search-archive' in path and method == 'POST':
@@ -1559,6 +1576,441 @@ def list_verified_claims(event):
         'topic': topic,
         'claims': claims,
         'count': len(claims)
+    })
+
+
+# ============================================================================
+# Human Review Gate 함수 (Task 7.1)
+# Requirements: 14.1, 14.2, 14.3, 14.4, 14.6
+# ============================================================================
+
+def approve_claim(event):
+    """POST /rag/claims/approve — claim 승인
+    Requirements: 14.3 — approval_status='approved', approved_by, approved_at 설정
+    Optimistic locking 적용
+    """
+    body = parse_body(event)
+    claim_id = body.get('claim_id', '')
+    expected_version = body.get('version')
+    approved_by = body.get('approved_by', '')
+
+    if not claim_id or expected_version is None or not approved_by:
+        return response(400, {'error': 'claim_id, version, and approved_by are required'})
+
+    table = dynamodb.Table(CLAIM_DB_TABLE)
+
+    # 최대 3회 재시도 (optimistic locking)
+    for attempt in range(3):
+        try:
+            # 현재 claim 조회
+            result = table.get_item(Key={'claim_id': claim_id, 'version': int(expected_version)})
+            item = result.get('Item')
+            if not item:
+                return response(404, {'error': 'claim not found', 'claim_id': claim_id, 'version': expected_version})
+
+            # status가 verified인 경우만 승인 가능
+            current_status = item.get('status', '')
+            if current_status != 'verified':
+                return response(409, {
+                    'error': f'only verified claims can be approved, current status: {current_status}',
+                    'current_status': current_status
+                })
+
+            now = datetime.utcnow().isoformat() + 'Z'
+
+            # Optimistic locking으로 approval_status 업데이트
+            table.update_item(
+                Key={'claim_id': claim_id, 'version': int(expected_version)},
+                UpdateExpression='SET approval_status = :as, approved_by = :ab, approved_at = :at',
+                ConditionExpression='version = :ev',
+                ExpressionAttributeValues={
+                    ':as': 'approved',
+                    ':ab': approved_by,
+                    ':at': now,
+                    ':ev': int(expected_version)
+                }
+            )
+
+            logger.info(json.dumps({
+                'event': 'claim_approved',
+                'claim_id': claim_id,
+                'version': int(expected_version),
+                'approved_by': approved_by
+            }))
+
+            return response(200, {
+                'claim_id': claim_id,
+                'version': int(expected_version),
+                'approval_status': 'approved',
+                'approved_by': approved_by,
+                'approved_at': now
+            })
+
+        except dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
+            if attempt < 2:
+                logger.warning(f"Optimistic lock conflict for approve {claim_id}, retry {attempt + 1}/3")
+                _exponential_backoff_jitter(attempt)
+                try:
+                    scan_resp = table.query(
+                        KeyConditionExpression='claim_id = :cid',
+                        ExpressionAttributeValues={':cid': claim_id},
+                        ScanIndexForward=False, Limit=1
+                    )
+                    if scan_resp.get('Items'):
+                        expected_version = scan_resp['Items'][0]['version']
+                except Exception:
+                    pass
+                continue
+            else:
+                logger.error(f"Optimistic lock failed after 3 retries for approve: {claim_id}")
+                return response(409, {'error': 'version conflict after 3 retries', 'claim_id': claim_id})
+
+    return response(500, {'error': 'unexpected error in approve_claim'})
+
+
+def reject_claim(event):
+    """POST /rag/claims/reject — claim 거부
+    Requirements: 14.4 — approval_status='rejected' 설정
+    Optimistic locking 적용
+    """
+    body = parse_body(event)
+    claim_id = body.get('claim_id', '')
+    expected_version = body.get('version')
+    rejected_by = body.get('rejected_by', '')
+    rejection_reason = body.get('rejection_reason', '')
+
+    if not claim_id or expected_version is None or not rejected_by:
+        return response(400, {'error': 'claim_id, version, and rejected_by are required'})
+
+    table = dynamodb.Table(CLAIM_DB_TABLE)
+
+    # 최대 3회 재시도 (optimistic locking)
+    for attempt in range(3):
+        try:
+            # 현재 claim 조회
+            result = table.get_item(Key={'claim_id': claim_id, 'version': int(expected_version)})
+            item = result.get('Item')
+            if not item:
+                return response(404, {'error': 'claim not found', 'claim_id': claim_id, 'version': expected_version})
+
+            # status가 verified인 경우만 거부 가능
+            current_status = item.get('status', '')
+            if current_status != 'verified':
+                return response(409, {
+                    'error': f'only verified claims can be rejected, current status: {current_status}',
+                    'current_status': current_status
+                })
+
+            now = datetime.utcnow().isoformat() + 'Z'
+
+            # 업데이트 표현식 구성
+            update_expr = 'SET approval_status = :as, rejected_by = :rb, rejected_at = :rt'
+            expr_values = {
+                ':as': 'rejected',
+                ':rb': rejected_by,
+                ':rt': now,
+                ':ev': int(expected_version)
+            }
+
+            if rejection_reason:
+                update_expr += ', rejection_reason = :rr'
+                expr_values[':rr'] = rejection_reason
+
+            # Optimistic locking
+            table.update_item(
+                Key={'claim_id': claim_id, 'version': int(expected_version)},
+                UpdateExpression=update_expr,
+                ConditionExpression='version = :ev',
+                ExpressionAttributeValues=expr_values
+            )
+
+            logger.info(json.dumps({
+                'event': 'claim_rejected',
+                'claim_id': claim_id,
+                'version': int(expected_version),
+                'rejected_by': rejected_by,
+                'rejection_reason': rejection_reason or None
+            }))
+
+            return response(200, {
+                'claim_id': claim_id,
+                'version': int(expected_version),
+                'approval_status': 'rejected',
+                'rejected_by': rejected_by,
+                'rejection_reason': rejection_reason or None
+            })
+
+        except dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
+            if attempt < 2:
+                logger.warning(f"Optimistic lock conflict for reject {claim_id}, retry {attempt + 1}/3")
+                _exponential_backoff_jitter(attempt)
+                try:
+                    scan_resp = table.query(
+                        KeyConditionExpression='claim_id = :cid',
+                        ExpressionAttributeValues={':cid': claim_id},
+                        ScanIndexForward=False, Limit=1
+                    )
+                    if scan_resp.get('Items'):
+                        expected_version = scan_resp['Items'][0]['version']
+                except Exception:
+                    pass
+                continue
+            else:
+                logger.error(f"Optimistic lock failed after 3 retries for reject: {claim_id}")
+                return response(409, {'error': 'version conflict after 3 retries', 'claim_id': claim_id})
+
+    return response(500, {'error': 'unexpected error in reject_claim'})
+
+
+def _is_publishable(claim):
+    """publishable 계산: status='verified' AND approval_status='approved'
+    Requirements: 14.6
+    """
+    return claim.get('status') == 'verified' and claim.get('approval_status') == 'approved'
+
+
+# ============================================================================
+# HDD 섹션 생성 및 마크다운 출판 (Task 7.3)
+# Requirements: 10.1~10.6, 14.5, 14.7
+# ============================================================================
+
+# 면책 조항 (Requirements 10.6)
+HDD_DISCLAIMER = "이 문서는 AI가 검증된 claim을 기반으로 자동 생성하였습니다"
+
+
+def generate_hdd_section(event):
+    """POST /rag/generate-hdd — HDD 섹션 자동 생성
+    Requirements: 10.1, 10.2, 10.3, 10.6
+    - topic의 verified + approved claim 조회
+    - Foundation_Model로 HDD 마크다운 생성
+    - evidence 각주 포함 (include_evidence=true)
+    - 면책 조항 자동 포함
+    """
+    body = parse_body(event)
+    topic = body.get('topic', '')
+    section_title = body.get('section_title', '')
+    include_evidence = body.get('include_evidence', True)
+
+    if not topic:
+        return response(400, {'error': 'missing required parameter: topic'})
+    if not section_title:
+        return response(400, {'error': 'missing required parameter: section_title'})
+
+    table = dynamodb.Table(CLAIM_DB_TABLE)
+
+    # verified + approved claim 조회 (Requirements 10.2, 14.5)
+    try:
+        result = table.query(
+            IndexName='topic-index',
+            KeyConditionExpression='topic = :t',
+            FilterExpression='#s = :v AND is_latest = :il',
+            ExpressionAttributeNames={'#s': 'status'},
+            ExpressionAttributeValues={':t': topic, ':v': 'verified', ':il': True}
+        )
+    except Exception as e:
+        logger.error(f"Claim DB query failed for generate_hdd_section: {e}")
+        return response(500, {'error': f'Claim DB query failed: {str(e)}'})
+
+    # approved claim만 필터 (Requirements 14.5, 14.7)
+    approved_claims = [c for c in result.get('Items', []) if _is_publishable(c)]
+
+    if not approved_claims:
+        return response(403, {
+            'error': 'claim requires approval for critical topic',
+            'topic': topic,
+            'message': 'No verified+approved claims found for this topic. Claims must have approval_status=approved.'
+        })
+
+    # Foundation Model로 HDD 마크다운 생성 (Requirements 10.2)
+    try:
+        bedrock_runtime = boto3.client('bedrock-runtime', region_name=BACKEND_REGION)
+        model_id = os.environ.get('FOUNDATION_MODEL_ARN', 'us.anthropic.claude-3-5-haiku-20241022-v1:0')
+
+        # claim context 구성
+        claims_context = ""
+        footnotes = []
+        for i, claim in enumerate(approved_claims):
+            claims_context += f"\n[Claim {i+1}] (confidence: {claim.get('confidence', 'N/A')})\n"
+            claims_context += f"  Statement: {claim.get('statement', '')}\n"
+            for ev in claim.get('evidence', []):
+                footnote_idx = len(footnotes) + 1
+                footnotes.append({
+                    'index': footnote_idx,
+                    'source_document_id': ev.get('source_document_id', ''),
+                    'source_chunk': ev.get('source_chunk', '')[:200],
+                    'source_type': ev.get('source_type', ''),
+                    'page_number': ev.get('page_number')
+                })
+
+        evidence_instruction = ""
+        if include_evidence:
+            evidence_instruction = "\n각 주장에 대해 [^N] 형식의 각주 번호를 포함하세요. 각주는 문서 끝에 배치됩니다."
+
+        prompt = f"""다음 검증된 claim들을 기반으로 HDD(Hardware Design Description) 섹션을 마크다운 형식으로 작성하세요.
+
+섹션 제목: {section_title}
+주제: {topic}
+{evidence_instruction}
+
+검증된 Claim 목록:
+{claims_context}
+
+마크다운 형식으로 기술 문서 섹션을 작성하세요. 전문적이고 정확한 기술 문서 스타일을 유지하세요."""
+
+        resp = bedrock_runtime.invoke_model(
+            modelId=model_id,
+            contentType='application/json',
+            accept='application/json',
+            body=json.dumps({
+                'anthropic_version': 'bedrock-2023-05-31',
+                'max_tokens': 4096,
+                'messages': [{'role': 'user', 'content': prompt}]
+            })
+        )
+
+        resp_body = json.loads(resp['body'].read())
+        markdown_content = resp_body.get('content', [{}])[0].get('text', '')
+
+    except Exception as e:
+        logger.error(f"HDD section generation failed: {e}")
+        return response(500, {'error': f'HDD section generation failed: {str(e)}'})
+
+    # evidence 각주 추가 (Requirements 10.3)
+    if include_evidence and footnotes:
+        markdown_content += "\n\n---\n\n### 참조 (Evidence)\n\n"
+        for fn in footnotes:
+            markdown_content += f"[^{fn['index']}]: {fn['source_document_id']}"
+            if fn.get('page_number'):
+                markdown_content += f" (p.{fn['page_number']})"
+            if fn.get('source_type'):
+                markdown_content += f" [{fn['source_type']}]"
+            markdown_content += "\n"
+
+    # 면책 조항 자동 포함 (Requirements 10.6)
+    markdown_content += f"\n\n---\n\n> ⚠️ {HDD_DISCLAIMER}\n"
+
+    logger.info(json.dumps({
+        'event': 'hdd_section_generated',
+        'topic': topic,
+        'section_title': section_title,
+        'claims_used': len(approved_claims),
+        'include_evidence': include_evidence
+    }))
+
+    return response(200, {
+        'topic': topic,
+        'section_title': section_title,
+        'markdown': markdown_content,
+        'claims_used': len(approved_claims),
+        'include_evidence': include_evidence,
+        'disclaimer': HDD_DISCLAIMER
+    })
+
+
+def publish_markdown(event):
+    """POST /rag/publish-markdown — 마크다운 출판
+    Requirements: 10.4, 10.5, 14.5, 14.7
+    - Seoul_S3 published/ 접두사에 저장
+    - 메타데이터 자동 생성 (source='system_generated')
+    - critical topic claim은 approval_status='approved'만 사용 (HTTP 403)
+    """
+    body = parse_body(event)
+    content = body.get('content', '')
+    filename = body.get('filename', '')
+    topic = body.get('topic', '')
+
+    if not content:
+        return response(400, {'error': 'missing required parameter: content'})
+    if not filename:
+        return response(400, {'error': 'missing required parameter: filename'})
+
+    # .md 확장자 보장
+    if not filename.endswith('.md'):
+        filename += '.md'
+
+    # topic이 지정된 경우, 해당 topic의 claim이 모두 approved인지 확인 (Requirements 14.5, 14.7)
+    if topic:
+        table = dynamodb.Table(CLAIM_DB_TABLE)
+        try:
+            result = table.query(
+                IndexName='topic-index',
+                KeyConditionExpression='topic = :t',
+                FilterExpression='#s = :v AND is_latest = :il',
+                ExpressionAttributeNames={'#s': 'status'},
+                ExpressionAttributeValues={':t': topic, ':v': 'verified', ':il': True}
+            )
+            verified_claims = result.get('Items', [])
+
+            # verified claim 중 미승인 claim이 있으면 HTTP 403
+            unapproved = [c for c in verified_claims if not _is_publishable(c)]
+            if unapproved:
+                return response(403, {
+                    'error': 'claim requires approval for critical topic',
+                    'topic': topic,
+                    'unapproved_count': len(unapproved),
+                    'message': f'{len(unapproved)} claims for topic "{topic}" are not approved. All claims must have approval_status=approved for publishing.'
+                })
+        except Exception as e:
+            logger.error(f"Claim approval check failed for publish_markdown: {e}")
+            return response(500, {'error': f'Claim approval check failed: {str(e)}'})
+
+    # Seoul_S3 published/ 접두사에 저장 (Requirements 10.4)
+    s3_key = f"published/{filename}"
+    try:
+        s3_client.put_object(
+            Bucket=S3_BUCKET_SEOUL,
+            Key=s3_key,
+            Body=content.encode('utf-8'),
+            ContentType='text/markdown; charset=utf-8',
+            ServerSideEncryption='aws:kms'
+        )
+    except Exception as e:
+        logger.error(f"Failed to save markdown to S3: {e}")
+        return response(500, {'error': f'Failed to save markdown: {str(e)}'})
+
+    # 메타데이터 자동 생성 (Requirements 10.5)
+    now = datetime.utcnow().isoformat() + 'Z'
+    metadata = {
+        'metadataAttributes': {
+            'source': 'system_generated',
+            'document_type': 'markdown',
+            'generation_basis': 'verified_claims',
+            'upload_date': now,
+            'topic': topic or 'general',
+            'variant': 'default',
+            'doc_version': '1.0'
+        }
+    }
+
+    metadata_key = f"{s3_key}.metadata.json"
+    try:
+        s3_client.put_object(
+            Bucket=S3_BUCKET_SEOUL,
+            Key=metadata_key,
+            Body=json.dumps(metadata, ensure_ascii=False).encode('utf-8'),
+            ContentType='application/json',
+            ServerSideEncryption='aws:kms'
+        )
+    except Exception as e:
+        logger.warning(f"Metadata creation failed for {s3_key} (non-blocking): {e}")
+
+    logger.info(json.dumps({
+        'event': 'markdown_published',
+        's3_key': s3_key,
+        'filename': filename,
+        'topic': topic or 'general',
+        'content_length': len(content)
+    }))
+
+    return response(200, {
+        'message': 'Markdown published successfully',
+        's3_key': s3_key,
+        'bucket': S3_BUCKET_SEOUL,
+        'filename': filename,
+        'topic': topic or 'general',
+        'metadata_key': metadata_key,
+        'source': 'system_generated',
+        'generation_basis': 'verified_claims'
     })
 
 

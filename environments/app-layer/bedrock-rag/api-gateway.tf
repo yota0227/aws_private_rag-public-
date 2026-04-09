@@ -623,6 +623,131 @@ resource "aws_api_gateway_integration" "list_verified_claims_lambda" {
 }
 
 # ----------------------------------------------------------------------------
+# Phase 4: Human Review Gate + HDD 생성 + 마크다운 출판 라우트
+# Requirements: 14.3, 14.4, 10.1~10.6
+# ----------------------------------------------------------------------------
+
+# /rag/claims/approve resource
+resource "aws_api_gateway_resource" "claims_approve" {
+  provider = aws.seoul
+
+  rest_api_id = aws_api_gateway_rest_api.private_rag.id
+  parent_id   = aws_api_gateway_resource.claims.id
+  path_part   = "approve"
+}
+
+# POST /rag/claims/approve (Claim 승인)
+resource "aws_api_gateway_method" "claims_approve_post" {
+  provider = aws.seoul
+
+  rest_api_id   = aws_api_gateway_rest_api.private_rag.id
+  resource_id   = aws_api_gateway_resource.claims_approve.id
+  http_method   = "POST"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "claims_approve_lambda" {
+  provider = aws.seoul
+
+  rest_api_id             = aws_api_gateway_rest_api.private_rag.id
+  resource_id             = aws_api_gateway_resource.claims_approve.id
+  http_method             = aws_api_gateway_method.claims_approve_post.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.document_processor.invoke_arn
+}
+
+# /rag/claims/reject resource
+resource "aws_api_gateway_resource" "claims_reject" {
+  provider = aws.seoul
+
+  rest_api_id = aws_api_gateway_rest_api.private_rag.id
+  parent_id   = aws_api_gateway_resource.claims.id
+  path_part   = "reject"
+}
+
+# POST /rag/claims/reject (Claim 거부)
+resource "aws_api_gateway_method" "claims_reject_post" {
+  provider = aws.seoul
+
+  rest_api_id   = aws_api_gateway_rest_api.private_rag.id
+  resource_id   = aws_api_gateway_resource.claims_reject.id
+  http_method   = "POST"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "claims_reject_lambda" {
+  provider = aws.seoul
+
+  rest_api_id             = aws_api_gateway_rest_api.private_rag.id
+  resource_id             = aws_api_gateway_resource.claims_reject.id
+  http_method             = aws_api_gateway_method.claims_reject_post.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.document_processor.invoke_arn
+}
+
+# /rag/generate-hdd resource
+resource "aws_api_gateway_resource" "generate_hdd" {
+  provider = aws.seoul
+
+  rest_api_id = aws_api_gateway_rest_api.private_rag.id
+  parent_id   = aws_api_gateway_resource.rag.id
+  path_part   = "generate-hdd"
+}
+
+# POST /rag/generate-hdd (HDD 섹션 자동 생성)
+resource "aws_api_gateway_method" "generate_hdd_post" {
+  provider = aws.seoul
+
+  rest_api_id   = aws_api_gateway_rest_api.private_rag.id
+  resource_id   = aws_api_gateway_resource.generate_hdd.id
+  http_method   = "POST"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "generate_hdd_lambda" {
+  provider = aws.seoul
+
+  rest_api_id             = aws_api_gateway_rest_api.private_rag.id
+  resource_id             = aws_api_gateway_resource.generate_hdd.id
+  http_method             = aws_api_gateway_method.generate_hdd_post.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.document_processor.invoke_arn
+}
+
+# /rag/publish-markdown resource
+resource "aws_api_gateway_resource" "publish_markdown" {
+  provider = aws.seoul
+
+  rest_api_id = aws_api_gateway_rest_api.private_rag.id
+  parent_id   = aws_api_gateway_resource.rag.id
+  path_part   = "publish-markdown"
+}
+
+# POST /rag/publish-markdown (마크다운 출판)
+resource "aws_api_gateway_method" "publish_markdown_post" {
+  provider = aws.seoul
+
+  rest_api_id   = aws_api_gateway_rest_api.private_rag.id
+  resource_id   = aws_api_gateway_resource.publish_markdown.id
+  http_method   = "POST"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "publish_markdown_lambda" {
+  provider = aws.seoul
+
+  rest_api_id             = aws_api_gateway_rest_api.private_rag.id
+  resource_id             = aws_api_gateway_resource.publish_markdown.id
+  http_method             = aws_api_gateway_method.publish_markdown_post.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.document_processor.invoke_arn
+}
+
+# ----------------------------------------------------------------------------
 # Deployment & Stage
 # ----------------------------------------------------------------------------
 
@@ -649,9 +774,13 @@ resource "aws_api_gateway_deployment" "main" {
       aws_api_gateway_resource.documents_delete.id,
       aws_api_gateway_resource.claims.id,
       aws_api_gateway_resource.claims_update_status.id,
+      aws_api_gateway_resource.claims_approve.id,
+      aws_api_gateway_resource.claims_reject.id,
       aws_api_gateway_resource.search_archive.id,
       aws_api_gateway_resource.get_evidence.id,
       aws_api_gateway_resource.list_verified_claims.id,
+      aws_api_gateway_resource.generate_hdd.id,
+      aws_api_gateway_resource.publish_markdown.id,
       aws_api_gateway_method.query_post.id,
       aws_api_gateway_method.documents_get.id,
       aws_api_gateway_method.documents_initiate_post.id,
@@ -667,9 +796,13 @@ resource "aws_api_gateway_deployment" "main" {
       aws_api_gateway_method.documents_delete_post.id,
       aws_api_gateway_method.claims_post.id,
       aws_api_gateway_method.claims_update_status_post.id,
+      aws_api_gateway_method.claims_approve_post.id,
+      aws_api_gateway_method.claims_reject_post.id,
       aws_api_gateway_method.search_archive_post.id,
       aws_api_gateway_method.get_evidence_post.id,
       aws_api_gateway_method.list_verified_claims_post.id,
+      aws_api_gateway_method.generate_hdd_post.id,
+      aws_api_gateway_method.publish_markdown_post.id,
       aws_api_gateway_integration.query_lambda.id,
       aws_api_gateway_integration.documents_get_lambda.id,
       aws_api_gateway_integration.documents_initiate_lambda.id,
@@ -685,9 +818,13 @@ resource "aws_api_gateway_deployment" "main" {
       aws_api_gateway_integration.documents_delete_lambda.id,
       aws_api_gateway_integration.claims_lambda.id,
       aws_api_gateway_integration.claims_update_status_lambda.id,
+      aws_api_gateway_integration.claims_approve_lambda.id,
+      aws_api_gateway_integration.claims_reject_lambda.id,
       aws_api_gateway_integration.search_archive_lambda.id,
       aws_api_gateway_integration.get_evidence_lambda.id,
       aws_api_gateway_integration.list_verified_claims_lambda.id,
+      aws_api_gateway_integration.generate_hdd_lambda.id,
+      aws_api_gateway_integration.publish_markdown_lambda.id,
     ]))
   }
 

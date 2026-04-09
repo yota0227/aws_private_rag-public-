@@ -241,8 +241,8 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
   - MCP Bridge 도구 3개 + Verification Pipeline 통합 동작 확인
 
 
-- [ ] 7. Phase 4: 문서 생성 및 Human Review Gate
-  - [ ] 7.1 Human Review Gate 함수 구현 (`environments/app-layer/bedrock-rag/lambda_src/index.py` 수정)
+- [x] 7. Phase 4: 문서 생성 및 Human Review Gate
+  - [x] 7.1 Human Review Gate 함수 구현 (`environments/app-layer/bedrock-rag/lambda_src/index.py` 수정)
     - `approve_claim()`: claim_id + version + approved_by → approval_status='approved', approved_at 설정
     - `reject_claim()`: claim_id + version + rejected_by + rejection_reason(선택) → approval_status='rejected'
     - `handler()` 라우팅에 POST `/rag/claims/approve`, `/rag/claims/reject` 추가
@@ -255,7 +255,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - **Validates: Requirements 14.2, 14.3, 14.4, 14.5, 14.6, 14.7**
     - verified 전이 시 pending_review, approve 시 approved, reject 시 rejected, publishable 조건, 미승인 claim HTTP 403 검증
 
-  - [ ] 7.3 HDD 섹션 생성 및 마크다운 출판 구현 (`environments/app-layer/bedrock-rag/lambda_src/index.py` 수정)
+  - [x] 7.3 HDD 섹션 생성 및 마크다운 출판 구현 (`environments/app-layer/bedrock-rag/lambda_src/index.py` 수정)
     - `generate_hdd_section()`: topic의 verified+approved claim 조회 → Foundation_Model로 HDD 마크다운 생성
     - evidence 각주 포함 (include_evidence=true), 면책 조항 자동 포함
     - `publish_markdown()`: Seoul_S3 `published/` 접두사에 저장, 메타데이터 자동 생성(source='system_generated')
@@ -264,7 +264,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - API Gateway에 2개 라우트 추가
     - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.5, 10.6, 14.5, 14.7_
 
-  - [ ] 7.4 MCP Bridge 문서 생성 도구 확장 (`mcp-bridge/server.js` 수정)
+  - [x] 7.4 MCP Bridge 문서 생성 도구 확장 (`mcp-bridge/server.js` 수정)
     - `generate_hdd_section` 도구 추가: topic(필수), section_title(필수), include_evidence(선택, 기본 true) → POST /rag/generate-hdd
     - `publish_markdown` 도구 추가: content(필수), filename(필수), topic(선택) → POST /rag/publish-markdown
     - 모든 도구 응답에 `execution_time_ms` 포함

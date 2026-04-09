@@ -326,6 +326,85 @@ function createMcpServer() {
     }
   );
 
+  // ========================================================================
+  // Phase 4: MCP Tool 확장 — generate_hdd_section, publish_markdown
+  // Requirements: 10.1, 10.4
+  // ========================================================================
+
+  mcp.tool(
+    "generate_hdd_section",
+    "검증된 claim을 기반으로 HDD(Hardware Design Description) 섹션을 자동 생성합니다. 특정 topic의 검증+승인된 claim을 조합하여 마크다운 형식의 기술 문서 섹션을 생성합니다.",
+    {
+      topic: z.string().describe("topic 식별자 (예: ucie/phy/ltssm)"),
+      section_title: z.string().describe("생성할 HDD 섹션 제목"),
+      include_evidence: z.boolean().optional().default(true).describe("evidence 각주 포함 여부 (기본값 true)")
+    },
+    async (args, extra) => {
+      const startTime = Date.now();
+      try {
+        console.log("[TOOL] generate_hdd_section: topic=" + args.topic + " title=" + args.section_title + " evidence=" + args.include_evidence);
+        const body = {
+          topic: args.topic,
+          section_title: args.section_title,
+          include_evidence: args.include_evidence
+        };
+        const resp = await ragApi("POST", "/generate-hdd", body);
+        const execution_time_ms = Date.now() - startTime;
+        if (resp.error) return { content: [{ type: "text", text: JSON.stringify({ error: resp.error, execution_time_ms }) }], isError: true };
+        let text = "📝 HDD 섹션 생성 완료\n";
+        text += "  Topic: " + resp.topic + "\n";
+        text += "  섹션 제목: " + resp.section_title + "\n";
+        text += "  사용된 Claim 수: " + (resp.claims_used || 0) + "\n";
+        text += "  Evidence 포함: " + (resp.include_evidence ? "예" : "아니오") + "\n";
+        text += "  면책 조항: " + (resp.disclaimer || "") + "\n";
+        text += "\n--- 생성된 마크다운 ---\n\n";
+        text += resp.markdown || "(내용 없음)";
+        text += "\n\nexecution_time_ms: " + execution_time_ms;
+        return { content: [{ type: "text", text }] };
+      } catch(err) {
+        const execution_time_ms = Date.now() - startTime;
+        return { content: [{ type: "text", text: JSON.stringify({ error: "generate_hdd_section 실패: " + err.message, execution_time_ms }) }], isError: true };
+      }
+    }
+  );
+
+  mcp.tool(
+    "publish_markdown",
+    "마크다운 콘텐츠를 Seoul S3의 published/ 접두사에 저장하여 출판합니다. 메타데이터가 자동 생성됩니다 (source=system_generated, generation_basis=verified_claims).",
+    {
+      content: z.string().describe("출판할 마크다운 콘텐츠"),
+      filename: z.string().describe("저장할 파일명 (예: ucie_phy_hdd.md)"),
+      topic: z.string().optional().describe("관련 topic (지정 시 해당 topic의 claim 승인 상태를 확인)")
+    },
+    async (args, extra) => {
+      const startTime = Date.now();
+      try {
+        console.log("[TOOL] publish_markdown: filename=" + args.filename + " topic=" + (args.topic || "none"));
+        const body = {
+          content: args.content,
+          filename: args.filename
+        };
+        if (args.topic) body.topic = args.topic;
+        const resp = await ragApi("POST", "/publish-markdown", body);
+        const execution_time_ms = Date.now() - startTime;
+        if (resp.error) return { content: [{ type: "text", text: JSON.stringify({ error: resp.error, execution_time_ms }) }], isError: true };
+        let text = "📄 마크다운 출판 완료\n";
+        text += "  S3 Key: " + resp.s3_key + "\n";
+        text += "  Bucket: " + resp.bucket + "\n";
+        text += "  파일명: " + resp.filename + "\n";
+        text += "  Topic: " + (resp.topic || "general") + "\n";
+        text += "  메타데이터: " + resp.metadata_key + "\n";
+        text += "  Source: " + resp.source + "\n";
+        text += "  Generation Basis: " + resp.generation_basis + "\n";
+        text += "\nexecution_time_ms: " + execution_time_ms;
+        return { content: [{ type: "text", text }] };
+      } catch(err) {
+        const execution_time_ms = Date.now() - startTime;
+        return { content: [{ type: "text", text: JSON.stringify({ error: "publish_markdown 실패: " + err.message, execution_time_ms }) }], isError: true };
+      }
+    }
+  );
+
   return mcp;
 }
 
