@@ -3,6 +3,9 @@
 #
 # Requirements: 9.7, 12.5
 
+# Current AWS Account Identity (used for unique bucket naming)
+data "aws_caller_identity" "current" {}
+
 # Remote State Data Source for Network Layer
 data "terraform_remote_state" "network" {
   backend = "s3"

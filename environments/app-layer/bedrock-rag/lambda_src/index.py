@@ -8,8 +8,20 @@ Endpoints:
   POST /rag/documents/upload-part   - chunk 업로드
   POST /rag/documents/complete      - multipart upload 완료 + KB sync
   GET  /rag/documents               - 업로드된 파일 목록
-  POST /rag/query                   - RAG 질의
+  POST /rag/query                   - RAG 질의 (Verification Pipeline 우선)
   GET  /rag/health                  - 헬스체크
+  POST /rag/claims                  - Claim 생성
+  POST /rag/claims/update-status    - Claim 상태 전이
+  POST /rag/claims/approve          - Claim 승인 (Human Review Gate)
+  POST /rag/claims/reject           - Claim 거부 (Human Review Gate)
+  POST /rag/search-archive          - Archive 문서 검색 (Bedrock KB + 필터)
+  POST /rag/get-evidence            - Claim evidence 조회
+  POST /rag/list-verified-claims    - 검증된 Claim 목록 조회
+  POST /rag/generate-hdd            - HDD 섹션 자동 생성
+  POST /rag/publish-markdown        - 마크다운 출판
+  POST /rag/trace-signal-path       - Neptune 신호 전파 경로 추적
+  POST /rag/find-instantiation-tree - Neptune 모듈 인스턴스화 트리 조회
+  POST /rag/find-clock-crossings    - Neptune 클럭 도메인 크로싱 조회
 """
 import json
 import os
@@ -21,8 +33,12 @@ import tarfile
 import shutil
 import tempfile
 import time
+import hashlib
+import random
+import re
 import boto3
 from datetime import datetime
+from decimal import Decimal
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -43,11 +59,23 @@ s3_client = boto3.client('s3', region_name='ap-northeast-2')
 
 # 비동기 압축 해제 관련 설정
 DYNAMODB_TABLE = os.environ.get('DYNAMODB_TABLE', 'rag-extraction-tasks-dev')
+CLAIM_DB_TABLE = os.environ.get('CLAIM_DB_TABLE', 'bos-ai-claim-db-prod')
 dynamodb = boto3.resource('dynamodb', region_name='ap-northeast-2')
 lambda_client = boto3.client('lambda', region_name='ap-northeast-2')
 ALLOWED_EXTENSIONS = ['pdf', 'txt', 'docx', 'csv', 'html', 'md', 'v', 'sv', 'vhd', 'vhdl', 'vh', 'svh', 'py', 'c', 'h', 'cpp', 'hpp', 'json', 'yaml', 'yml', 'xml', 'tcl', 'sdc', 'xdc']
 ARCHIVE_EXTENSIONS = ['zip', 'tar.gz']
 SYSTEM_FILES = ['__MACOSX', 'Thumbs.db', '.DS_Store']
+
+# Claim 상태 전이 규칙 (Requirements 5.2)
+ALLOWED_TRANSITIONS = {
+    "draft":      ["verified", "deprecated"],
+    "verified":   ["conflicted", "deprecated"],
+    "conflicted": ["verified", "deprecated"],
+    "deprecated": []
+}
+
+# 문서 source 허용 값 (Requirements 6.5)
+VALID_SOURCES = {"archive_md", "rtl_parsed", "codebeamer", "manual_upload", "system_generated"}
 
 
 def handler(event, context):
@@ -57,6 +85,10 @@ def handler(event, context):
         return process_extraction(event)
     if event.get('action') == 'backfill_metadata':
         return backfill_metadata(event, context)
+    if event.get('action') == 'ingest_claims':
+        return ingest_claims(event, context)
+    if event.get('action') == 'cross_check_claims':
+        return cross_check_claims(event, context)
 
 
     logger.info(f"Event path: {event.get('path')}, method: {event.get('httpMethod')}")
@@ -122,6 +154,41 @@ def handler(event, context):
         # RAG Query
         if '/query' in path and method == 'POST':
             return handle_query(event)
+
+        # Claim CRUD 엔드포인트 (Phase 2)
+        if '/claims/update-status' in path and method == 'POST':
+            return update_claim_status(event)
+
+        # Human Review Gate 엔드포인트 (Phase 4)
+        if '/claims/approve' in path and method == 'POST':
+            return approve_claim(event)
+        if '/claims/reject' in path and method == 'POST':
+            return reject_claim(event)
+
+        if '/claims' in path and method == 'POST' and '/claims/' not in path:
+            return create_claim(event)
+
+        # HDD 생성 및 마크다운 출판 엔드포인트 (Phase 4)
+        if '/generate-hdd' in path and method == 'POST':
+            return generate_hdd_section(event)
+        if '/publish-markdown' in path and method == 'POST':
+            return publish_markdown(event)
+
+        # MCP Tool 엔드포인트 (Phase 3)
+        if '/search-archive' in path and method == 'POST':
+            return search_archive(event)
+        if '/get-evidence' in path and method == 'POST':
+            return get_evidence(event)
+        if '/list-verified-claims' in path and method == 'POST':
+            return list_verified_claims(event)
+
+        # Neptune Graph DB 엔드포인트 (Phase 6)
+        if '/trace-signal-path' in path and method == 'POST':
+            return trace_signal_path(event)
+        if '/find-instantiation-tree' in path and method == 'POST':
+            return find_instantiation_tree(event)
+        if '/find-clock-crossings' in path and method == 'POST':
+            return find_clock_crossings(event)
 
         return response(404, {'error': f'Not found: {method} {path}'})
 
@@ -288,6 +355,10 @@ def confirm_upload(event):
     category = body.get('category', '')
     version = body.get('version', '1.0')
     source_system = body.get('source_system', 'manual_upload')
+    topic = body.get('topic', '')
+    variant = body.get('variant', 'default')
+    doc_version = body.get('doc_version', '1.0')
+    source = body.get('source', 'manual_upload')
 
     if not s3_key:
         return response(400, {'error': 's3_key is required'})
@@ -305,7 +376,9 @@ def confirm_upload(event):
     if not is_archive:
         try:
             create_metadata_file(s3_key, team=team, category=category,
-                                 version=version, source_system=source_system)
+                                 version=version, source_system=source_system,
+                                 topic=topic, variant=variant, doc_version=doc_version,
+                                 source=source)
             metadata_created = True
         except Exception as e:
             logger.warning(f"Metadata creation failed (non-blocking): {str(e)}")
@@ -650,7 +723,9 @@ def list_documents(event=None):
 
 
 def handle_query(event):
-    """RAG 질의 처리 - Hybrid Search, 필터, 구조화 로그 지원"""
+    """RAG 질의 처리 — Verification Pipeline 우선 실행, 폴백 시 Bedrock KB 검색
+    Requirements: 9.1, 9.7
+    """
     start_time = time.time()
     body = parse_body(event)
     query = body.get('query', '')
@@ -663,18 +738,55 @@ def handle_query(event):
             'query': query
         })
 
-    # 검색 설정 (환경 변수에서 읽기)
+    variant = body.get('variant', None)
+
+    # Verification Pipeline 우선 실행 (Task 5.4)
+    try:
+        pipeline_result = verification_pipeline(query, variant=variant)
+        response_time_ms = int((time.time() - start_time) * 1000)
+
+        # 구조화 로그
+        logger.info(json.dumps({
+            'event': 'rag_query',
+            'query_length': len(query),
+            'response_time_ms': response_time_ms,
+            'verification_pipeline': True,
+            'fallback': pipeline_result.get('verification_metadata', {}).get('fallback', False),
+            'claims_used': len(pipeline_result.get('verification_metadata', {}).get('claims_used', []))
+        }))
+
+        if response_time_ms > 30000:
+            logger.warning(json.dumps({'event': 'slow_query', 'response_time_ms': response_time_ms, 'query_length': len(query)}))
+
+        result = {
+            'answer': pipeline_result.get('answer', ''),
+            'citations': pipeline_result.get('citations', []),
+            'verification_metadata': pipeline_result.get('verification_metadata', {}),
+            'metadata': {
+                'search_type': 'verification_pipeline',
+                'query_length': len(query),
+                'response_time_ms': response_time_ms
+            }
+        }
+
+        return response(200, result)
+
+    except Exception as e:
+        logger.error(f"Verification Pipeline failed, falling back to direct Bedrock KB: {e}")
+        return _handle_query_bedrock_kb(query, start_time, body)
+
+
+def _handle_query_bedrock_kb(query, start_time, body):
+    """기존 Bedrock KB 직접 검색 (Verification Pipeline 실패 시 폴백)"""
     search_type = os.environ.get('SEARCH_TYPE', 'HYBRID')
     results_count = int(os.environ.get('SEARCH_RESULTS_COUNT', '5'))
 
-    # 필터 구성
     filter_obj = body.get('filter', None)
     bedrock_filter = build_bedrock_filter(filter_obj) if filter_obj else None
 
     try:
         bedrock_runtime = boto3.client('bedrock-agent-runtime', region_name=BACKEND_REGION)
 
-        # vectorSearchConfiguration 구성
         vector_config = {
             'searchType': search_type,
             'numberOfResults': results_count
@@ -699,7 +811,6 @@ def handle_query(event):
 
         response_time_ms = int((time.time() - start_time) * 1000)
 
-        # 응답 구조 개선 - score, version, source_system 포함
         citations = []
         for c in resp.get('citations', []):
             refs = []
@@ -721,11 +832,10 @@ def handle_query(event):
 
         citation_count = sum(len(c.get('references', [])) for c in citations)
 
-        # 구조화 로그
         logger.info(json.dumps({
             'event': 'rag_query', 'query_length': len(query), 'search_type': search_type,
             'citation_count': citation_count, 'response_time_ms': response_time_ms,
-            'has_filter': bedrock_filter is not None
+            'has_filter': bedrock_filter is not None, 'verification_pipeline': False
         }))
 
         if citation_count == 0:
@@ -785,13 +895,24 @@ def serve_upload_ui():
 DOCUMENT_TYPE_MAP = {'pdf': 'pdf', 'txt': 'text', 'md': 'markdown', 'v': 'rtl', 'sv': 'rtl', 'vhd': 'rtl', 'vhdl': 'rtl', 'vh': 'rtl', 'svh': 'rtl', 'py': 'code', 'c': 'code', 'h': 'code', 'cpp': 'code', 'hpp': 'code', 'tcl': 'script', 'sdc': 'constraint', 'xdc': 'constraint'}
 
 
-def create_metadata_file(s3_key, team='', category='', version='1.0', source_system='manual_upload', bucket=None):
-    """S3 객체에 대한 .metadata.json 사이드카 파일 생성 (Bedrock KB 메타데이터 필터링 형식)"""
+def create_metadata_file(s3_key, team='', category='', version='1.0', source_system='manual_upload',
+                         bucket=None, topic='', variant='default', doc_version='1.0', source='manual_upload'):
+    """S3 객체에 대한 .metadata.json 사이드카 파일 생성 (Bedrock KB 메타데이터 필터링 형식)
+    Requirements 6.1, 6.2, 6.5: topic/variant/doc_version/source 필드 지원
+    """
     if bucket is None:
         bucket = S3_BUCKET_SEOUL
 
     ext = s3_key.rsplit('.', 1)[-1].lower() if '.' in s3_key else ''
     document_type = DOCUMENT_TYPE_MAP.get(ext, 'other')
+
+    # source 허용 값 검증 (Requirements 6.5)
+    if source and source not in VALID_SOURCES:
+        source = 'manual_upload'
+
+    # topic 자동 추출 (Requirements 6.6) — topic이 비어있으면 파일 경로에서 유추
+    if not topic:
+        topic = extract_topic_from_path(s3_key)
 
     metadata = {
         'metadataAttributes': {
@@ -800,11 +921,20 @@ def create_metadata_file(s3_key, team='', category='', version='1.0', source_sys
             'document_type': document_type,
             'upload_date': datetime.utcnow().isoformat() + 'Z',
             'version': version or '1.0',
-            'source_system': source_system or 'manual_upload'
+            'source_system': source_system or 'manual_upload',
+            'topic': topic or '',
+            'variant': variant or 'default',
+            'doc_version': doc_version or '1.0',
+            'source': source or 'manual_upload'
         }
     }
 
     metadata_key = s3_key + '.metadata.json'
+
+    # 동일 topic+variant에 새 doc_version 업로드 시 이전 버전 superseded_by 설정 (Requirements 6.3)
+    if topic and variant:
+        _update_superseded_metadata(bucket, topic, variant, s3_key, metadata_key)
+
     s3_client.put_object(
         Bucket=bucket,
         Key=metadata_key,
@@ -953,6 +1083,2260 @@ def response(status_code, body):
         },
         'body': json.dumps(body, ensure_ascii=False, default=str)
     }
+
+
+# ============================================================================
+# Document Ingestion 분리 — Topic/Variant/Version 유틸리티 (Task 3.9)
+# Requirements: 6.1, 6.2, 6.3, 6.5, 6.6
+# ============================================================================
+
+def extract_topic_from_path(s3_key):
+    """파일 경로에서 topic 자동 추출 (Requirements 6.6)
+    예: documents/soc/ucie/phy_spec.md → ucie/phy
+    """
+    path = s3_key.replace(S3_PREFIX, '', 1) if s3_key.startswith(S3_PREFIX) else s3_key
+    parts = path.split('/')
+    if len(parts) < 3:
+        return ''
+    # parts[0]=team, parts[1]=category, parts[2:]=filename or subdirs
+    # 파일명에서 확장자 제거 후 topic 구성
+    sub_parts = parts[1:-1]  # category ~ 마지막 디렉토리 (파일명 제외)
+    filename = parts[-1]
+    name_no_ext = filename.rsplit('.', 1)[0] if '.' in filename else filename
+    # 파일명에서 _spec, _doc 등 접미사 제거하여 topic 추출
+    name_clean = re.sub(r'[_-](spec|doc|guide|manual|readme|overview)$', '', name_no_ext, flags=re.IGNORECASE)
+    if sub_parts:
+        return '/'.join(sub_parts) + '/' + name_clean if name_clean else '/'.join(sub_parts)
+    return name_clean
+
+
+def _update_superseded_metadata(bucket, topic, variant, new_s3_key, new_metadata_key):
+    """동일 topic+variant의 이전 버전 메타데이터에 superseded_by 추가 (Requirements 6.3)"""
+    try:
+        prefix = S3_PREFIX
+        resp = s3_client.list_objects_v2(Bucket=bucket, Prefix=prefix, MaxKeys=500)
+        for obj in resp.get('Contents', []):
+            key = obj['Key']
+            if not key.endswith('.metadata.json') or key == new_metadata_key:
+                continue
+            try:
+                meta_resp = s3_client.get_object(Bucket=bucket, Key=key)
+                meta_content = json.loads(meta_resp['Body'].read().decode('utf-8'))
+                attrs = meta_content.get('metadataAttributes', {})
+                if attrs.get('topic') == topic and attrs.get('variant') == variant and 'superseded_by' not in attrs:
+                    attrs['superseded_by'] = new_s3_key
+                    s3_client.put_object(
+                        Bucket=bucket, Key=key,
+                        Body=json.dumps(meta_content, ensure_ascii=False).encode('utf-8'),
+                        ContentType='application/json'
+                    )
+                    logger.info(f"Superseded metadata updated: {key} → {new_s3_key}")
+            except Exception as e:
+                logger.warning(f"Failed to check/update superseded metadata {key}: {e}")
+    except Exception as e:
+        logger.warning(f"Superseded metadata scan failed: {e}")
+
+
+# ============================================================================
+# Claim CRUD 함수 (Task 3.3)
+# Requirements: 5.1~5.10, 14.1, 14.2
+# ============================================================================
+
+def _exponential_backoff_jitter(attempt):
+    """Exponential Backoff with Full Jitter (base=100ms, max=2s)
+    Design: sleep(min(2s, 100ms * 2^attempt * random(0,1)))
+    """
+    base_ms = 100
+    max_ms = 2000
+    sleep_ms = min(max_ms, base_ms * (2 ** attempt) * random.random())
+    time.sleep(sleep_ms / 1000.0)
+
+
+def _validate_claim_fields(body):
+    """Claim 필드 유효성 검증 (Requirements 5.1, 5.6, 5.7)"""
+
+    # evidence 최소 1개 (Requirements 5.1)
+    evidence = body.get('evidence', [])
+    if not evidence or not isinstance(evidence, list) or len(evidence) < 1:
+        return response(400, {'error': 'evidence array must contain at least 1 item'})
+
+    # confidence 0.0~1.0 (Requirements 5.6)
+    confidence = body.get('confidence')
+    if confidence is None or not isinstance(confidence, (int, float)) or confidence < 0.0 or confidence > 1.0:
+        return response(400, {'error': 'confidence must be between 0.0 and 1.0'})
+
+    # topic 계층적 형식 (Requirements 5.7)
+    topic = body.get('topic', '')
+    if not topic or '/' not in topic:
+        return response(400, {'error': 'topic must be non-empty hierarchical format (slash-separated, e.g. ucie/phy/ltssm)'})
+
+    # statement 10~500자
+    statement = body.get('statement', '')
+    if len(statement) < 10 or len(statement) > 500:
+        return response(400, {'error': 'statement must be 10-500 characters'})
+
+    # evidence 각 항목의 source_chunk 10~1000자, chunk_hash SHA-256
+    for i, ev in enumerate(evidence):
+        source_chunk = ev.get('source_chunk', '')
+        if len(source_chunk) < 10 or len(source_chunk) > 1000:
+            return response(400, {'error': f'evidence[{i}].source_chunk must be 10-1000 characters'})
+
+    return None  # 검증 통과
+
+
+def create_claim(event):
+    """POST /rag/claims — 새 claim 생성
+    Requirements: 5.1~5.7, 5.9
+    """
+    body = parse_body(event)
+
+    # 필드 유효성 검증
+    validation_error = _validate_claim_fields(body)
+    if validation_error:
+        return validation_error
+
+    claim_id = str(uuid.uuid4())
+    claim_family_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat() + 'Z'
+
+    # evidence에 chunk_hash 자동 생성 (SHA-256)
+    evidence = body.get('evidence', [])
+    for ev in evidence:
+        if not ev.get('chunk_hash'):
+            ev['chunk_hash'] = hashlib.sha256(ev.get('source_chunk', '').encode('utf-8')).hexdigest()
+        if not ev.get('extraction_date'):
+            ev['extraction_date'] = now
+
+    topic = body['topic']
+    variant = body.get('variant', 'default')
+
+    item = {
+        'claim_id': claim_id,
+        'version': 1,
+        'topic': topic,
+        'statement': body['statement'],
+        'evidence': evidence,
+        'confidence': Decimal(str(body['confidence'])),
+        'status': 'draft',
+        'variant': variant,
+        'topic_variant': f"{topic}#{variant}",
+        'claim_family_id': claim_family_id,
+        'is_latest': True,
+        'derived_from': body.get('derived_from', []),
+        'created_at': now,
+        'last_verified_at': now,
+        'created_by': body.get('created_by', 'api:create_claim'),
+        'approval_status': 'not_applicable'
+    }
+
+    # Optimistic locking: attribute_not_exists(claim_id) (Requirements 5.9)
+    table = dynamodb.Table(CLAIM_DB_TABLE)
+    try:
+        table.put_item(
+            Item=item,
+            ConditionExpression='attribute_not_exists(claim_id)'
+        )
+    except table.meta.client.exceptions.ConditionalCheckFailedException:
+        return response(409, {'error': 'claim_id already exists (duplicate)'})
+
+    # Contradiction score 계산 (Requirements 5.5)
+    _check_contradiction(table, topic, body['statement'], claim_id)
+
+    logger.info(json.dumps({'event': 'claim_created', 'claim_id': claim_id, 'topic': topic, 'status': 'draft'}))
+    return response(201, {
+        'claim_id': claim_id,
+        'version': 1,
+        'status': 'draft',
+        'claim_family_id': claim_family_id
+    })
+
+
+def _check_contradiction(table, topic, new_statement, new_claim_id):
+    """동일 topic verified claim과 contradiction_score 계산 (Requirements 5.5)
+    score >= 0.7 시 기존 claim status → conflicted, 새 claim derived_from에 기록
+    """
+    try:
+        resp = table.query(
+            IndexName='topic-index',
+            KeyConditionExpression='topic = :t',
+            FilterExpression='#s = :v AND is_latest = :il',
+            ExpressionAttributeNames={'#s': 'status'},
+            ExpressionAttributeValues={':t': topic, ':v': 'verified', ':il': True}
+        )
+        existing_claims = resp.get('Items', [])
+        if not existing_claims:
+            return
+
+        # 간단한 문자열 유사도 기반 contradiction score 계산
+        # 실제 프로덕션에서는 LLM 기반 비교로 교체
+        for claim in existing_claims:
+            existing_statement = claim.get('statement', '')
+            score = _calculate_contradiction_score(new_statement, existing_statement)
+            if score >= 0.7:
+                # 기존 claim을 conflicted로 변경
+                try:
+                    table.update_item(
+                        Key={'claim_id': claim['claim_id'], 'version': claim['version']},
+                        UpdateExpression='SET #s = :cs',
+                        ExpressionAttributeNames={'#s': 'status'},
+                        ExpressionAttributeValues={':cs': 'conflicted'}
+                    )
+                    # 새 claim의 derived_from에 충돌 claim_id 기록
+                    table.update_item(
+                        Key={'claim_id': new_claim_id, 'version': 1},
+                        UpdateExpression='SET derived_from = list_append(derived_from, :df)',
+                        ExpressionAttributeValues={':df': [claim['claim_id']]}
+                    )
+                    logger.warning(json.dumps({
+                        'event': 'contradiction_detected',
+                        'new_claim_id': new_claim_id,
+                        'conflicted_claim_id': claim['claim_id'],
+                        'contradiction_score': score
+                    }))
+                except Exception as e:
+                    logger.error(f"Failed to update contradiction: {e}")
+    except Exception as e:
+        logger.error(f"Contradiction check failed: {e}")
+
+
+def _calculate_contradiction_score(statement_a, statement_b):
+    """두 statement 간 contradiction score 계산 (0.0~1.0)
+    간단한 토큰 겹침 기반 — 프로덕션에서는 LLM 기반 비교로 교체
+    """
+    tokens_a = set(statement_a.lower().split())
+    tokens_b = set(statement_b.lower().split())
+    if not tokens_a or not tokens_b:
+        return 0.0
+    intersection = tokens_a & tokens_b
+    union = tokens_a | tokens_b
+    jaccard = len(intersection) / len(union) if union else 0.0
+    # 높은 유사도 = 잠재적 모순 (동일 주제에 대한 다른 주장)
+    return jaccard
+
+
+def update_claim_status(event):
+    """POST /rag/claims/update-status — claim 상태 전이
+    Requirements: 5.2, 5.3, 5.8, 5.9, 5.10, 14.1
+    """
+    body = parse_body(event)
+    claim_id = body.get('claim_id', '')
+    new_status = body.get('new_status', '')
+    expected_version = body.get('expected_version')
+
+    if not claim_id or not new_status:
+        return response(400, {'error': 'claim_id and new_status are required'})
+    if expected_version is None:
+        return response(400, {'error': 'expected_version is required for optimistic locking'})
+
+    table = dynamodb.Table(CLAIM_DB_TABLE)
+
+    # 최대 3회 재시도 (Requirements 5.10)
+    for attempt in range(3):
+        try:
+            # 현재 claim 조회
+            result = table.get_item(Key={'claim_id': claim_id, 'version': int(expected_version)})
+            item = result.get('Item')
+            if not item:
+                return response(404, {'error': 'claim not found', 'claim_id': claim_id, 'version': expected_version})
+
+            current_status = item.get('status', '')
+
+            # 상태 전이 검증 (Requirements 5.2, 5.3)
+            allowed = ALLOWED_TRANSITIONS.get(current_status, [])
+            if new_status not in allowed:
+                return response(409, {
+                    'error': f'transition from {current_status} to {new_status} not allowed',
+                    'current_status': current_status,
+                    'allowed_transitions': allowed
+                })
+
+            # 업데이트 표현식 구성 — version은 sort key라 update 불가, 새 아이템으로 put
+            now = datetime.utcnow().isoformat() + 'Z'
+            new_version = int(expected_version) + 1
+
+            # 기존 아이템 복사 후 변경 필드 업데이트
+            new_item = dict(item)
+            new_item['version'] = new_version
+            new_item['status'] = new_status
+            new_item['last_verified_at'] = now
+
+            # verified 전이 시 approval_status = pending_review (Requirements 14.1)
+            if new_status == 'verified':
+                new_item['approval_status'] = 'pending_review'
+
+            # 새 버전 아이템 저장 (ConditionExpression으로 중복 방지)
+            table.put_item(
+                Item=new_item,
+                ConditionExpression='attribute_not_exists(claim_id) OR attribute_not_exists(version)'
+            )
+
+            # deprecated 전이 시 하위 claim cascading (Requirements 5.8)
+            if new_status == 'deprecated':
+                _cascade_deprecated(table, claim_id)
+
+            logger.info(json.dumps({
+                'event': 'claim_status_updated', 'claim_id': claim_id,
+                'from': current_status, 'to': new_status, 'version': new_version
+            }))
+            return response(200, {
+                'claim_id': claim_id,
+                'status': new_status,
+                'version': new_version
+            })
+
+        except dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
+            if attempt < 2:
+                logger.warning(f"Optimistic lock conflict for {claim_id}, retry {attempt + 1}/3")
+                _exponential_backoff_jitter(attempt)
+                # 최신 버전 다시 읽기
+                try:
+                    scan_resp = table.query(
+                        KeyConditionExpression='claim_id = :cid',
+                        ExpressionAttributeValues={':cid': claim_id},
+                        ScanIndexForward=False, Limit=1
+                    )
+                    if scan_resp.get('Items'):
+                        expected_version = scan_resp['Items'][0]['version']
+                except Exception:
+                    pass
+                continue
+            else:
+                logger.error(f"Optimistic lock failed after 3 retries: {claim_id}")
+                return response(409, {'error': 'version conflict after 3 retries', 'claim_id': claim_id})
+
+    return response(500, {'error': 'unexpected error in update_claim_status'})
+
+
+def _cascade_deprecated(table, deprecated_claim_id):
+    """deprecated 전이 시 하위 claim status → conflicted (Requirements 5.8)"""
+    try:
+        # derived_from에 deprecated_claim_id를 포함하는 claim 검색
+        scan_resp = table.scan(
+            FilterExpression='contains(derived_from, :cid) AND #s <> :dep',
+            ExpressionAttributeNames={'#s': 'status'},
+            ExpressionAttributeValues={':cid': deprecated_claim_id, ':dep': 'deprecated'}
+        )
+        for item in scan_resp.get('Items', []):
+            try:
+                table.update_item(
+                    Key={'claim_id': item['claim_id'], 'version': item['version']},
+                    UpdateExpression='SET #s = :cs',
+                    ExpressionAttributeNames={'#s': 'status'},
+                    ExpressionAttributeValues={':cs': 'conflicted'}
+                )
+                logger.warning(json.dumps({
+                    'event': 'deprecated_cascade',
+                    'parent_claim_id': deprecated_claim_id,
+                    'child_claim_id': item['claim_id'],
+                    'new_status': 'conflicted'
+                }))
+            except Exception as e:
+                logger.error(f"Cascade update failed for {item['claim_id']}: {e}")
+    except Exception as e:
+        logger.error(f"Deprecated cascade scan failed: {e}")
+
+
+def search_archive(event):
+    """POST /rag/search-archive — Bedrock KB 검색 + topic/source 메타데이터 필터
+    Requirements: 8.1, 8.4, 8.5
+    """
+    body = parse_body(event)
+    query = body.get('query', '')
+
+    if not query:
+        return response(400, {'error': 'missing required parameter: query'})
+
+    topic = body.get('topic', '')
+    source = body.get('source', '')
+    max_results = int(body.get('max_results', 5))
+
+    if not BEDROCK_KB_ID:
+        return response(200, {
+            'message': 'Bedrock KB ID not configured',
+            'query': query,
+            'results': []
+        })
+
+    try:
+        bedrock_runtime = boto3.client('bedrock-agent-runtime', region_name=BACKEND_REGION)
+
+        # 메타데이터 필터 구성 (topic/source)
+        filter_conditions = []
+        if topic:
+            filter_conditions.append({'equals': {'key': 'topic', 'value': topic}})
+        if source:
+            if source not in VALID_SOURCES:
+                return response(400, {'error': f'invalid source value: {source}. allowed: {sorted(VALID_SOURCES)}'})
+            filter_conditions.append({'equals': {'key': 'source', 'value': source}})
+
+        bedrock_filter = None
+        if len(filter_conditions) == 1:
+            bedrock_filter = filter_conditions[0]
+        elif len(filter_conditions) > 1:
+            bedrock_filter = {'andAll': filter_conditions}
+
+        vector_config = {
+            'searchType': os.environ.get('SEARCH_TYPE', 'HYBRID'),
+            'numberOfResults': max_results
+        }
+        if bedrock_filter:
+            vector_config['filter'] = bedrock_filter
+
+        resp = bedrock_runtime.retrieve_and_generate(
+            input={'text': query},
+            retrieveAndGenerateConfiguration={
+                'type': 'KNOWLEDGE_BASE',
+                'knowledgeBaseConfiguration': {
+                    'knowledgeBaseId': BEDROCK_KB_ID,
+                    'modelArn': os.environ.get('FOUNDATION_MODEL_ARN',
+                        'us.anthropic.claude-3-5-haiku-20241022-v1:0'),
+                    'retrievalConfiguration': {
+                        'vectorSearchConfiguration': vector_config
+                    }
+                }
+            }
+        )
+
+        # 응답 구조화
+        results = []
+        for c in resp.get('citations', []):
+            for r in c.get('retrievedReferences', []):
+                results.append({
+                    'uri': r.get('location', {}).get('s3Location', {}).get('uri', ''),
+                    'score': r.get('metadata', {}).get('score', r.get('score', None)),
+                    'text': c.get('generatedResponsePart', {}).get('textResponsePart', {}).get('text', '')
+                })
+
+        return response(200, {
+            'query': query,
+            'answer': resp.get('output', {}).get('text', ''),
+            'results': results,
+            'count': len(results),
+            'filters': {'topic': topic, 'source': source} if (topic or source) else None
+        })
+
+    except Exception as e:
+        logger.error(f"search_archive error: {e}")
+        return response(500, {'error': str(e)})
+
+
+def get_evidence(event):
+    """POST /rag/get-evidence — claim의 evidence 배열 반환
+    Requirements: 8.2
+    """
+    body = parse_body(event)
+    claim_id = body.get('claim_id', '')
+
+    if not claim_id:
+        return response(400, {'error': 'missing required parameter: claim_id'})
+
+    table = dynamodb.Table(CLAIM_DB_TABLE)
+
+    # 최신 버전의 claim 조회
+    result = table.query(
+        KeyConditionExpression='claim_id = :cid',
+        ExpressionAttributeValues={':cid': claim_id},
+        ScanIndexForward=False,
+        Limit=1
+    )
+    items = result.get('Items', [])
+    if not items:
+        return response(404, {'error': 'claim not found', 'claim_id': claim_id})
+
+    claim = items[0]
+    evidence = claim.get('evidence', [])
+
+    return response(200, {
+        'claim_id': claim_id,
+        'version': claim.get('version'),
+        'evidence': evidence,
+        'evidence_count': len(evidence)
+    })
+
+
+def list_verified_claims(event):
+    """POST /rag/list-verified-claims — topic의 verified claim 목록 반환
+    Requirements: 8.3 — topic-index GSI 사용, status=verified 필터
+    """
+    body = parse_body(event)
+    topic = body.get('topic', '')
+
+    if not topic:
+        return response(400, {'error': 'missing required parameter: topic'})
+
+    table = dynamodb.Table(CLAIM_DB_TABLE)
+
+    result = table.query(
+        IndexName='topic-index',
+        KeyConditionExpression='topic = :t',
+        FilterExpression='#s = :v AND is_latest = :il',
+        ExpressionAttributeNames={'#s': 'status'},
+        ExpressionAttributeValues={':t': topic, ':v': 'verified', ':il': True}
+    )
+
+    claims = []
+    for item in result.get('Items', []):
+        claims.append({
+            'claim_id': item.get('claim_id'),
+            'version': item.get('version'),
+            'statement': item.get('statement'),
+            'confidence': float(item.get('confidence', 0)),
+            'last_verified_at': item.get('last_verified_at'),
+            'evidence_count': len(item.get('evidence', []))
+        })
+
+    return response(200, {
+        'topic': topic,
+        'claims': claims,
+        'count': len(claims)
+    })
+
+
+# ============================================================================
+# Human Review Gate 함수 (Task 7.1)
+# Requirements: 14.1, 14.2, 14.3, 14.4, 14.6
+# ============================================================================
+
+def approve_claim(event):
+    """POST /rag/claims/approve — claim 승인
+    Requirements: 14.3 — approval_status='approved', approved_by, approved_at 설정
+    Optimistic locking 적용
+    """
+    body = parse_body(event)
+    claim_id = body.get('claim_id', '')
+    expected_version = body.get('version')
+    approved_by = body.get('approved_by', '')
+
+    if not claim_id or expected_version is None or not approved_by:
+        return response(400, {'error': 'claim_id, version, and approved_by are required'})
+
+    table = dynamodb.Table(CLAIM_DB_TABLE)
+
+    # 최대 3회 재시도 (optimistic locking)
+    for attempt in range(3):
+        try:
+            # 현재 claim 조회
+            result = table.get_item(Key={'claim_id': claim_id, 'version': int(expected_version)})
+            item = result.get('Item')
+            if not item:
+                return response(404, {'error': 'claim not found', 'claim_id': claim_id, 'version': expected_version})
+
+            # status가 verified인 경우만 승인 가능
+            current_status = item.get('status', '')
+            if current_status != 'verified':
+                return response(409, {
+                    'error': f'only verified claims can be approved, current status: {current_status}',
+                    'current_status': current_status
+                })
+
+            now = datetime.utcnow().isoformat() + 'Z'
+
+            # Optimistic locking으로 approval_status 업데이트
+            table.update_item(
+                Key={'claim_id': claim_id, 'version': int(expected_version)},
+                UpdateExpression='SET approval_status = :as, approved_by = :ab, approved_at = :at',
+                ConditionExpression='version = :ev',
+                ExpressionAttributeValues={
+                    ':as': 'approved',
+                    ':ab': approved_by,
+                    ':at': now,
+                    ':ev': int(expected_version)
+                }
+            )
+
+            logger.info(json.dumps({
+                'event': 'claim_approved',
+                'claim_id': claim_id,
+                'version': int(expected_version),
+                'approved_by': approved_by
+            }))
+
+            return response(200, {
+                'claim_id': claim_id,
+                'version': int(expected_version),
+                'approval_status': 'approved',
+                'approved_by': approved_by,
+                'approved_at': now
+            })
+
+        except dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
+            if attempt < 2:
+                logger.warning(f"Optimistic lock conflict for approve {claim_id}, retry {attempt + 1}/3")
+                _exponential_backoff_jitter(attempt)
+                try:
+                    scan_resp = table.query(
+                        KeyConditionExpression='claim_id = :cid',
+                        ExpressionAttributeValues={':cid': claim_id},
+                        ScanIndexForward=False, Limit=1
+                    )
+                    if scan_resp.get('Items'):
+                        expected_version = scan_resp['Items'][0]['version']
+                except Exception:
+                    pass
+                continue
+            else:
+                logger.error(f"Optimistic lock failed after 3 retries for approve: {claim_id}")
+                return response(409, {'error': 'version conflict after 3 retries', 'claim_id': claim_id})
+
+    return response(500, {'error': 'unexpected error in approve_claim'})
+
+
+def reject_claim(event):
+    """POST /rag/claims/reject — claim 거부
+    Requirements: 14.4 — approval_status='rejected' 설정
+    Optimistic locking 적용
+    """
+    body = parse_body(event)
+    claim_id = body.get('claim_id', '')
+    expected_version = body.get('version')
+    rejected_by = body.get('rejected_by', '')
+    rejection_reason = body.get('rejection_reason', '')
+
+    if not claim_id or expected_version is None or not rejected_by:
+        return response(400, {'error': 'claim_id, version, and rejected_by are required'})
+
+    table = dynamodb.Table(CLAIM_DB_TABLE)
+
+    # 최대 3회 재시도 (optimistic locking)
+    for attempt in range(3):
+        try:
+            # 현재 claim 조회
+            result = table.get_item(Key={'claim_id': claim_id, 'version': int(expected_version)})
+            item = result.get('Item')
+            if not item:
+                return response(404, {'error': 'claim not found', 'claim_id': claim_id, 'version': expected_version})
+
+            # status가 verified인 경우만 거부 가능
+            current_status = item.get('status', '')
+            if current_status != 'verified':
+                return response(409, {
+                    'error': f'only verified claims can be rejected, current status: {current_status}',
+                    'current_status': current_status
+                })
+
+            now = datetime.utcnow().isoformat() + 'Z'
+
+            # 업데이트 표현식 구성
+            update_expr = 'SET approval_status = :as, rejected_by = :rb, rejected_at = :rt'
+            expr_values = {
+                ':as': 'rejected',
+                ':rb': rejected_by,
+                ':rt': now,
+                ':ev': int(expected_version)
+            }
+
+            if rejection_reason:
+                update_expr += ', rejection_reason = :rr'
+                expr_values[':rr'] = rejection_reason
+
+            # Optimistic locking
+            table.update_item(
+                Key={'claim_id': claim_id, 'version': int(expected_version)},
+                UpdateExpression=update_expr,
+                ConditionExpression='version = :ev',
+                ExpressionAttributeValues=expr_values
+            )
+
+            logger.info(json.dumps({
+                'event': 'claim_rejected',
+                'claim_id': claim_id,
+                'version': int(expected_version),
+                'rejected_by': rejected_by,
+                'rejection_reason': rejection_reason or None
+            }))
+
+            return response(200, {
+                'claim_id': claim_id,
+                'version': int(expected_version),
+                'approval_status': 'rejected',
+                'rejected_by': rejected_by,
+                'rejection_reason': rejection_reason or None
+            })
+
+        except dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
+            if attempt < 2:
+                logger.warning(f"Optimistic lock conflict for reject {claim_id}, retry {attempt + 1}/3")
+                _exponential_backoff_jitter(attempt)
+                try:
+                    scan_resp = table.query(
+                        KeyConditionExpression='claim_id = :cid',
+                        ExpressionAttributeValues={':cid': claim_id},
+                        ScanIndexForward=False, Limit=1
+                    )
+                    if scan_resp.get('Items'):
+                        expected_version = scan_resp['Items'][0]['version']
+                except Exception:
+                    pass
+                continue
+            else:
+                logger.error(f"Optimistic lock failed after 3 retries for reject: {claim_id}")
+                return response(409, {'error': 'version conflict after 3 retries', 'claim_id': claim_id})
+
+    return response(500, {'error': 'unexpected error in reject_claim'})
+
+
+def _is_publishable(claim):
+    """publishable 계산: status='verified' AND approval_status='approved'
+    Requirements: 14.6
+    """
+    return claim.get('status') == 'verified' and claim.get('approval_status') == 'approved'
+
+
+# ============================================================================
+# HDD 섹션 생성 및 마크다운 출판 (Task 7.3)
+# Requirements: 10.1~10.6, 14.5, 14.7
+# ============================================================================
+
+# 면책 조항 (Requirements 10.6)
+HDD_DISCLAIMER = "이 문서는 AI가 검증된 claim을 기반으로 자동 생성하였습니다"
+
+
+def generate_hdd_section(event):
+    """POST /rag/generate-hdd — HDD 섹션 자동 생성
+    Requirements: 10.1, 10.2, 10.3, 10.6
+    - topic의 verified + approved claim 조회
+    - Foundation_Model로 HDD 마크다운 생성
+    - evidence 각주 포함 (include_evidence=true)
+    - 면책 조항 자동 포함
+    """
+    body = parse_body(event)
+    topic = body.get('topic', '')
+    section_title = body.get('section_title', '')
+    include_evidence = body.get('include_evidence', True)
+
+    if not topic:
+        return response(400, {'error': 'missing required parameter: topic'})
+    if not section_title:
+        return response(400, {'error': 'missing required parameter: section_title'})
+
+    table = dynamodb.Table(CLAIM_DB_TABLE)
+
+    # verified + approved claim 조회 (Requirements 10.2, 14.5)
+    try:
+        result = table.query(
+            IndexName='topic-index',
+            KeyConditionExpression='topic = :t',
+            FilterExpression='#s = :v AND is_latest = :il',
+            ExpressionAttributeNames={'#s': 'status'},
+            ExpressionAttributeValues={':t': topic, ':v': 'verified', ':il': True}
+        )
+    except Exception as e:
+        logger.error(f"Claim DB query failed for generate_hdd_section: {e}")
+        return response(500, {'error': f'Claim DB query failed: {str(e)}'})
+
+    # approved claim만 필터 (Requirements 14.5, 14.7)
+    approved_claims = [c for c in result.get('Items', []) if _is_publishable(c)]
+
+    if not approved_claims:
+        return response(403, {
+            'error': 'claim requires approval for critical topic',
+            'topic': topic,
+            'message': 'No verified+approved claims found for this topic. Claims must have approval_status=approved.'
+        })
+
+    # Foundation Model로 HDD 마크다운 생성 (Requirements 10.2)
+    try:
+        bedrock_runtime = boto3.client('bedrock-runtime', region_name=BACKEND_REGION)
+        model_id = os.environ.get('FOUNDATION_MODEL_ARN', 'us.anthropic.claude-3-5-haiku-20241022-v1:0')
+
+        # claim context 구성
+        claims_context = ""
+        footnotes = []
+        for i, claim in enumerate(approved_claims):
+            claims_context += f"\n[Claim {i+1}] (confidence: {claim.get('confidence', 'N/A')})\n"
+            claims_context += f"  Statement: {claim.get('statement', '')}\n"
+            for ev in claim.get('evidence', []):
+                footnote_idx = len(footnotes) + 1
+                footnotes.append({
+                    'index': footnote_idx,
+                    'source_document_id': ev.get('source_document_id', ''),
+                    'source_chunk': ev.get('source_chunk', '')[:200],
+                    'source_type': ev.get('source_type', ''),
+                    'page_number': ev.get('page_number')
+                })
+
+        evidence_instruction = ""
+        if include_evidence:
+            evidence_instruction = "\n각 주장에 대해 [^N] 형식의 각주 번호를 포함하세요. 각주는 문서 끝에 배치됩니다."
+
+        prompt = f"""다음 검증된 claim들을 기반으로 HDD(Hardware Design Description) 섹션을 마크다운 형식으로 작성하세요.
+
+섹션 제목: {section_title}
+주제: {topic}
+{evidence_instruction}
+
+검증된 Claim 목록:
+{claims_context}
+
+마크다운 형식으로 기술 문서 섹션을 작성하세요. 전문적이고 정확한 기술 문서 스타일을 유지하세요."""
+
+        resp = bedrock_runtime.invoke_model(
+            modelId=model_id,
+            contentType='application/json',
+            accept='application/json',
+            body=json.dumps({
+                'anthropic_version': 'bedrock-2023-05-31',
+                'max_tokens': 4096,
+                'messages': [{'role': 'user', 'content': prompt}]
+            })
+        )
+
+        resp_body = json.loads(resp['body'].read())
+        markdown_content = resp_body.get('content', [{}])[0].get('text', '')
+
+    except Exception as e:
+        logger.error(f"HDD section generation failed: {e}")
+        return response(500, {'error': f'HDD section generation failed: {str(e)}'})
+
+    # evidence 각주 추가 (Requirements 10.3)
+    if include_evidence and footnotes:
+        markdown_content += "\n\n---\n\n### 참조 (Evidence)\n\n"
+        for fn in footnotes:
+            markdown_content += f"[^{fn['index']}]: {fn['source_document_id']}"
+            if fn.get('page_number'):
+                markdown_content += f" (p.{fn['page_number']})"
+            if fn.get('source_type'):
+                markdown_content += f" [{fn['source_type']}]"
+            markdown_content += "\n"
+
+    # 면책 조항 자동 포함 (Requirements 10.6)
+    markdown_content += f"\n\n---\n\n> ⚠️ {HDD_DISCLAIMER}\n"
+
+    logger.info(json.dumps({
+        'event': 'hdd_section_generated',
+        'topic': topic,
+        'section_title': section_title,
+        'claims_used': len(approved_claims),
+        'include_evidence': include_evidence
+    }))
+
+    return response(200, {
+        'topic': topic,
+        'section_title': section_title,
+        'markdown': markdown_content,
+        'claims_used': len(approved_claims),
+        'include_evidence': include_evidence,
+        'disclaimer': HDD_DISCLAIMER
+    })
+
+
+def publish_markdown(event):
+    """POST /rag/publish-markdown — 마크다운 출판
+    Requirements: 10.4, 10.5, 14.5, 14.7
+    - Seoul_S3 published/ 접두사에 저장
+    - 메타데이터 자동 생성 (source='system_generated')
+    - critical topic claim은 approval_status='approved'만 사용 (HTTP 403)
+    """
+    body = parse_body(event)
+    content = body.get('content', '')
+    filename = body.get('filename', '')
+    topic = body.get('topic', '')
+
+    if not content:
+        return response(400, {'error': 'missing required parameter: content'})
+    if not filename:
+        return response(400, {'error': 'missing required parameter: filename'})
+
+    # .md 확장자 보장
+    if not filename.endswith('.md'):
+        filename += '.md'
+
+    # topic이 지정된 경우, 해당 topic의 claim이 모두 approved인지 확인 (Requirements 14.5, 14.7)
+    if topic:
+        table = dynamodb.Table(CLAIM_DB_TABLE)
+        try:
+            result = table.query(
+                IndexName='topic-index',
+                KeyConditionExpression='topic = :t',
+                FilterExpression='#s = :v AND is_latest = :il',
+                ExpressionAttributeNames={'#s': 'status'},
+                ExpressionAttributeValues={':t': topic, ':v': 'verified', ':il': True}
+            )
+            verified_claims = result.get('Items', [])
+
+            # verified claim 중 미승인 claim이 있으면 HTTP 403
+            unapproved = [c for c in verified_claims if not _is_publishable(c)]
+            if unapproved:
+                return response(403, {
+                    'error': 'claim requires approval for critical topic',
+                    'topic': topic,
+                    'unapproved_count': len(unapproved),
+                    'message': f'{len(unapproved)} claims for topic "{topic}" are not approved. All claims must have approval_status=approved for publishing.'
+                })
+        except Exception as e:
+            logger.error(f"Claim approval check failed for publish_markdown: {e}")
+            return response(500, {'error': f'Claim approval check failed: {str(e)}'})
+
+    # Seoul_S3 published/ 접두사에 저장 (Requirements 10.4)
+    s3_key = f"published/{filename}"
+    try:
+        s3_client.put_object(
+            Bucket=S3_BUCKET_SEOUL,
+            Key=s3_key,
+            Body=content.encode('utf-8'),
+            ContentType='text/markdown; charset=utf-8',
+            ServerSideEncryption='aws:kms'
+        )
+    except Exception as e:
+        logger.error(f"Failed to save markdown to S3: {e}")
+        return response(500, {'error': f'Failed to save markdown: {str(e)}'})
+
+    # 메타데이터 자동 생성 (Requirements 10.5)
+    now = datetime.utcnow().isoformat() + 'Z'
+    metadata = {
+        'metadataAttributes': {
+            'source': 'system_generated',
+            'document_type': 'markdown',
+            'generation_basis': 'verified_claims',
+            'upload_date': now,
+            'topic': topic or 'general',
+            'variant': 'default',
+            'doc_version': '1.0'
+        }
+    }
+
+    metadata_key = f"{s3_key}.metadata.json"
+    try:
+        s3_client.put_object(
+            Bucket=S3_BUCKET_SEOUL,
+            Key=metadata_key,
+            Body=json.dumps(metadata, ensure_ascii=False).encode('utf-8'),
+            ContentType='application/json',
+            ServerSideEncryption='aws:kms'
+        )
+    except Exception as e:
+        logger.warning(f"Metadata creation failed for {s3_key} (non-blocking): {e}")
+
+    logger.info(json.dumps({
+        'event': 'markdown_published',
+        's3_key': s3_key,
+        'filename': filename,
+        'topic': topic or 'general',
+        'content_length': len(content)
+    }))
+
+    return response(200, {
+        'message': 'Markdown published successfully',
+        's3_key': s3_key,
+        'bucket': S3_BUCKET_SEOUL,
+        'filename': filename,
+        'topic': topic or 'general',
+        'metadata_key': metadata_key,
+        'source': 'system_generated',
+        'generation_basis': 'verified_claims'
+    })
+
+
+# ============================================================================
+# Verification Pipeline (Task 5.4)
+# Requirements: 9.1~9.9
+# ============================================================================
+
+def verification_pipeline(query, variant=None):
+    """8단계 Verification Pipeline 실행
+    (1) 질문 수신 → (2) topic 식별 → (3) claim 검색 → (3.5) Neptune placeholder
+    → (4) evidence 추적 → (5) 충돌 검사 → (6) 버전 확인 → (7) 답변 생성 → (8) evidence 첨부
+    Requirements: 9.1~9.9
+    """
+    pipeline_start = time.time()
+    step_times = {}
+
+    # CloudWatch 메트릭 클라이언트
+    try:
+        cloudwatch = boto3.client('cloudwatch', region_name='ap-northeast-2')
+    except Exception:
+        cloudwatch = None
+
+    def _log_step(step_name, start_ts):
+        elapsed_ms = int((time.time() - start_ts) * 1000)
+        step_times[step_name] = elapsed_ms
+        logger.info(json.dumps({
+            'event': 'verification_pipeline_step',
+            'step': step_name,
+            'execution_time_ms': elapsed_ms,
+            'query_length': len(query)
+        }))
+
+    # (1) 질문 수신
+    step_start = time.time()
+    logger.info(json.dumps({'event': 'verification_pipeline_start', 'query_length': len(query), 'variant': variant}))
+    _log_step('1_receive_query', step_start)
+
+    # (2) Foundation Model로 topic 식별 (최대 3개)
+    step_start = time.time()
+    topics_identified = _identify_topics(query)
+    _log_step('2_topic_identification', step_start)
+
+    if not topics_identified:
+        # topic 식별 실패 시 Bedrock KB 폴백
+        return _bedrock_kb_fallback(query, pipeline_start, step_times, topics_identified)
+
+    # (3) Claim DB에서 verified claim 검색
+    step_start = time.time()
+    table = dynamodb.Table(CLAIM_DB_TABLE)
+    verified_claims = []
+
+    for topic in topics_identified:
+        try:
+            if variant:
+                # variant 파라미터 포함 시 topic-variant-index GSI 사용 (Requirements 9.9)
+                topic_variant_key = f"{topic}#{variant}"
+                result = table.query(
+                    IndexName='topic-variant-index',
+                    KeyConditionExpression='topic_variant = :tv',
+                    FilterExpression='#s = :v AND is_latest = :il',
+                    ExpressionAttributeNames={'#s': 'status'},
+                    ExpressionAttributeValues={':tv': topic_variant_key, ':v': 'verified', ':il': True}
+                )
+            else:
+                # topic-index GSI 사용 (Requirements 9.3)
+                result = table.query(
+                    IndexName='topic-index',
+                    KeyConditionExpression='topic = :t',
+                    FilterExpression='#s = :v AND is_latest = :il',
+                    ExpressionAttributeNames={'#s': 'status'},
+                    ExpressionAttributeValues={':t': topic, ':v': 'verified', ':il': True}
+                )
+            verified_claims.extend(result.get('Items', []))
+        except Exception as e:
+            logger.error(f"Claim DB query failed for topic {topic}: {e}")
+
+    _log_step('3_claim_search', step_start)
+
+    # Claim 없으면 Bedrock KB 폴백 (Requirements 9.7)
+    if not verified_claims:
+        return _bedrock_kb_fallback(query, pipeline_start, step_times, topics_identified)
+
+    # (3.5) Neptune Graph DB 병렬 질의 (Phase 6 — Requirements 16.12)
+    step_start = time.time()
+    neptune_results = []
+    neptune_fallback = False
+    neptune_endpoint = os.environ.get('NEPTUNE_ENDPOINT', '')
+
+    if neptune_endpoint and topics_identified:
+        try:
+            neptune_results = _query_neptune_graph(neptune_endpoint, topics_identified, query)
+        except Exception as e:
+            neptune_fallback = True
+            logger.warning(json.dumps({
+                'event': 'neptune_query_fallback',
+                'error': str(e),
+                'topics': topics_identified
+            }))
+    else:
+        neptune_fallback = True  # Neptune 미설정
+    _log_step('3.5_neptune_graph', step_start)
+
+    # (4) Evidence 근거 추적
+    step_start = time.time()
+    all_evidence = []
+    for claim in verified_claims:
+        evidence_list = claim.get('evidence', [])
+        for ev in evidence_list:
+            ev['claim_id'] = claim.get('claim_id')
+            all_evidence.append(ev)
+    _log_step('4_evidence_tracking', step_start)
+
+    # (5) 충돌 검사 — conflicted claim 존재 여부 확인 (Requirements 9.4)
+    step_start = time.time()
+    has_conflicts = False
+    for topic in topics_identified:
+        try:
+            conflict_result = table.query(
+                IndexName='topic-index',
+                KeyConditionExpression='topic = :t',
+                FilterExpression='#s = :cs',
+                ExpressionAttributeNames={'#s': 'status'},
+                ExpressionAttributeValues={':t': topic, ':cs': 'conflicted'}
+            )
+            if conflict_result.get('Items'):
+                has_conflicts = True
+                break
+        except Exception as e:
+            logger.error(f"Conflict check failed for topic {topic}: {e}")
+    _log_step('5_conflict_check', step_start)
+
+    # (6) 버전 확인 — is_latest=true만 사용 (이미 필터링됨)
+    step_start = time.time()
+    latest_claims = [c for c in verified_claims if c.get('is_latest', False)]
+    _log_step('6_version_check', step_start)
+
+    # (7) Foundation Model로 답변 생성 (Requirements 9.5, 16.12)
+    step_start = time.time()
+    answer = _generate_answer_from_claims(query, latest_claims, has_conflicts, neptune_results)
+    _log_step('7_answer_generation', step_start)
+
+    # (8) Evidence 첨부
+    step_start = time.time()
+    claims_used = list(set(c.get('claim_id', '') for c in latest_claims))
+    citations = []
+    for claim in latest_claims:
+        for ev in claim.get('evidence', []):
+            citations.append({
+                'text': ev.get('source_chunk', ''),
+                'references': [{
+                    'uri': ev.get('source_document_id', ''),
+                    'claim_id': claim.get('claim_id', ''),
+                    'source_type': ev.get('source_type', ''),
+                    'page_number': ev.get('page_number')
+                }]
+            })
+    _log_step('8_evidence_attachment', step_start)
+
+    pipeline_execution_time_ms = int((time.time() - pipeline_start) * 1000)
+
+    # KPI: AvgEvidenceCountPerAnswer (Requirements 15.5)
+    avg_evidence = len(all_evidence) / max(len(latest_claims), 1)
+    _publish_metric(cloudwatch, 'AvgEvidenceCountPerAnswer', avg_evidence, 'Count')
+
+    logger.info(json.dumps({
+        'event': 'verification_pipeline_complete',
+        'pipeline_execution_time_ms': pipeline_execution_time_ms,
+        'claims_used': len(claims_used),
+        'topics_identified': topics_identified,
+        'has_conflicts': has_conflicts,
+        'fallback': False,
+        'step_times': step_times
+    }))
+
+    return {
+        'answer': answer,
+        'citations': citations,
+        'verification_metadata': {
+            'claims_used': claims_used,
+            'topics_identified': topics_identified,
+            'has_conflicts': has_conflicts,
+            'pipeline_execution_time_ms': pipeline_execution_time_ms,
+            'fallback': False,
+            'neptune_fallback': neptune_fallback
+        }
+    }
+
+
+def _identify_topics(query):
+    """Foundation Model로 질의에서 topic 식별 (최대 3개)
+    Requirements: 9.2
+    """
+    try:
+        bedrock_runtime = boto3.client('bedrock-runtime', region_name=BACKEND_REGION)
+        model_id = os.environ.get('FOUNDATION_MODEL_ARN', 'us.anthropic.claude-3-5-haiku-20241022-v1:0')
+
+        prompt = f"""다음 질문에서 관련 기술 주제(topic)를 최대 3개 식별하세요.
+topic은 계층적 형식(슬래시 구분)으로 반환하세요.
+예: ["ucie/phy/ltssm", "ahb/signal/haddr", "soc/clock"]
+
+JSON 배열만 반환하세요. 다른 텍스트는 포함하지 마세요.
+
+질문: {query}"""
+
+        resp = bedrock_runtime.invoke_model(
+            modelId=model_id,
+            contentType='application/json',
+            accept='application/json',
+            body=json.dumps({
+                'anthropic_version': 'bedrock-2023-05-31',
+                'max_tokens': 256,
+                'messages': [{'role': 'user', 'content': prompt}]
+            })
+        )
+
+        resp_body = json.loads(resp['body'].read())
+        content_text = resp_body.get('content', [{}])[0].get('text', '[]')
+
+        json_match = re.search(r'\[.*?\]', content_text, re.DOTALL)
+        if json_match:
+            topics = json.loads(json_match.group())
+            # 최대 3개로 제한
+            return [t for t in topics if isinstance(t, str) and '/' in t][:3]
+        return []
+
+    except Exception as e:
+        logger.error(f"Topic identification failed: {e}")
+        return []
+
+
+def _generate_answer_from_claims(query, claims, has_conflicts, neptune_results=None):
+    """Verified claim + Neptune 그래프 컨텍스트 기반 답변 생성 (Requirements 9.5, 16.12)"""
+    try:
+        bedrock_runtime = boto3.client('bedrock-runtime', region_name=BACKEND_REGION)
+        model_id = os.environ.get('FOUNDATION_MODEL_ARN', 'us.anthropic.claude-3-5-haiku-20241022-v1:0')
+
+        # claim context 구성
+        claims_context = ""
+        for i, claim in enumerate(claims):
+            claims_context += f"\n[Claim {i+1}] (confidence: {claim.get('confidence', 'N/A')})\n"
+            claims_context += f"  Statement: {claim.get('statement', '')}\n"
+            for ev in claim.get('evidence', []):
+                claims_context += f"  Evidence: {ev.get('source_chunk', '')[:200]}\n"
+
+        # Neptune 그래프 컨텍스트 구성 (Phase 6 — Requirements 16.12)
+        graph_context = ""
+        if neptune_results:
+            graph_context = "\n\n모듈 관계 그래프 정보:"
+            for rel in neptune_results[:10]:  # 최대 10개 관계만 포함
+                graph_context += f"\n  {rel.get('source', '')} --[{rel.get('relationship', '')}]--> {rel.get('target_name', '')} ({rel.get('target_type', '')})"
+
+        conflict_warning = ""
+        if has_conflicts:
+            conflict_warning = "\n주의: 일부 정보에 충돌이 감지되었습니다. 답변에 이 사실을 언급하세요."
+
+        prompt = f"""다음 검증된 claim들을 기반으로 질문에 답변하세요.
+claim의 statement와 evidence만 사용하여 정확한 답변을 생성하세요.{conflict_warning}
+
+검증된 Claim 목록:
+{claims_context}{graph_context}
+
+질문: {query}"""
+
+        resp = bedrock_runtime.invoke_model(
+            modelId=model_id,
+            contentType='application/json',
+            accept='application/json',
+            body=json.dumps({
+                'anthropic_version': 'bedrock-2023-05-31',
+                'max_tokens': 2048,
+                'messages': [{'role': 'user', 'content': prompt}]
+            })
+        )
+
+        resp_body = json.loads(resp['body'].read())
+        answer = resp_body.get('content', [{}])[0].get('text', '')
+
+        # 충돌 경고 메시지 추가 (Requirements 9.4)
+        if has_conflicts and '충돌' not in answer:
+            answer += "\n\n⚠️ 일부 정보에 충돌이 감지되었습니다. 최신 검증 결과를 확인하세요."
+
+        return answer
+
+    except Exception as e:
+        logger.error(f"Answer generation from claims failed: {e}")
+        return f"검증된 claim을 기반으로 답변을 생성하지 못했습니다: {str(e)}"
+
+
+def _query_neptune_graph(neptune_endpoint, topics, query):
+    """Neptune Graph DB에서 topic 관련 그래프 관계 조회 (Requirements 16.12)
+    개별 쿼리 Timeout: 30초
+    실패 시 빈 결과 반환 (시스템 중단 없음)
+    """
+    import requests
+    from requests_aws4auth import AWS4Auth
+
+    session = boto3.Session()
+    credentials = session.get_credentials().get_frozen_credentials()
+    region = session.region_name or 'ap-northeast-2'
+    auth = AWS4Auth(
+        credentials.access_key,
+        credentials.secret_key,
+        region,
+        'neptune-db',
+        session_token=credentials.token,
+    )
+
+    neptune_url = f"https://{neptune_endpoint}:8182/openCypher"
+    results = []
+
+    for topic in topics:
+        # topic에서 모듈명 추출 (예: "ucie/phy" → "UCIE_PHY" 등)
+        module_hint = topic.split('/')[-1].upper() if '/' in topic else topic.upper()
+
+        try:
+            # 모듈 관계 조회 (INSTANTIATES, HAS_PORT)
+            cypher_query = {
+                "query": (
+                    "MATCH (m:Module)-[r]->(n) "
+                    "WHERE m.name CONTAINS $hint "
+                    "RETURN m.name AS source, type(r) AS relationship, "
+                    "labels(n)[0] AS target_type, n.name AS target_name "
+                    "LIMIT 20"
+                ),
+                "parameters": {"hint": module_hint}
+            }
+
+            resp = requests.post(neptune_url, auth=auth, json=cypher_query, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+
+            if data.get('results'):
+                for row in data['results']:
+                    results.append({
+                        'source': row.get('source', ''),
+                        'relationship': row.get('relationship', ''),
+                        'target_type': row.get('target_type', ''),
+                        'target_name': row.get('target_name', ''),
+                        'topic': topic
+                    })
+        except Exception as e:
+            logger.warning(f"Neptune query failed for topic {topic}: {e}")
+            continue
+
+    return results
+
+
+# ============================================================================
+# Neptune Graph DB API 엔드포인트 (Phase 6)
+# Requirements: 16.9, 16.10, 16.11
+# ============================================================================
+
+def _get_neptune_auth():
+    """Neptune IAM 인증 헬퍼 — SigV4 Auth 객체 반환"""
+    import requests
+    from requests_aws4auth import AWS4Auth
+
+    session = boto3.Session()
+    credentials = session.get_credentials().get_frozen_credentials()
+    region = session.region_name or 'ap-northeast-2'
+    return AWS4Auth(
+        credentials.access_key,
+        credentials.secret_key,
+        region,
+        'neptune-db',
+        session_token=credentials.token,
+    )
+
+
+def trace_signal_path(event):
+    """POST /rag/trace-signal-path — 신호 전파 경로 추적 (Requirements 16.9)"""
+    req_start = time.time()
+    body = parse_body(event)
+    module_name = body.get('module_name', '')
+    signal_name = body.get('signal_name', '')
+
+    if not module_name or not signal_name:
+        return response(400, {'error': 'module_name과 signal_name은 필수입니다'})
+
+    neptune_endpoint = os.environ.get('NEPTUNE_ENDPOINT', '')
+    if not neptune_endpoint:
+        return response(200, {
+            'signal_path': [],
+            'module_name': module_name,
+            'signal_name': signal_name,
+            'neptune_configured': False,
+            'execution_time_ms': int((time.time() - req_start) * 1000)
+        })
+
+    try:
+        import requests as req_lib
+        auth = _get_neptune_auth()
+        neptune_url = f"https://{neptune_endpoint}:8182/openCypher"
+
+        # 신호 전파 경로 탐색: Signal DRIVES 관계 체인
+        cypher_query = {
+            "query": (
+                "MATCH path = (m:Module {name: $module})-[:HAS_PORT]->(p:Port)-[:CONNECTS_TO*1..5]->(target) "
+                "WHERE p.name CONTAINS $signal "
+                "RETURN [n IN nodes(path) | {name: n.name, type: labels(n)[0]}] AS path_nodes, "
+                "[r IN relationships(path) | type(r)] AS path_edges "
+                "LIMIT 10"
+            ),
+            "parameters": {"module": module_name, "signal": signal_name}
+        }
+
+        resp = req_lib.post(neptune_url, auth=auth, json=cypher_query, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+
+        signal_paths = []
+        for row in data.get('results', []):
+            signal_paths.append({
+                'nodes': row.get('path_nodes', []),
+                'edges': row.get('path_edges', [])
+            })
+
+        return response(200, {
+            'signal_path': signal_paths,
+            'module_name': module_name,
+            'signal_name': signal_name,
+            'neptune_configured': True,
+            'execution_time_ms': int((time.time() - req_start) * 1000)
+        })
+
+    except Exception as e:
+        logger.error(f"trace_signal_path failed: {e}")
+        return response(500, {
+            'error': str(e),
+            'execution_time_ms': int((time.time() - req_start) * 1000)
+        })
+
+
+def find_instantiation_tree(event):
+    """POST /rag/find-instantiation-tree — 모듈 인스턴스화 트리 조회 (Requirements 16.10)"""
+    req_start = time.time()
+    body = parse_body(event)
+    module_name = body.get('module_name', '')
+    depth = body.get('depth', 3)
+
+    if not module_name:
+        return response(400, {'error': 'module_name은 필수입니다'})
+
+    neptune_endpoint = os.environ.get('NEPTUNE_ENDPOINT', '')
+    if not neptune_endpoint:
+        return response(200, {
+            'instantiation_tree': [],
+            'module_name': module_name,
+            'depth': depth,
+            'neptune_configured': False,
+            'execution_time_ms': int((time.time() - req_start) * 1000)
+        })
+
+    try:
+        import requests as req_lib
+        auth = _get_neptune_auth()
+        neptune_url = f"https://{neptune_endpoint}:8182/openCypher"
+
+        # 인스턴스화 트리 탐색: INSTANTIATES 관계 체인
+        cypher_query = {
+            "query": (
+                "MATCH path = (root:Module {name: $module})-[:INSTANTIATES*1.." + str(min(int(depth), 10)) + "]->(child:Module) "
+                "RETURN root.name AS root, "
+                "[n IN nodes(path) | n.name] AS hierarchy, "
+                "length(path) AS depth "
+                "ORDER BY depth "
+                "LIMIT 50"
+            ),
+            "parameters": {"module": module_name}
+        }
+
+        resp = req_lib.post(neptune_url, auth=auth, json=cypher_query, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+
+        tree = []
+        for row in data.get('results', []):
+            tree.append({
+                'root': row.get('root', ''),
+                'hierarchy': row.get('hierarchy', []),
+                'depth': row.get('depth', 0)
+            })
+
+        return response(200, {
+            'instantiation_tree': tree,
+            'module_name': module_name,
+            'depth': depth,
+            'neptune_configured': True,
+            'execution_time_ms': int((time.time() - req_start) * 1000)
+        })
+
+    except Exception as e:
+        logger.error(f"find_instantiation_tree failed: {e}")
+        return response(500, {
+            'error': str(e),
+            'execution_time_ms': int((time.time() - req_start) * 1000)
+        })
+
+
+def find_clock_crossings(event):
+    """POST /rag/find-clock-crossings — 클럭 도메인 크로싱 신호 조회 (Requirements 16.11)"""
+    req_start = time.time()
+    body = parse_body(event)
+    module_name = body.get('module_name', '')
+
+    if not module_name:
+        return response(400, {'error': 'module_name은 필수입니다'})
+
+    neptune_endpoint = os.environ.get('NEPTUNE_ENDPOINT', '')
+    if not neptune_endpoint:
+        return response(200, {
+            'clock_crossings': [],
+            'module_name': module_name,
+            'neptune_configured': False,
+            'execution_time_ms': int((time.time() - req_start) * 1000)
+        })
+
+    try:
+        import requests as req_lib
+        auth = _get_neptune_auth()
+        neptune_url = f"https://{neptune_endpoint}:8182/openCypher"
+
+        # 클럭 도메인 크로싱 탐색: 서로 다른 ClockDomain에 속한 신호 간 연결
+        cypher_query = {
+            "query": (
+                "MATCH (m:Module {name: $module})-[:HAS_PORT]->(p:Port)-[:CONNECTS_TO]->(q:Port), "
+                "(p)-[:BELONGS_TO_DOMAIN]->(cd1:ClockDomain), "
+                "(q)-[:BELONGS_TO_DOMAIN]->(cd2:ClockDomain) "
+                "WHERE cd1.name <> cd2.name "
+                "RETURN p.name AS source_signal, cd1.name AS source_domain, "
+                "q.name AS target_signal, cd2.name AS target_domain "
+                "LIMIT 50"
+            ),
+            "parameters": {"module": module_name}
+        }
+
+        resp = req_lib.post(neptune_url, auth=auth, json=cypher_query, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+
+        crossings = []
+        for row in data.get('results', []):
+            crossings.append({
+                'source_signal': row.get('source_signal', ''),
+                'source_domain': row.get('source_domain', ''),
+                'target_signal': row.get('target_signal', ''),
+                'target_domain': row.get('target_domain', '')
+            })
+
+        return response(200, {
+            'clock_crossings': crossings,
+            'module_name': module_name,
+            'neptune_configured': True,
+            'execution_time_ms': int((time.time() - req_start) * 1000)
+        })
+
+    except Exception as e:
+        logger.error(f"find_clock_crossings failed: {e}")
+        return response(500, {
+            'error': str(e),
+            'execution_time_ms': int((time.time() - req_start) * 1000)
+        })
+
+
+def _bedrock_kb_fallback(query, pipeline_start, step_times, topics_identified):
+    """Claim DB에 관련 claim 없을 때 Bedrock KB 폴백 (Requirements 9.7)"""
+    try:
+        cloudwatch = boto3.client('cloudwatch', region_name='ap-northeast-2')
+    except Exception:
+        cloudwatch = None
+
+    # KPI: BedrockKBFallbackRate 증가 (Requirements 15.4)
+    _publish_metric(cloudwatch, 'BedrockKBFallbackRate', 1, 'Count')
+
+    try:
+        bedrock_runtime = boto3.client('bedrock-agent-runtime', region_name=BACKEND_REGION)
+
+        vector_config = {
+            'searchType': os.environ.get('SEARCH_TYPE', 'HYBRID'),
+            'numberOfResults': int(os.environ.get('SEARCH_RESULTS_COUNT', '5'))
+        }
+
+        resp = bedrock_runtime.retrieve_and_generate(
+            input={'text': query},
+            retrieveAndGenerateConfiguration={
+                'type': 'KNOWLEDGE_BASE',
+                'knowledgeBaseConfiguration': {
+                    'knowledgeBaseId': BEDROCK_KB_ID,
+                    'modelArn': os.environ.get('FOUNDATION_MODEL_ARN',
+                        'us.anthropic.claude-3-5-haiku-20241022-v1:0'),
+                    'retrievalConfiguration': {
+                        'vectorSearchConfiguration': vector_config
+                    }
+                }
+            }
+        )
+
+        citations = []
+        for c in resp.get('citations', []):
+            refs = []
+            for r in c.get('retrievedReferences', []):
+                refs.append({
+                    'uri': r.get('location', {}).get('s3Location', {}).get('uri', ''),
+                    'score': r.get('metadata', {}).get('score', r.get('score', None))
+                })
+            citations.append({
+                'text': c.get('generatedResponsePart', {}).get('textResponsePart', {}).get('text', ''),
+                'references': refs
+            })
+
+        pipeline_execution_time_ms = int((time.time() - pipeline_start) * 1000)
+
+        logger.info(json.dumps({
+            'event': 'verification_pipeline_fallback',
+            'pipeline_execution_time_ms': pipeline_execution_time_ms,
+            'topics_identified': topics_identified,
+            'step_times': step_times
+        }))
+
+        return {
+            'answer': resp.get('output', {}).get('text', ''),
+            'citations': citations,
+            'verification_metadata': {
+                'claims_used': [],
+                'topics_identified': topics_identified,
+                'has_conflicts': False,
+                'pipeline_execution_time_ms': pipeline_execution_time_ms,
+                'fallback': True
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"Bedrock KB fallback failed: {e}")
+        pipeline_execution_time_ms = int((time.time() - pipeline_start) * 1000)
+        return {
+            'answer': f'Verification Pipeline 및 Bedrock KB 폴백 모두 실패: {str(e)}',
+            'citations': [],
+            'verification_metadata': {
+                'claims_used': [],
+                'topics_identified': topics_identified,
+                'has_conflicts': False,
+                'pipeline_execution_time_ms': pipeline_execution_time_ms,
+                'fallback': True
+            }
+        }
+
+
+def _publish_metric(cloudwatch, metric_name, value, unit):
+    """CloudWatch 커스텀 메트릭 발행 (BOS-AI/ClaimDB 네임스페이스)
+    Requirements: 15.1~15.8
+    """
+    if not cloudwatch:
+        return
+    try:
+        cloudwatch.put_metric_data(
+            Namespace='BOS-AI/ClaimDB',
+            MetricData=[{
+                'MetricName': metric_name,
+                'Value': float(value),
+                'Unit': unit,
+                'Timestamp': datetime.utcnow()
+            }]
+        )
+    except Exception as e:
+        logger.warning(f"Failed to publish metric {metric_name}: {e}")
+
+
+# ============================================================================
+# Claim Ingestion 파이프라인 (Task 3.12)
+# Requirements: 7.1~7.7
+# ============================================================================
+
+def ingest_claims(event, context):
+    """Lambda Event 비동기 호출 — 문서를 claim 단위로 분해
+    Requirements: 7.1~7.7
+    - 1회 최대 100건 문서 처리
+    - Foundation_Model로 claim 추출 (statement + evidence 분리)
+    - 각 claim을 Claim_DB에 status=draft, version=1로 저장
+    - has_more + continuation_token 페이지네이션
+    """
+    s3_prefix = event.get('s3_prefix', S3_PREFIX)
+    continuation_token = event.get('continuation_token', None)
+    max_docs = min(event.get('max_docs', 100), 100)  # 최대 100건
+
+    documents_processed = 0
+    claims_created = 0
+    documents_failed = 0
+    last_key = None
+
+    list_params = {
+        'Bucket': S3_BUCKET_SEOUL,
+        'Prefix': s3_prefix,
+        'MaxKeys': max_docs
+    }
+    if continuation_token:
+        list_params['StartAfter'] = continuation_token
+
+    try:
+        resp = s3_client.list_objects_v2(**list_params)
+        objects = resp.get('Contents', [])
+
+        table = dynamodb.Table(CLAIM_DB_TABLE)
+
+        for obj in objects:
+            key = obj['Key']
+            last_key = key
+
+            # 메타데이터 파일, 디렉토리 건너뛰기
+            if key.endswith('.metadata.json') or key.endswith('/'):
+                continue
+
+            # 문서 수 제한
+            if documents_processed >= max_docs:
+                break
+
+            try:
+                # S3에서 문서 읽기
+                doc_resp = s3_client.get_object(Bucket=S3_BUCKET_SEOUL, Key=key)
+                doc_content = doc_resp['Body'].read().decode('utf-8', errors='replace')
+
+                # 빈 문서 건너뛰기
+                if not doc_content.strip():
+                    documents_processed += 1
+                    continue
+
+                # topic 자동 추출
+                topic = extract_topic_from_path(key)
+                if not topic:
+                    topic = 'uncategorized'
+
+                # Foundation Model로 claim 추출 (Requirements 7.1, 7.2, 7.6)
+                extracted_claims = _extract_claims_from_document(doc_content, key, topic)
+
+                # 각 claim을 Claim_DB에 저장 (Requirements 7.3)
+                for claim_data in extracted_claims:
+                    try:
+                        claim_id = str(uuid.uuid4())
+                        claim_family_id = str(uuid.uuid4())
+                        now = datetime.utcnow().isoformat() + 'Z'
+
+                        # evidence에 chunk_hash 생성
+                        for ev in claim_data.get('evidence', []):
+                            if not ev.get('chunk_hash'):
+                                ev['chunk_hash'] = hashlib.sha256(
+                                    ev.get('source_chunk', '').encode('utf-8')
+                                ).hexdigest()
+                            ev['extraction_date'] = now
+                            ev['source_document_id'] = key
+
+                        variant = claim_data.get('variant', 'default')
+                        item = {
+                            'claim_id': claim_id,
+                            'version': 1,
+                            'topic': claim_data.get('topic', topic),
+                            'statement': claim_data.get('statement', ''),
+                            'evidence': claim_data.get('evidence', []),
+                            'confidence': Decimal(str(claim_data.get('confidence', 0.5))),
+                            'status': 'draft',
+                            'variant': variant,
+                            'topic_variant': f"{claim_data.get('topic', topic)}#{variant}",
+                            'claim_family_id': claim_family_id,
+                            'is_latest': True,
+                            'derived_from': [],
+                            'created_at': now,
+                            'last_verified_at': now,
+                            'created_by': 'system:ingest_claims',
+                            'approval_status': 'not_applicable'
+                        }
+
+                        table.put_item(
+                            Item=item,
+                            ConditionExpression='attribute_not_exists(claim_id)'
+                        )
+                        claims_created += 1
+                    except Exception as e:
+                        logger.error(f"Failed to save claim from {key}: {e}")
+
+                documents_processed += 1
+
+            except Exception as e:
+                # 개별 문서 실패 시 건너뛰고 계속 (Requirements 7.5)
+                logger.error(json.dumps({
+                    'event': 'claim_extraction_failed',
+                    'document': key,
+                    'error': str(e)
+                }))
+                documents_failed += 1
+                documents_processed += 1
+
+        has_more = (documents_processed >= max_docs) and resp.get('IsTruncated', False)
+        result = {
+            'documents_processed': documents_processed,
+            'claims_created': claims_created,
+            'documents_failed': documents_failed,
+            'has_more': has_more
+        }
+        if has_more and last_key:
+            result['continuation_token'] = last_key
+
+        logger.info(json.dumps({'event': 'ingest_claims_complete', **result}))
+
+        # KPI 메트릭 발행 (Requirements 15.2)
+        try:
+            cw = boto3.client('cloudwatch', region_name='ap-northeast-2')
+            total_attempts = claims_created + documents_failed
+            if total_attempts > 0:
+                success_rate = (claims_created / total_attempts) * 100
+                _publish_metric(cw, 'ClaimIngestionSuccessRate', success_rate, 'Percent')
+        except Exception as metric_err:
+            logger.warning(f"KPI metric publish failed after ingest_claims: {metric_err}")
+
+        return result
+
+    except Exception as e:
+        logger.error(f"ingest_claims failed: {e}", exc_info=True)
+        return {
+            'error': str(e),
+            'documents_processed': documents_processed,
+            'claims_created': claims_created,
+            'documents_failed': documents_failed + 1
+        }
+
+
+def _extract_claims_from_document(doc_content, s3_key, topic):
+    """Foundation Model을 사용하여 문서에서 claim 추출 (Requirements 7.1, 7.2, 7.6)
+    statement: LLM이 재구성한 정규화된 1문장 (10~500자)
+    evidence.source_chunk: 원본 문서의 정확한 인용 (10~1000자)
+    """
+    try:
+        bedrock_runtime = boto3.client('bedrock-runtime', region_name=BACKEND_REGION)
+
+        # 문서 내용 truncation (Bedrock 입력 제한 대응)
+        max_content_len = 50000
+        truncated_content = doc_content[:max_content_len]
+
+        prompt = f"""다음 기술 문서를 분석하여 개별 사실 진술(claim)로 분해하세요.
+
+각 claim은 다음 형식의 JSON 배열로 반환하세요:
+[
+  {{
+    "statement": "소스에서 도출된 정규화된 1문장 사실 진술 (10~500자, LLM이 명확성을 위해 재구성 가능)",
+    "evidence": [
+      {{
+        "source_chunk": "원본 문서의 정확한 인용(verbatim excerpt, 10~1000자)",
+        "source_type": "md",
+        "source_path": "문서 내 위치"
+      }}
+    ],
+    "confidence": 0.8,
+    "topic": "{topic}"
+  }}
+]
+
+중요 규칙:
+- statement는 소스에서 도출된 정규화된 1문장 사실 진술로, LLM이 명확성을 위해 재구성할 수 있습니다.
+- evidence.source_chunk는 원본 문서의 정확한 인용(verbatim excerpt)이어야 합니다.
+- confidence는 0.0~1.0 범위의 확신도입니다.
+- JSON 배열만 반환하세요. 다른 텍스트는 포함하지 마세요.
+
+문서 내용:
+{truncated_content}"""
+
+        model_id = os.environ.get('FOUNDATION_MODEL_ARN', 'us.anthropic.claude-3-5-haiku-20241022-v1:0')
+
+        resp = bedrock_runtime.invoke_model(
+            modelId=model_id,
+            contentType='application/json',
+            accept='application/json',
+            body=json.dumps({
+                'anthropic_version': 'bedrock-2023-05-31',
+                'max_tokens': 4096,
+                'messages': [{'role': 'user', 'content': prompt}]
+            })
+        )
+
+        resp_body = json.loads(resp['body'].read())
+        content_text = resp_body.get('content', [{}])[0].get('text', '[]')
+
+        # JSON 배열 파싱
+        # LLM 응답에서 JSON 부분만 추출
+        json_match = re.search(r'\[.*\]', content_text, re.DOTALL)
+        if json_match:
+            claims = json.loads(json_match.group())
+        else:
+            claims = []
+
+        # 유효성 검증 및 필터링
+        valid_claims = []
+        for c in claims:
+            stmt = c.get('statement', '')
+            if len(stmt) < 10 or len(stmt) > 500:
+                continue
+            evidence = c.get('evidence', [])
+            valid_evidence = []
+            for ev in evidence:
+                chunk = ev.get('source_chunk', '')
+                if len(chunk) >= 10 and len(chunk) <= 1000:
+                    valid_evidence.append(ev)
+            if valid_evidence:
+                c['evidence'] = valid_evidence
+                valid_claims.append(c)
+
+        return valid_claims
+
+    except Exception as e:
+        logger.error(f"LLM claim extraction failed for {s3_key}: {e}")
+        return []
+
+
+# ============================================================================
+# Cross-Check 파이프라인 (Task 9.1)
+# Requirements: 11.1~11.10
+# ============================================================================
+
+def _exponential_backoff_jitter(attempt, base_ms=100, max_ms=2000):
+    """Exponential Backoff + Full Jitter (Requirements 5.10, 11.x)
+    sleep = random(0, min(max_ms, base_ms * 2^attempt))
+    """
+    cap = min(max_ms, base_ms * (2 ** attempt))
+    sleep_ms = random.uniform(0, cap)
+    time.sleep(sleep_ms / 1000.0)
+
+
+def _update_claim_with_retry(table, claim_id, current_version, update_expr,
+                              expr_attr_names, expr_attr_values, max_retries=3):
+    """Optimistic locking DynamoDB 업데이트 + Exponential Backoff (Requirements 5.9, 5.10)"""
+    for attempt in range(max_retries):
+        try:
+            table.update_item(
+                Key={'claim_id': claim_id, 'version': current_version},
+                UpdateExpression=update_expr,
+                ExpressionAttributeNames=expr_attr_names,
+                ExpressionAttributeValues=expr_attr_values,
+                ConditionExpression='version = :expected_version'
+            )
+            return True
+        except Exception as e:
+            if 'ConditionalCheckFailedException' in str(e):
+                if attempt < max_retries - 1:
+                    _exponential_backoff_jitter(attempt)
+                    # 최신 버전 다시 읽기
+                    try:
+                        resp = table.get_item(Key={'claim_id': claim_id, 'version': current_version})
+                        item = resp.get('Item')
+                        if item:
+                            current_version = item.get('version', current_version)
+                            expr_attr_values[':expected_version'] = current_version
+                    except Exception:
+                        pass
+                    continue
+                logger.error(f"Optimistic locking failed after {max_retries} retries: claim_id={claim_id}")
+                return False
+            raise
+    return False
+
+
+def _llm_evaluate_claim(bedrock_runtime, claim, prompt_template, model_id):
+    """Foundation Model로 claim 정확성 평가 → score (0.0~1.0)"""
+    try:
+        prompt = prompt_template.format(
+            statement=claim.get('statement', ''),
+            evidence=json.dumps(claim.get('evidence', []), ensure_ascii=False, default=str),
+            topic=claim.get('topic', '')
+        )
+        resp = bedrock_runtime.invoke_model(
+            modelId=model_id,
+            contentType='application/json',
+            accept='application/json',
+            body=json.dumps({
+                'anthropic_version': 'bedrock-2023-05-31',
+                'max_tokens': 256,
+                'messages': [{'role': 'user', 'content': prompt}]
+            })
+        )
+        resp_body = json.loads(resp['body'].read())
+        content_text = resp_body.get('content', [{}])[0].get('text', '0.5')
+        # 숫자 추출
+        score_match = re.search(r'(\d+\.?\d*)', content_text)
+        if score_match:
+            score = float(score_match.group(1))
+            return max(0.0, min(1.0, score))
+        return 0.5
+    except Exception as e:
+        logger.warning(f"LLM claim evaluation failed: {e}")
+        return 0.5
+
+
+def _rule_based_check(claim):
+    """Rule-based checker → score_3 (0.0~1.0) (Requirements 11.4)
+    - evidence S3 존재 확인
+    - statement 10~500자
+    - topic 형식 유효
+    """
+    checks_passed = 0
+    total_checks = 3
+
+    # 1) statement 길이 검증
+    stmt = claim.get('statement', '')
+    if 10 <= len(stmt) <= 500:
+        checks_passed += 1
+
+    # 2) topic 형식 유효성 (비어있지 않고 슬래시 구분 계층적 형식)
+    topic = claim.get('topic', '')
+    if topic and re.match(r'^[a-zA-Z0-9_\-]+(/[a-zA-Z0-9_\-]+)*$', topic):
+        checks_passed += 1
+
+    # 3) evidence S3 존재 확인
+    evidence = claim.get('evidence', [])
+    if evidence:
+        evidence_valid = True
+        for ev in evidence:
+            source_doc = ev.get('source_document_id', '')
+            if source_doc:
+                try:
+                    s3_client.head_object(Bucket=S3_BUCKET_SEOUL, Key=source_doc)
+                except Exception:
+                    evidence_valid = False
+                    break
+            else:
+                evidence_valid = False
+                break
+        if evidence_valid:
+            checks_passed += 1
+    # evidence 없으면 해당 체크 실패
+
+    return checks_passed / total_checks if total_checks > 0 else 0.0
+
+
+def _compute_claim_similarity(stmt_a, stmt_b):
+    """두 claim statement 간 단순 유사도 계산 (0.0~1.0)
+    단어 기반 Jaccard 유사도 사용
+    """
+    words_a = set(stmt_a.lower().split())
+    words_b = set(stmt_b.lower().split())
+    if not words_a or not words_b:
+        return 0.0
+    intersection = words_a & words_b
+    union = words_a | words_b
+    return len(intersection) / len(union) if union else 0.0
+
+
+def cross_check_claims(event, context):
+    """Lambda Event 비동기 호출 — draft claim 교차 검증 (Requirements 11.1~11.10)
+    3단계 Cross-Check:
+      1차: Foundation_Model로 claim 정확성 평가 → score_1
+      2차: 다른 프롬프트 템플릿으로 재검증 → score_2
+      3차: rule-based checker → score_3
+    validation_risk_score = 1.0 - (score_1 * 0.4 + score_2 * 0.4 + score_3 * 0.2)
+    """
+    topic = event.get('topic', '')
+    if not topic:
+        return {'error': 'topic is required', 'total_processed': 0}
+
+    claims_verified = 0
+    claims_conflicted = 0
+    claims_pending = 0
+    total_processed = 0
+
+    table = dynamodb.Table(CLAIM_DB_TABLE)
+    model_id = os.environ.get('FOUNDATION_MODEL_ARN', 'us.anthropic.claude-3-5-haiku-20241022-v1:0')
+
+    try:
+        bedrock_runtime = boto3.client('bedrock-runtime', region_name=BACKEND_REGION)
+
+        # 지정 topic의 draft claim 조회 (topic-index GSI 사용)
+        draft_claims = []
+        query_params = {
+            'IndexName': 'topic-index',
+            'KeyConditionExpression': 'topic = :t',
+            'FilterExpression': '#s = :draft_status',
+            'ExpressionAttributeNames': {'#s': 'status'},
+            'ExpressionAttributeValues': {
+                ':t': topic,
+                ':draft_status': 'draft'
+            }
+        }
+        resp = table.query(**query_params)
+        draft_claims.extend(resp.get('Items', []))
+        while resp.get('LastEvaluatedKey'):
+            query_params['ExclusiveStartKey'] = resp['LastEvaluatedKey']
+            resp = table.query(**query_params)
+            draft_claims.extend(resp.get('Items', []))
+
+        if not draft_claims:
+            return {
+                'claims_verified': 0,
+                'claims_conflicted': 0,
+                'claims_pending': 0,
+                'total_processed': 0
+            }
+
+        # 1차 검증 프롬프트 템플릿
+        prompt_1 = """다음 claim의 정확성을 평가하세요.
+
+Topic: {topic}
+Statement: {statement}
+Evidence: {evidence}
+
+이 claim이 evidence에 의해 뒷받침되는 정도를 0.0~1.0 사이의 숫자로만 답하세요.
+1.0은 완벽히 뒷받침됨, 0.0은 전혀 뒷받침되지 않음을 의미합니다.
+숫자만 답하세요."""
+
+        # 2차 검증 프롬프트 템플릿 (다른 관점)
+        prompt_2 = """기술 문서 검증자로서 다음 claim을 검토하세요.
+
+주제: {topic}
+진술: {statement}
+근거 자료: {evidence}
+
+다음 기준으로 평가하세요:
+- 진술이 근거 자료와 일치하는가?
+- 기술적으로 정확한 표현인가?
+- 모호하거나 오해의 소지가 있는 부분이 없는가?
+
+정확도를 0.0~1.0 사이의 숫자로만 답하세요."""
+
+        for claim in draft_claims:
+            try:
+                claim_id = claim.get('claim_id', '')
+                current_version = claim.get('version', 1)
+
+                # 1차: LLM 정확성 평가 → score_1
+                score_1 = _llm_evaluate_claim(bedrock_runtime, claim, prompt_1, model_id)
+
+                # 2차: 다른 프롬프트로 재검증 → score_2
+                score_2 = _llm_evaluate_claim(bedrock_runtime, claim, prompt_2, model_id)
+
+                # 3차: rule-based checker → score_3
+                score_3 = _rule_based_check(claim)
+
+                # validation_risk_score 계산 (Requirements 11.5)
+                validation_risk_score = 1.0 - (score_1 * 0.4 + score_2 * 0.4 + score_3 * 0.2)
+                now = datetime.utcnow().isoformat() + 'Z'
+
+                if validation_risk_score < 0.3:
+                    # verified + confidence 업데이트 (Requirements 11.6)
+                    new_confidence = Decimal(str(round(1.0 - validation_risk_score, 4)))
+                    _update_claim_with_retry(
+                        table, claim_id, current_version,
+                        'SET #s = :new_status, confidence = :conf, last_verified_at = :now, approval_status = :pending',
+                        {'#s': 'status'},
+                        {
+                            ':new_status': 'verified',
+                            ':conf': new_confidence,
+                            ':now': now,
+                            ':pending': 'pending_review',
+                            ':expected_version': current_version
+                        }
+                    )
+                    claims_verified += 1
+                    logger.info(json.dumps({
+                        'event': 'claim_verified',
+                        'claim_id': claim_id,
+                        'validation_risk_score': validation_risk_score,
+                        'scores': {'s1': score_1, 's2': score_2, 's3': score_3}
+                    }))
+
+                elif validation_risk_score < 0.7:
+                    # draft 유지 + 수동 검토 경고 (Requirements 11.7)
+                    claims_pending += 1
+                    logger.warning(json.dumps({
+                        'event': 'claim_manual_review_needed',
+                        'claim_id': claim_id,
+                        'validation_risk_score': validation_risk_score,
+                        'scores': {'s1': score_1, 's2': score_2, 's3': score_3}
+                    }))
+
+                else:
+                    # conflicted + ERROR 로그 (Requirements 11.8)
+                    _update_claim_with_retry(
+                        table, claim_id, current_version,
+                        'SET #s = :new_status, last_verified_at = :now',
+                        {'#s': 'status'},
+                        {
+                            ':new_status': 'conflicted',
+                            ':now': now,
+                            ':expected_version': current_version
+                        }
+                    )
+                    claims_conflicted += 1
+                    logger.error(json.dumps({
+                        'event': 'claim_conflicted',
+                        'claim_id': claim_id,
+                        'validation_risk_score': validation_risk_score,
+                        'scores': {'s1': score_1, 's2': score_2, 's3': score_3}
+                    }))
+
+                total_processed += 1
+
+            except Exception as e:
+                logger.error(f"Cross-check failed for claim {claim.get('claim_id', 'unknown')}: {e}")
+                total_processed += 1
+
+        # 중복 감지: 동일 topic verified claim 간 유사도 >= 0.9 (Requirements 11.10)
+        try:
+            verified_query = {
+                'IndexName': 'topic-index',
+                'KeyConditionExpression': 'topic = :t',
+                'FilterExpression': '#s = :verified_status',
+                'ExpressionAttributeNames': {'#s': 'status'},
+                'ExpressionAttributeValues': {
+                    ':t': topic,
+                    ':verified_status': 'verified'
+                }
+            }
+            v_resp = table.query(**verified_query)
+            verified_claims = v_resp.get('Items', [])
+
+            # 유사도 비교 — O(n^2) 이지만 topic 단위이므로 규모 제한적
+            seen_deprecated = set()
+            for i in range(len(verified_claims)):
+                if verified_claims[i]['claim_id'] in seen_deprecated:
+                    continue
+                for j in range(i + 1, len(verified_claims)):
+                    if verified_claims[j]['claim_id'] in seen_deprecated:
+                        continue
+                    sim = _compute_claim_similarity(
+                        verified_claims[i].get('statement', ''),
+                        verified_claims[j].get('statement', '')
+                    )
+                    if sim >= 0.9:
+                        # 최신 유지, 이전 deprecated
+                        ts_i = verified_claims[i].get('created_at', '')
+                        ts_j = verified_claims[j].get('created_at', '')
+                        if ts_i >= ts_j:
+                            older = verified_claims[j]
+                        else:
+                            older = verified_claims[i]
+                        now = datetime.utcnow().isoformat() + 'Z'
+                        _update_claim_with_retry(
+                            table, older['claim_id'], older.get('version', 1),
+                            'SET #s = :dep_status, last_verified_at = :now',
+                            {'#s': 'status'},
+                            {
+                                ':dep_status': 'deprecated',
+                                ':now': now,
+                                ':expected_version': older.get('version', 1)
+                            }
+                        )
+                        seen_deprecated.add(older['claim_id'])
+                        logger.info(json.dumps({
+                            'event': 'duplicate_claim_deprecated',
+                            'deprecated_claim_id': older['claim_id'],
+                            'similarity': sim
+                        }))
+        except Exception as e:
+            logger.warning(f"Duplicate detection failed: {e}")
+
+        result = {
+            'claims_verified': claims_verified,
+            'claims_conflicted': claims_conflicted,
+            'claims_pending': claims_pending,
+            'total_processed': total_processed
+        }
+
+        logger.info(json.dumps({'event': 'cross_check_claims_complete', **result}))
+
+        # KPI 메트릭 발행 (Requirements 15.3)
+        try:
+            cw = boto3.client('cloudwatch', region_name='ap-northeast-2')
+            if total_processed > 0:
+                _publish_metric(cw, 'ClaimVerificationPassRate',
+                                (claims_verified / total_processed) * 100, 'Percent')
+                _publish_metric(cw, 'ContradictionDetectionRate',
+                                (claims_conflicted / total_processed) * 100, 'Percent')
+        except Exception as metric_err:
+            logger.warning(f"KPI metric publish failed after cross_check: {metric_err}")
+
+        return result
+
+    except Exception as e:
+        logger.error(f"cross_check_claims failed: {e}", exc_info=True)
+        return {
+            'error': str(e),
+            'claims_verified': claims_verified,
+            'claims_conflicted': claims_conflicted,
+            'claims_pending': claims_pending,
+            'total_processed': total_processed
+        }
+
+
+# ============================================================================
+# KPI Metrics 발행 (Task 9.5)
+# Requirements: 15.1~15.7
+# ============================================================================
+
+def publish_kpi_metrics(metrics):
+    """CloudWatch 커스텀 메트릭 일괄 발행 (네임스페이스: BOS-AI/ClaimDB)
+    Requirements: 15.1~15.7
+
+    metrics: dict — 메트릭 이름 → (값, 단위) 매핑
+    예: {'ClaimIngestionSuccessRate': (95.0, 'Percent'), ...}
+
+    지원 메트릭:
+      - ClaimIngestionSuccessRate: (claims_created / (claims_created + documents_failed)) * 100
+      - ClaimVerificationPassRate: (claims_verified / total_processed) * 100
+      - ContradictionDetectionRate: (claims_conflicted / total_processed) * 100
+      - BedrockKBFallbackRate: 폴백 발생 시 1 증가 (Count)
+      - AvgEvidenceCountPerAnswer: 사용된 claim의 evidence 수 평균 (Count)
+      - StaleClaimRatio: 30일 미검증 verified claim 비율 (Percent)
+      - TopicCoverageRatio: verified claim 존재 topic 비율 (Percent)
+    """
+    if not metrics:
+        return
+
+    try:
+        cw = boto3.client('cloudwatch', region_name='ap-northeast-2')
+        for metric_name, (value, unit) in metrics.items():
+            _publish_metric(cw, metric_name, value, unit)
+        logger.info(f"Published {len(metrics)} KPI metrics to BOS-AI/ClaimDB")
+    except Exception as e:
+        logger.warning(f"publish_kpi_metrics failed: {e}")
 
 
 def get_upload_html():

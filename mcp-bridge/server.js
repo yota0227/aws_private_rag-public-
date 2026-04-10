@@ -209,6 +209,332 @@ function createMcpServer() {
     }
   );
 
+  // ========================================================================
+  // Phase 3: MCP Tool 분리 — search_archive, get_evidence, list_verified_claims
+  // Requirements: 8.1, 8.2, 8.3, 8.6
+  // ========================================================================
+
+  mcp.tool(
+    "search_archive",
+    "Archive 문서를 검색합니다. Bedrock KB 벡터 검색 + topic/source 메타데이터 필터를 지원합니다. 특정 주제나 출처의 문서를 찾을 때 사용하세요.",
+    {
+      query: z.string().describe("검색 질의 (한국어/영어 모두 가능)"),
+      topic: z.string().optional().describe("topic 필터 (예: ucie/phy/ltssm)"),
+      source: z.string().optional().describe("source 필터 (예: archive_md, rtl_parsed, manual_upload)"),
+      max_results: z.number().optional().default(5).describe("최대 결과 수 (기본값 5)")
+    },
+    async (args, extra) => {
+      const startTime = Date.now();
+      try {
+        console.log("[TOOL] search_archive: query=" + args.query + " topic=" + (args.topic||"all") + " source=" + (args.source||"all"));
+        const body = { query: args.query };
+        if (args.topic) body.topic = args.topic;
+        if (args.source) body.source = args.source;
+        if (args.max_results) body.max_results = args.max_results;
+        const resp = await ragApi("POST", "/search-archive", body);
+        const execution_time_ms = Date.now() - startTime;
+        if (resp.error) return { content: [{ type: "text", text: JSON.stringify({ error: resp.error, execution_time_ms }) }], isError: true };
+        let text = "📚 Archive 검색 결과 (" + (resp.count || 0) + "건)\n";
+        text += "질의: " + args.query + "\n";
+        if (resp.filters) text += "필터: " + JSON.stringify(resp.filters) + "\n";
+        text += "\n" + (resp.answer || "결과 없음");
+        if (resp.results && resp.results.length > 0) {
+          text += "\n\n--- 참조 문서 ---";
+          resp.results.forEach((r, i) => {
+            text += "\n[" + (i+1) + "] " + (r.uri || "unknown");
+            if (r.score) text += " (score: " + r.score + ")";
+          });
+        }
+        text += "\n\nexecution_time_ms: " + execution_time_ms;
+        return { content: [{ type: "text", text }] };
+      } catch(err) {
+        const execution_time_ms = Date.now() - startTime;
+        return { content: [{ type: "text", text: JSON.stringify({ error: "search_archive 실패: " + err.message, execution_time_ms }) }], isError: true };
+      }
+    }
+  );
+
+  mcp.tool(
+    "get_evidence",
+    "특정 Claim의 근거(evidence) 배열을 조회합니다. claim_id로 해당 claim의 원본 문서 참조, 인용 텍스트, 페이지 번호 등을 확인할 수 있습니다.",
+    {
+      claim_id: z.string().describe("조회할 Claim ID (UUID)")
+    },
+    async (args, extra) => {
+      const startTime = Date.now();
+      try {
+        console.log("[TOOL] get_evidence: claim_id=" + args.claim_id);
+        const resp = await ragApi("POST", "/get-evidence", { claim_id: args.claim_id });
+        const execution_time_ms = Date.now() - startTime;
+        if (resp.error) return { content: [{ type: "text", text: JSON.stringify({ error: resp.error, execution_time_ms }) }], isError: true };
+        let text = "📋 Evidence 조회 결과\n";
+        text += "  Claim ID: " + resp.claim_id + "\n";
+        text += "  Version: " + resp.version + "\n";
+        text += "  Evidence 수: " + (resp.evidence_count || 0) + "\n";
+        if (resp.evidence && resp.evidence.length > 0) {
+          resp.evidence.forEach((ev, i) => {
+            text += "\n  [Evidence " + (i+1) + "]\n";
+            text += "    Source: " + (ev.source_document_id || "unknown") + "\n";
+            text += "    Type: " + (ev.source_type || "unknown") + "\n";
+            text += "    Chunk: " + (ev.source_chunk || "").substring(0, 200) + "\n";
+            if (ev.page_number) text += "    Page: " + ev.page_number + "\n";
+            if (ev.source_path) text += "    Path: " + ev.source_path + "\n";
+            if (ev.line_start) text += "    Lines: " + ev.line_start + "-" + (ev.line_end || "") + "\n";
+          });
+        }
+        text += "\nexecution_time_ms: " + execution_time_ms;
+        return { content: [{ type: "text", text }] };
+      } catch(err) {
+        const execution_time_ms = Date.now() - startTime;
+        return { content: [{ type: "text", text: JSON.stringify({ error: "get_evidence 실패: " + err.message, execution_time_ms }) }], isError: true };
+      }
+    }
+  );
+
+  mcp.tool(
+    "list_verified_claims",
+    "특정 topic의 검증된(verified) Claim 목록을 조회합니다. 해당 주제에 대해 검증 완료된 지식 단위를 확인할 수 있습니다.",
+    {
+      topic: z.string().describe("topic 식별자 (예: ucie/phy/ltssm)")
+    },
+    async (args, extra) => {
+      const startTime = Date.now();
+      try {
+        console.log("[TOOL] list_verified_claims: topic=" + args.topic);
+        const resp = await ragApi("POST", "/list-verified-claims", { topic: args.topic });
+        const execution_time_ms = Date.now() - startTime;
+        if (resp.error) return { content: [{ type: "text", text: JSON.stringify({ error: resp.error, execution_time_ms }) }], isError: true };
+        let text = "✅ 검증된 Claim 목록 (topic: " + resp.topic + ")\n";
+        text += "총 " + (resp.count || 0) + "건\n";
+        if (resp.claims && resp.claims.length > 0) {
+          resp.claims.forEach((c, i) => {
+            text += "\n[" + (i+1) + "] " + c.claim_id + " (v" + c.version + ")\n";
+            text += "    Statement: " + (c.statement || "").substring(0, 150) + "\n";
+            text += "    Confidence: " + c.confidence + "\n";
+            text += "    Last Verified: " + (c.last_verified_at || "unknown") + "\n";
+            text += "    Evidence Count: " + (c.evidence_count || 0) + "\n";
+          });
+        } else {
+          text += "\n해당 topic에 검증된 claim이 없습니다.";
+        }
+        text += "\n\nexecution_time_ms: " + execution_time_ms;
+        return { content: [{ type: "text", text }] };
+      } catch(err) {
+        const execution_time_ms = Date.now() - startTime;
+        return { content: [{ type: "text", text: JSON.stringify({ error: "list_verified_claims 실패: " + err.message, execution_time_ms }) }], isError: true };
+      }
+    }
+  );
+
+  // ========================================================================
+  // Phase 4: MCP Tool 확장 — generate_hdd_section, publish_markdown
+  // Requirements: 10.1, 10.4
+  // ========================================================================
+
+  mcp.tool(
+    "generate_hdd_section",
+    "검증된 claim을 기반으로 HDD(Hardware Design Description) 섹션을 자동 생성합니다. 특정 topic의 검증+승인된 claim을 조합하여 마크다운 형식의 기술 문서 섹션을 생성합니다.",
+    {
+      topic: z.string().describe("topic 식별자 (예: ucie/phy/ltssm)"),
+      section_title: z.string().describe("생성할 HDD 섹션 제목"),
+      include_evidence: z.boolean().optional().default(true).describe("evidence 각주 포함 여부 (기본값 true)")
+    },
+    async (args, extra) => {
+      const startTime = Date.now();
+      try {
+        console.log("[TOOL] generate_hdd_section: topic=" + args.topic + " title=" + args.section_title + " evidence=" + args.include_evidence);
+        const body = {
+          topic: args.topic,
+          section_title: args.section_title,
+          include_evidence: args.include_evidence
+        };
+        const resp = await ragApi("POST", "/generate-hdd", body);
+        const execution_time_ms = Date.now() - startTime;
+        if (resp.error) return { content: [{ type: "text", text: JSON.stringify({ error: resp.error, execution_time_ms }) }], isError: true };
+        let text = "📝 HDD 섹션 생성 완료\n";
+        text += "  Topic: " + resp.topic + "\n";
+        text += "  섹션 제목: " + resp.section_title + "\n";
+        text += "  사용된 Claim 수: " + (resp.claims_used || 0) + "\n";
+        text += "  Evidence 포함: " + (resp.include_evidence ? "예" : "아니오") + "\n";
+        text += "  면책 조항: " + (resp.disclaimer || "") + "\n";
+        text += "\n--- 생성된 마크다운 ---\n\n";
+        text += resp.markdown || "(내용 없음)";
+        text += "\n\nexecution_time_ms: " + execution_time_ms;
+        return { content: [{ type: "text", text }] };
+      } catch(err) {
+        const execution_time_ms = Date.now() - startTime;
+        return { content: [{ type: "text", text: JSON.stringify({ error: "generate_hdd_section 실패: " + err.message, execution_time_ms }) }], isError: true };
+      }
+    }
+  );
+
+  mcp.tool(
+    "publish_markdown",
+    "마크다운 콘텐츠를 Seoul S3의 published/ 접두사에 저장하여 출판합니다. 메타데이터가 자동 생성됩니다 (source=system_generated, generation_basis=verified_claims).",
+    {
+      content: z.string().describe("출판할 마크다운 콘텐츠"),
+      filename: z.string().describe("저장할 파일명 (예: ucie_phy_hdd.md)"),
+      topic: z.string().optional().describe("관련 topic (지정 시 해당 topic의 claim 승인 상태를 확인)")
+    },
+    async (args, extra) => {
+      const startTime = Date.now();
+      try {
+        console.log("[TOOL] publish_markdown: filename=" + args.filename + " topic=" + (args.topic || "none"));
+        const body = {
+          content: args.content,
+          filename: args.filename
+        };
+        if (args.topic) body.topic = args.topic;
+        const resp = await ragApi("POST", "/publish-markdown", body);
+        const execution_time_ms = Date.now() - startTime;
+        if (resp.error) return { content: [{ type: "text", text: JSON.stringify({ error: resp.error, execution_time_ms }) }], isError: true };
+        let text = "📄 마크다운 출판 완료\n";
+        text += "  S3 Key: " + resp.s3_key + "\n";
+        text += "  Bucket: " + resp.bucket + "\n";
+        text += "  파일명: " + resp.filename + "\n";
+        text += "  Topic: " + (resp.topic || "general") + "\n";
+        text += "  메타데이터: " + resp.metadata_key + "\n";
+        text += "  Source: " + resp.source + "\n";
+        text += "  Generation Basis: " + resp.generation_basis + "\n";
+        text += "\nexecution_time_ms: " + execution_time_ms;
+        return { content: [{ type: "text", text }] };
+      } catch(err) {
+        const execution_time_ms = Date.now() - startTime;
+        return { content: [{ type: "text", text: JSON.stringify({ error: "publish_markdown 실패: " + err.message, execution_time_ms }) }], isError: true };
+      }
+    }
+  );
+
+  // ========================================================================
+  // Phase 6: MCP Tool 확장 — Neptune Graph DB 도구
+  // Requirements: 16.9, 16.10, 16.11
+  // ========================================================================
+
+  mcp.tool(
+    "trace_signal_path",
+    "RTL 모듈의 신호 전파 경로를 추적합니다. Neptune Graph DB에서 신호가 어떤 모듈/포트를 거쳐 전파되는지 경로를 반환합니다.",
+    {
+      module_name: z.string().describe("시작 모듈명 (예: BLK_UCIE)"),
+      signal_name: z.string().describe("추적할 신호명 (예: tx_data)")
+    },
+    async (args, extra) => {
+      const startTime = Date.now();
+      try {
+        console.log("[TOOL] trace_signal_path: module_name=" + args.module_name + " signal_name=" + args.signal_name);
+        const resp = await ragApi("POST", "/trace-signal-path", { module_name: args.module_name, signal_name: args.signal_name });
+        const execution_time_ms = Date.now() - startTime;
+        if (resp.error) return { content: [{ type: "text", text: JSON.stringify({ error: resp.error, execution_time_ms }) }], isError: true };
+        let text = "🔍 신호 전파 경로 추적\n";
+        text += "  모듈: " + args.module_name + "\n";
+        text += "  신호: " + args.signal_name + "\n";
+        text += "  경로 노드 수: " + (resp.path_nodes ? resp.path_nodes.length : 0) + "\n";
+        if (resp.path_nodes && resp.path_nodes.length > 0) {
+          text += "\n--- 경로 노드 ---\n";
+          resp.path_nodes.forEach((node, i) => {
+            text += "  [" + (i+1) + "] " + (node.type || "unknown") + ": " + (node.name || "unknown");
+            if (node.module) text += " (모듈: " + node.module + ")";
+            text += "\n";
+          });
+        }
+        if (resp.path_edges && resp.path_edges.length > 0) {
+          text += "\n--- 경로 엣지 ---\n";
+          resp.path_edges.forEach((edge, i) => {
+            text += "  [" + (i+1) + "] " + (edge.from || "?") + " —[" + (edge.type || "?") + "]→ " + (edge.to || "?") + "\n";
+          });
+        }
+        if (!resp.path_nodes?.length && !resp.path_edges?.length) {
+          text += "\n해당 신호의 전파 경로를 찾을 수 없습니다.";
+        }
+        text += "\n\nexecution_time_ms: " + execution_time_ms;
+        return { content: [{ type: "text", text }] };
+      } catch(err) {
+        const execution_time_ms = Date.now() - startTime;
+        return { content: [{ type: "text", text: JSON.stringify({ error: "trace_signal_path 실패: " + err.message, execution_time_ms }) }], isError: true };
+      }
+    }
+  );
+
+  mcp.tool(
+    "find_instantiation_tree",
+    "RTL 모듈의 인스턴스화 트리를 조회합니다. 지정된 모듈이 어떤 하위 모듈을 인스턴스화하는지 트리 구조로 반환합니다.",
+    {
+      module_name: z.string().describe("조회할 모듈명 (예: BLK_UCIE)"),
+      depth: z.number().optional().default(3).describe("탐색 깊이 (기본값 3)")
+    },
+    async (args, extra) => {
+      const startTime = Date.now();
+      try {
+        console.log("[TOOL] find_instantiation_tree: module_name=" + args.module_name + " depth=" + args.depth);
+        const resp = await ragApi("POST", "/find-instantiation-tree", { module_name: args.module_name, depth: args.depth });
+        const execution_time_ms = Date.now() - startTime;
+        if (resp.error) return { content: [{ type: "text", text: JSON.stringify({ error: resp.error, execution_time_ms }) }], isError: true };
+        let text = "🌳 인스턴스화 트리\n";
+        text += "  루트 모듈: " + args.module_name + "\n";
+        text += "  탐색 깊이: " + args.depth + "\n";
+        text += "  총 노드 수: " + (resp.total_nodes || 0) + "\n";
+        if (resp.tree) {
+          text += "\n--- 트리 구조 ---\n";
+          const renderTree = (node, indent) => {
+            text += indent + (node.instance_name ? node.instance_name + ": " : "") + (node.module_name || "unknown") + "\n";
+            if (node.children && node.children.length > 0) {
+              node.children.forEach((child) => { renderTree(child, indent + "  "); });
+            }
+          };
+          renderTree(resp.tree, "  ");
+        } else if (resp.nodes && resp.nodes.length > 0) {
+          text += "\n--- 트리 노드 ---\n";
+          resp.nodes.forEach((node, i) => {
+            const indent = "  ".repeat((node.depth || 0) + 1);
+            text += indent + (node.instance_name ? node.instance_name + ": " : "") + (node.module_name || "unknown") + "\n";
+          });
+        } else {
+          text += "\n해당 모듈의 인스턴스화 트리를 찾을 수 없습니다.";
+        }
+        text += "\n\nexecution_time_ms: " + execution_time_ms;
+        return { content: [{ type: "text", text }] };
+      } catch(err) {
+        const execution_time_ms = Date.now() - startTime;
+        return { content: [{ type: "text", text: JSON.stringify({ error: "find_instantiation_tree 실패: " + err.message, execution_time_ms }) }], isError: true };
+      }
+    }
+  );
+
+  mcp.tool(
+    "find_clock_crossings",
+    "RTL 모듈의 클럭 도메인 크로싱 신호 목록을 조회합니다. 서로 다른 클럭 도메인 간 전달되는 신호를 식별합니다.",
+    {
+      module_name: z.string().describe("조회할 모듈명 (예: BLK_UCIE)")
+    },
+    async (args, extra) => {
+      const startTime = Date.now();
+      try {
+        console.log("[TOOL] find_clock_crossings: module_name=" + args.module_name);
+        const resp = await ragApi("POST", "/find-clock-crossings", { module_name: args.module_name });
+        const execution_time_ms = Date.now() - startTime;
+        if (resp.error) return { content: [{ type: "text", text: JSON.stringify({ error: resp.error, execution_time_ms }) }], isError: true };
+        let text = "⚡ 클럭 도메인 크로싱 신호\n";
+        text += "  모듈: " + args.module_name + "\n";
+        text += "  크로싱 신호 수: " + (resp.crossings ? resp.crossings.length : 0) + "\n";
+        if (resp.crossings && resp.crossings.length > 0) {
+          text += "\n--- 크로싱 신호 목록 ---\n";
+          resp.crossings.forEach((c, i) => {
+            text += "  [" + (i+1) + "] " + (c.signal_name || "unknown") + "\n";
+            text += "      Source Domain: " + (c.source_domain || "unknown") + "\n";
+            text += "      Destination Domain: " + (c.destination_domain || "unknown") + "\n";
+            if (c.synchronizer) text += "      Synchronizer: " + c.synchronizer + "\n";
+          });
+        } else {
+          text += "\n해당 모듈에서 클럭 도메인 크로싱 신호를 찾을 수 없습니다.";
+        }
+        text += "\n\nexecution_time_ms: " + execution_time_ms;
+        return { content: [{ type: "text", text }] };
+      } catch(err) {
+        const execution_time_ms = Date.now() - startTime;
+        return { content: [{ type: "text", text: JSON.stringify({ error: "find_clock_crossings 실패: " + err.message, execution_time_ms }) }], isError: true };
+      }
+    }
+  );
+
   return mcp;
 }
 
