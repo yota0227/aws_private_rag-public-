@@ -12,7 +12,7 @@
 resource "aws_security_group" "rtl_parser_lambda" {
   provider = aws.seoul
 
-  name        = "sg-rtl-parser-lambda-${var.environment}"
+  name        = "rtl-parser-lambda-sg-${var.environment}"
   description = "RTL Parser Lambda - BOS-AI Frontend VPC (Seoul)"
   vpc_id      = local.frontend_vpc_id
 

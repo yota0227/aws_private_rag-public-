@@ -35,7 +35,7 @@ variable "embedding_model_arn" {
 variable "foundation_model_arn" {
   description = "ARN of foundation model for generation (Claude 3.5 Haiku via US inference profile)"
   type        = string
-  default     = "us.anthropic.claude-3-5-haiku-20241022-v1:0"
+  default     = "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-5-haiku-20241022-v1:0"
 }
 
 # OpenSearch Configuration

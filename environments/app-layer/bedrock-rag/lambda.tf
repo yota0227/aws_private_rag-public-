@@ -350,7 +350,7 @@ resource "aws_iam_role_policy" "lambda_source_of_truth_deny" {
           # Seoul_S3 원본 문서 접두사
           "${aws_s3_bucket.documents_seoul.arn}/documents/*",
           # RTL_S3_Bucket 원본 코드 접두사
-          "arn:aws:s3:::bos-ai-rtl-codes-${data.aws_caller_identity.current.account_id}/rtl-sources/*",
+          "arn:aws:s3:::bos-ai-rtl-src-${data.aws_caller_identity.current.account_id}/rtl-sources/*",
         ]
       }
     ]

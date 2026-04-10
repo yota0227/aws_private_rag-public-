@@ -81,9 +81,10 @@ resource "aws_opensearchserverless_access_policy" "rtl_index" {
 
   policy = jsonencode([
     {
+      # RTL Parser Lambda: 인덱싱 권한
+      Principal = [aws_iam_role.rtl_parser_lambda.arn]
       Rules = [
         {
-          # RTL Parser Lambda: 인덱싱 권한
           ResourceType = "index"
           Resource     = ["index/bos-ai-vectors/rtl-knowledge-base-index"]
           Permission   = [
@@ -92,28 +93,21 @@ resource "aws_opensearchserverless_access_policy" "rtl_index" {
             "aoss:UpdateIndex",
             "aoss:DescribeIndex",
           ]
-          Principal = [aws_iam_role.rtl_parser_lambda.arn]
-        },
+        }
+      ]
+    },
+    {
+      # Bedrock KB + Lambda Handler: 검색 권한
+      Principal = [aws_iam_role.lambda.arn, "bedrock.amazonaws.com"]
+      Rules = [
         {
-          # Bedrock KB 서비스 프린시펄: 검색 권한
           ResourceType = "index"
           Resource     = ["index/bos-ai-vectors/rtl-knowledge-base-index"]
           Permission   = [
             "aoss:ReadDocument",
             "aoss:DescribeIndex",
           ]
-          Principal = ["bedrock.amazonaws.com"]
-        },
-        {
-          # Lambda Handler: 검색 권한 (Verification Pipeline)
-          ResourceType = "index"
-          Resource     = ["index/bos-ai-vectors/rtl-knowledge-base-index"]
-          Permission   = [
-            "aoss:ReadDocument",
-            "aoss:DescribeIndex",
-          ]
-          Principal = [aws_iam_role.lambda.arn]
-        },
+        }
       ]
     }
   ])

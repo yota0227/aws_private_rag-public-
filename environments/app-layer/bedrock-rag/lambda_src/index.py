@@ -1350,24 +1350,24 @@ def update_claim_status(event):
                     'allowed_transitions': allowed
                 })
 
-            # 업데이트 표현식 구성
+            # 업데이트 표현식 구성 — version은 sort key라 update 불가, 새 아이템으로 put
             now = datetime.utcnow().isoformat() + 'Z'
-            update_expr = 'SET #s = :ns, last_verified_at = :now, version = version + :one'
-            expr_names = {'#s': 'status'}
-            expr_values = {':ns': new_status, ':now': now, ':one': 1, ':ev': int(expected_version)}
+            new_version = int(expected_version) + 1
+
+            # 기존 아이템 복사 후 변경 필드 업데이트
+            new_item = dict(item)
+            new_item['version'] = new_version
+            new_item['status'] = new_status
+            new_item['last_verified_at'] = now
 
             # verified 전이 시 approval_status = pending_review (Requirements 14.1)
             if new_status == 'verified':
-                update_expr += ', approval_status = :as, last_verified_at = :now'
-                expr_values[':as'] = 'pending_review'
+                new_item['approval_status'] = 'pending_review'
 
-            # Optimistic locking (Requirements 5.9)
-            table.update_item(
-                Key={'claim_id': claim_id, 'version': int(expected_version)},
-                UpdateExpression=update_expr,
-                ConditionExpression='version = :ev',
-                ExpressionAttributeNames=expr_names,
-                ExpressionAttributeValues=expr_values
+            # 새 버전 아이템 저장 (ConditionExpression으로 중복 방지)
+            table.put_item(
+                Item=new_item,
+                ConditionExpression='attribute_not_exists(claim_id) OR attribute_not_exists(version)'
             )
 
             # deprecated 전이 시 하위 claim cascading (Requirements 5.8)
@@ -1376,12 +1376,12 @@ def update_claim_status(event):
 
             logger.info(json.dumps({
                 'event': 'claim_status_updated', 'claim_id': claim_id,
-                'from': current_status, 'to': new_status, 'version': int(expected_version) + 1
+                'from': current_status, 'to': new_status, 'version': new_version
             }))
             return response(200, {
                 'claim_id': claim_id,
                 'status': new_status,
-                'version': int(expected_version) + 1
+                'version': new_version
             })
 
         except dynamodb.meta.client.exceptions.ConditionalCheckFailedException:

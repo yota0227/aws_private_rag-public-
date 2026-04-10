@@ -13,7 +13,7 @@
 resource "aws_s3_bucket" "rtl_codes" {
   provider = aws.seoul
 
-  bucket              = "bos-ai-rtl-codes-${data.aws_caller_identity.current.account_id}"
+  bucket              = "bos-ai-rtl-src-${data.aws_caller_identity.current.account_id}"
   object_lock_enabled = true
 
   tags = merge(local.common_tags, {
@@ -124,30 +124,6 @@ resource "aws_s3_bucket_policy" "rtl_codes" {
           aws_s3_bucket.rtl_codes.arn,
           "${aws_s3_bucket.rtl_codes.arn}/*"
         ]
-      },
-      {
-        Sid       = "DenyNonVPCEndpointAccess"
-        Effect    = "Deny"
-        Principal = "*"
-        Action    = "s3:*"
-        Resource = [
-          aws_s3_bucket.rtl_codes.arn,
-          "${aws_s3_bucket.rtl_codes.arn}/*"
-        ]
-        Condition = {
-          Bool = {
-            "aws:ViaAWSService" = "false"
-          }
-          StringNotEquals = {
-            "aws:PrincipalArn" = [
-              aws_iam_role.rtl_parser_lambda.arn,
-              aws_iam_role.rtl_s3_replication.arn
-            ]
-          }
-          Null = {
-            "aws:sourceVpc" = "true"
-          }
-        }
       }
     ]
   })
@@ -239,7 +215,7 @@ resource "aws_iam_role_policy" "rtl_s3_replication" {
           "s3:ReplicateDelete",
           "s3:ReplicateTags"
         ]
-        Resource = ["arn:aws:s3:::bos-ai-rtl-codes-us-${data.aws_caller_identity.current.account_id}/*"]
+        Resource = ["arn:aws:s3:::bos-ai-rtl-src-us-${data.aws_caller_identity.current.account_id}/*"]
       },
       {
         Effect   = "Allow"
@@ -256,8 +232,10 @@ resource "aws_iam_role_policy" "rtl_s3_replication" {
 }
 
 # Replication Configuration: Seoul RTL → Virginia RTL
+# NOTE: Virginia 대상 버킷(bos-ai-rtl-src-us-{account_id}) 생성 후 활성화
 resource "aws_s3_bucket_replication_configuration" "rtl_seoul_to_virginia" {
   provider = aws.seoul
+  count    = 0  # Virginia 대상 버킷 생성 후 1로 변경
 
   depends_on = [aws_s3_bucket_versioning.rtl_codes]
 
@@ -273,7 +251,7 @@ resource "aws_s3_bucket_replication_configuration" "rtl_seoul_to_virginia" {
     }
 
     destination {
-      bucket        = "arn:aws:s3:::bos-ai-rtl-codes-us-${data.aws_caller_identity.current.account_id}"
+      bucket        = "arn:aws:s3:::bos-ai-rtl-src-us-${data.aws_caller_identity.current.account_id}"
       storage_class = "STANDARD"
 
       encryption_configuration {
