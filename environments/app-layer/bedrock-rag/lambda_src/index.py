@@ -1837,7 +1837,7 @@ def generate_hdd_section(event):
     # Foundation Model로 HDD 마크다운 생성 (Requirements 10.2)
     try:
         bedrock_runtime = boto3.client('bedrock-runtime', region_name=BACKEND_REGION)
-        model_id = os.environ.get('FOUNDATION_MODEL_ARN', 'us.anthropic.claude-3-5-haiku-20241022-v1:0')
+        model_id = os.environ.get('INVOKE_MODEL_ID', 'us.anthropic.claude-3-5-haiku-20241022-v1:0')
 
         # claim context 구성
         claims_context = ""
@@ -2219,7 +2219,7 @@ def _identify_topics(query):
     """
     try:
         bedrock_runtime = boto3.client('bedrock-runtime', region_name=BACKEND_REGION)
-        model_id = os.environ.get('FOUNDATION_MODEL_ARN', 'us.anthropic.claude-3-5-haiku-20241022-v1:0')
+        model_id = os.environ.get('INVOKE_MODEL_ID', 'us.anthropic.claude-3-5-haiku-20241022-v1:0')
 
         prompt = f"""다음 질문에서 관련 기술 주제(topic)를 최대 3개 식별하세요.
 topic은 계층적 형식(슬래시 구분)으로 반환하세요.
@@ -2259,7 +2259,7 @@ def _generate_answer_from_claims(query, claims, has_conflicts, neptune_results=N
     """Verified claim + Neptune 그래프 컨텍스트 기반 답변 생성 (Requirements 9.5, 16.12)"""
     try:
         bedrock_runtime = boto3.client('bedrock-runtime', region_name=BACKEND_REGION)
-        model_id = os.environ.get('FOUNDATION_MODEL_ARN', 'us.anthropic.claude-3-5-haiku-20241022-v1:0')
+        model_id = os.environ.get('INVOKE_MODEL_ID', 'us.anthropic.claude-3-5-haiku-20241022-v1:0')
 
         # claim context 구성
         claims_context = ""
@@ -2887,7 +2887,7 @@ def _extract_claims_from_document(doc_content, s3_key, topic):
 문서 내용:
 {truncated_content}"""
 
-        model_id = os.environ.get('FOUNDATION_MODEL_ARN', 'us.anthropic.claude-3-5-haiku-20241022-v1:0')
+        model_id = os.environ.get('INVOKE_MODEL_ID', 'us.anthropic.claude-3-5-haiku-20241022-v1:0')
 
         resp = bedrock_runtime.invoke_model(
             modelId=model_id,
@@ -3084,7 +3084,7 @@ def cross_check_claims(event, context):
     total_processed = 0
 
     table = dynamodb.Table(CLAIM_DB_TABLE)
-    model_id = os.environ.get('FOUNDATION_MODEL_ARN', 'us.anthropic.claude-3-5-haiku-20241022-v1:0')
+    model_id = os.environ.get('INVOKE_MODEL_ID', 'us.anthropic.claude-3-5-haiku-20241022-v1:0')
 
     try:
         bedrock_runtime = boto3.client('bedrock-runtime', region_name=BACKEND_REGION)
