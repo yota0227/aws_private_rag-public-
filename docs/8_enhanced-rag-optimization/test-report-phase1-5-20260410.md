@@ -120,3 +120,21 @@ endmodule
 | Phase 3 MCP Tool | 3 | 1 | 1 |
 | Phase 4~6 | 0 | 0 | 14 |
 | **합계** | **10** | **2** | **16** |
+
+
+---
+
+## 8. 추가 디버깅 (2026-04-13)
+
+### Verification Pipeline 504 원인 분석
+
+| 단계 | 문제 | 해결 |
+|------|------|------|
+| 1. DNS 해석 | `bedrock-runtime` 포워딩 규칙 없음 | Route53 Resolver Rule 추가 ✅ |
+| 2. VPC Endpoint 정책 | inference profile 리소스 미허용 | 정책 Resource `*`로 확장 ✅ |
+| 3. 모델 비활성화 | `claude-3-5-haiku-20241022-v1:0` Legacy (30일 미사용) | ❌ 활성 모델로 업데이트 필요 |
+
+### 다음 액션
+- Bedrock Console에서 활성 모델 확인
+- Lambda `FOUNDATION_MODEL_ARN` 환경변수 업데이트
+- Verification Pipeline 재테스트
