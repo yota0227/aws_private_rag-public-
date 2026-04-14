@@ -170,6 +170,14 @@
 - Security Group: sg-vpc-endpoints-bos-ai-seoul-prod
 - Private DNS: Enabled
 
+**vpce-monitoring-seoul-prod**
+- Service: com.amazonaws.ap-northeast-2.monitoring
+- Type: Interface
+- Subnets: sn-private-bos-ai-seoul-prod-01a, sn-private-bos-ai-seoul-prod-01c
+- Security Group: sg-vpc-endpoints-bos-ai-seoul-prod
+- Private DNS: Enabled
+- 용도: Lambda에서 CloudWatch PutMetricData API 호출 (커스텀 메트릭 발행)
+
 **기존 유지:**
 - vpce-firehose-itdev-int-poc-01 (로깅 파이프라인용)
 
@@ -203,6 +211,7 @@
 - bedrock-runtime.ap-northeast-2.amazonaws.com → VPC DNS
 - s3.ap-northeast-2.amazonaws.com → VPC DNS
 - secretsmanager.ap-northeast-2.amazonaws.com → VPC DNS
+- monitoring.ap-northeast-2.amazonaws.com → VPC DNS
 
 **온프레미스 도메인 포워딩 (기존 유지)**
 - internal.company.com → 온프레미스 DNS 서버
@@ -461,7 +470,7 @@ SECRET_NAME=opensearch/bos-ai-rag-prod
 **VPC 관련:**
 - NAT Gateway: $32 (1개 × $0.045/시간)
 - VPC Peering 데이터 전송: $10 (100GB × $0.01/GB)
-- VPC Endpoints: $21 (3개 × $0.01/시간)
+- VPC Endpoints: $28 (4개 × $0.01/시간)
 
 **컴퓨팅:**
 - Lambda: $20 (100만 요청, 512MB, 10s)

@@ -1,4 +1,4 @@
-# 요구사항 문서: Enhanced RAG Optimization (v0.2)
+# 요구사항 문서: Enhanced RAG Optimization (v0.3)
 
 ## 소개
 
@@ -19,6 +19,16 @@ v0.2 변경 사항 (아키텍트 리뷰 반영):
 - IAM Explicit Deny로 Source of Truth 버킷 보호
 - Object Lock 범위 명확화, RTL Parser Lambda 명칭 수정, Claim_DB 용어집 수정
 - Claim-level variant 지원 추가
+
+v0.3 변경 사항 (Phase 1~5 테스트 결과 반영):
+- RTL S3 버킷 이름 변경: `bos-ai-rtl-codes-<account_id>` → `bos-ai-rtl-src-<account_id>` (원래 버킷에 VPC Endpoint 전용 Deny 정책이 적용되어 루트 계정 포함 모든 접근 차단됨. Terraform state에서 제거 후 새 버킷으로 대체)
+- Foundation_Model 모델 변경: `us.anthropic.claude-3-5-haiku-20241022-v1:0` → `anthropic.claude-3-haiku-20240307-v1:0` (30일 미사용으로 Legacy 상태 비활성화 회피)
+- INVOKE_MODEL_ID / FOUNDATION_MODEL_ARN 환경변수 분리: inference profile ID와 정식 모델 ARN이 다른 것을 발견하여 두 개의 환경변수로 분리
+- Bedrock KB RetrieveAndGenerate API의 `searchType` → `overrideSearchType` 파라미터 변경 반영
+- 요구사항 15에 CloudWatch Monitoring VPC Endpoint 의존성 추가 (Phase 5 테스트에서 `boto3.client('cloudwatch')` hang 문제 발견)
+- OpenSearch AOSS 데이터 액세스 정책 형식 수정 (Principal 위치)
+- Route53 Resolver bedrock-runtime 포워딩 규칙 의존성 명시
+- VPC Endpoint 정책 Resource 확장 (inference profile 리소스 허용)
 
 핵심 변경 영역:
 1. RTL 전용 S3 버킷 분리 및 RTL 구조 파싱 Lambda (제안서 A)
@@ -41,7 +51,7 @@ v0.2 변경 사항 (아키텍트 리뷰 반영):
 - **Lambda_Handler**: Seoul VPC에 배포된 `lambda-document-processor-seoul-prod` Lambda 함수로, 문서 업로드/삭제/질의 처리를 담당하는 핵심 컴포넌트
 - **Bedrock_KB**: AWS Bedrock Knowledge Base(ID: FNNOP3VBZV)로, 문서 임베딩 저장 및 검색-생성(Retrieve and Generate)을 수행하는 서비스
 - **OpenSearch_Collection**: Virginia 리전의 OpenSearch Serverless 벡터 컬렉션(ID: iw3pzcloa0en8d90hh7)으로, 임베딩 벡터를 저장하고 검색하는 벡터 데이터베이스
-- **RTL_S3_Bucket**: RTL 전용 S3 버킷(`bos-ai-rtl-codes-<account_id>`)으로, RTL 소스 코드 원본을 저장하며 S3 Event Notification이 활성화된 격리 저장소
+- **RTL_S3_Bucket**: RTL 전용 S3 버킷(`bos-ai-rtl-src-<account_id>`)으로, RTL 소스 코드 원본을 저장하며 S3 Event Notification이 활성화된 격리 저장소
 - **RTL_Parser_Lambda**: RTL 코드를 정규식 기반으로 파싱하여 module_name, parent_module, port_list, parameter_list 등 메타데이터를 추출하는 전용 Lambda 함수. 현재 정규식 기반 구현이며, 향후 PyVerilog/AST 통합을 위한 모듈화 구조를 유지한다
 - **RTL_OpenSearch_Index**: RTL 메타데이터 전용 OpenSearch 인덱스(`rtl-knowledge-base-index`)로, knn_vector + keyword + text 매핑을 지원하는 벡터 검색 인덱스
 - **Claim_DB**: DynamoDB 기반 Knowledge Archive (claim lifecycle managed)로, claim 단위로 지식을 저장하며 draft/verified/conflicted/deprecated 전체 생명주기를 관리한다. claim_id, topic, statement, evidence, confidence, version, status, variant, claim_family_id, is_latest, derived_from, last_verified_at 필드를 포함
@@ -59,7 +69,7 @@ v0.2 변경 사항 (아키텍트 리뷰 반영):
 - **Validation_Risk_Score**: Cross_Check_Pipeline에서 산출되는 개별 claim의 검증 실패 위험도 점수(0.0~1.0). 공식: `validation_risk_score = 1.0 - (score_1 * 0.4 + score_2 * 0.4 + score_3 * 0.2)`. 0.3 미만이면 verified, 0.3~0.7이면 수동 검토, 0.7 이상이면 conflicted로 상태 전이에 사용
 - **Contradiction_Score**: 동일 topic 내 두 claim 간의 모순 정도를 0.0~1.0 범위로 수치화한 값. 0.7 이상이면 모순으로 판정하여 기존 claim의 status를 `conflicted`로 변경. 요구사항 5.5의 claim 간 비교에 사용
 - **Topic**: Claim을 분류하는 주제 식별자로, 계층적 구조를 지원 (예: `ucie/phy/ltssm`, `ahb/signal/haddr`)
-- **Foundation_Model**: Bedrock에서 응답 생성에 사용하는 Claude 3.5 Haiku 모델(us.anthropic.claude-3-5-haiku-20241022-v1:0)
+- **Foundation_Model**: Bedrock에서 응답 생성에 사용하는 Claude 3 Haiku 모델(anthropic.claude-3-haiku-20240307-v1:0). Lambda 환경변수는 `INVOKE_MODEL_ID`(InvokeModel API용 inference profile ID 또는 모델 ID)와 `FOUNDATION_MODEL_ARN`(RetrieveAndGenerate API용 정식 모델 ARN)으로 분리하여 관리한다
 
 ## 요구사항
 
@@ -69,7 +79,7 @@ v0.2 변경 사항 (아키텍트 리뷰 반영):
 
 #### 인수 조건
 
-1. THE Terraform 구성 SHALL RTL 전용 S3 버킷(`bos-ai-rtl-codes-<account_id>`)을 Seoul 리전(ap-northeast-2)에 생성하며, 버전 관리(versioning)를 활성화한다.
+1. THE Terraform 구성 SHALL RTL 전용 S3 버킷(`bos-ai-rtl-src-<account_id>`)을 Seoul 리전(ap-northeast-2)에 생성하며, 버전 관리(versioning)를 활성화한다.
 2. THE Terraform 구성 SHALL RTL_S3_Bucket에 KMS CMK 암호화를 적용하며, 기존 BOS-AI KMS 키를 사용한다.
 3. THE Terraform 구성 SHALL RTL_S3_Bucket에 S3 Event Notification을 구성하여, `rtl-sources/` 접두사에 객체가 생성될 때 RTL_Parser_Lambda를 트리거한다.
 4. THE Terraform 구성 SHALL RTL_S3_Bucket에서 Virginia 리전 RTL 전용 S3 버킷으로의 Cross-Region Replication을 구성한다.
@@ -191,9 +201,10 @@ v0.2 변경 사항 (아키텍트 리뷰 반영):
 4. THE Lambda_Handler SHALL 충돌 검사 단계에서 식별된 동일 topic에 대해 별도 쿼리를 실행하여 `status`가 `conflicted`인 claim이 존재하는지 확인하고, 존재하면 답변에 "일부 정보에 충돌이 감지되었습니다" 경고 메시지를 포함한다.
 5. THE Lambda_Handler SHALL 답변 생성 단계에서 조회된 verified claim의 statement와 evidence를 Foundation_Model의 컨텍스트로 전달하여 답변을 생성한다.
 6. THE Lambda_Handler SHALL 답변 응답에 `verification_metadata` 객체를 포함하며, 해당 객체에는 `claims_used`(사용된 claim_id 배열), `topics_identified`(식별된 topic 배열), `has_conflicts`(충돌 존재 여부 불리언), `pipeline_execution_time_ms`(파이프라인 실행 시간)를 포함한다.
-7. IF Claim_DB에 관련 claim이 존재하지 않으면, THEN THE Lambda_Handler SHALL 기존 Bedrock_KB 검색으로 폴백하여 답변을 생성하고, `verification_metadata.fallback`을 `true`로 설정한다.
+7. IF Claim_DB에 관련 claim이 존재하지 않으면, THEN THE Lambda_Handler SHALL 기존 Bedrock_KB 검색으로 폴백하여 답변을 생성하고, `verification_metadata.fallback`을 `true`로 설정한다. 폴백 시 Bedrock KB RetrieveAndGenerate API 호출에서는 `overrideSearchType` 파라미터를 사용한다 (기존 `searchType`에서 변경됨).
 8. THE Lambda_Handler SHALL Verification_Pipeline의 각 단계 실행 시간을 CloudWatch에 구조화 로그로 기록한다.
 9. WHEN 질의 요청에 `variant` 파라미터가 포함되면, THE Lambda_Handler SHALL claim 검색 단계에서 `topic-variant-index` GSI를 사용하여 해당 variant의 claim만 필터링하여 조회한다.
+10. THE Lambda_Handler SHALL Bedrock KB RetrieveAndGenerate API 호출 시 검색 유형 파라미터로 `overrideSearchType`을 사용한다 (`searchType`은 deprecated). 또한 Route53 Resolver에 `bedrock-runtime` 도메인에 대한 포워딩 규칙이 구성되어 있어야 하며, Bedrock Runtime VPC Endpoint 정책의 Resource는 inference profile 리소스를 포함하도록 `*`로 설정한다.
 
 ### 요구사항 10: MCP Tool 확장 (Phase 4 문서 생성 도구)
 
@@ -282,6 +293,7 @@ v0.2 변경 사항 (아키텍트 리뷰 반영):
 6. THE Lambda_Handler SHALL `StaleClaimRatio` 메트릭을 계산하기 위해, `last_verified_at`이 현재 시점으로부터 30일 이상 경과한 `verified` 상태 claim의 비율을 주기적으로(질의 처리 시 또는 별도 스케줄) 산출하여 발행한다.
 7. THE Lambda_Handler SHALL `TopicCoverageRatio` 메트릭을 계산하기 위해, `verified` 상태 claim이 존재하는 고유 topic 수를 전체 등록된 topic 수로 나눈 비율을 발행한다.
 8. THE Terraform 구성 SHALL CloudWatch 커스텀 네임스페이스 `BOS-AI/ClaimDB`에 대한 Lambda_Handler의 `cloudwatch:PutMetricData` 권한을 IAM 정책에 포함한다.
+9. THE Lambda_Handler SHALL CloudWatch Monitoring VPC Endpoint(`com.amazonaws.ap-northeast-2.monitoring`)가 존재하지 않거나 CloudWatch 클라이언트 초기화에 실패할 경우, KPI 메트릭 발행을 건너뛰고 정상적으로 요청 처리를 계속한다 (graceful degradation). 이 경우 CloudWatch 대신 Lambda 로그에 메트릭 데이터를 기록한다.
 
 ### 요구사항 16: RTL Knowledge Graph (Neptune Graph DB)
 
