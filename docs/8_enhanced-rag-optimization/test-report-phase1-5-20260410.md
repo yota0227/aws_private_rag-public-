@@ -138,3 +138,37 @@ endmodule
 - Bedrock Console에서 활성 모델 확인
 - Lambda `FOUNDATION_MODEL_ARN` 환경변수 업데이트
 - Verification Pipeline 재테스트
+
+
+---
+
+## 9. Phase 4~5 테스트 결과 (2026-04-14)
+
+### Phase 4: Human Review + HDD 생성
+
+| 테스트 | 결과 | 비고 |
+|--------|------|------|
+| Claim 승인 (POST /rag/claims/approve) | ✅ 200 | approval_status=approved |
+| Claim 거부 (POST /rag/claims/reject) | ✅ 200 | approval_status=rejected |
+| HDD 섹션 생성 (POST /rag/generate-hdd) | ✅ 200 | 마크다운 + evidence 각주 |
+| 마크다운 출판 (POST /rag/publish-markdown) | ✅ 200 | S3 published/ 저장 |
+
+### Phase 5: Cross-Check
+
+| 테스트 | 결과 | 비고 |
+|--------|------|------|
+| cross_check_claims | ✅ 성공 | verified=7, conflicted=0, total=7 |
+| CloudWatch KPI 메트릭 | ❌ hang | CloudWatch VPC Endpoint 없음 |
+
+### Verification Pipeline 504 최종 해결 (6개 원인)
+
+1. Route53 `bedrock-runtime` 포워딩 규칙 추가 ✅
+2. VPC Endpoint 정책 Resource `*` 확장 ✅
+3. `claude-3-haiku` 모델로 교체 (Legacy 회피) ✅
+4. INVOKE_MODEL_ID / FOUNDATION_MODEL_ARN 분리 ✅
+5. `boto3.client('cloudwatch')` hang → `cloudwatch = None` ✅
+6. `searchType` → `overrideSearchType` ✅
+
+### 최종 요약: 17 성공 / 2 실패 / 7 스킵
+
+남은 이슈: CloudWatch VPC Endpoint, OpenSearch 403, Neptune 미배포, 실제 RTL 데이터 투입
