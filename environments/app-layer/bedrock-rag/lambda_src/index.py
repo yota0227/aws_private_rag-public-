@@ -2043,7 +2043,9 @@ def verification_pipeline(query, variant=None):
 
     # CloudWatch 메트릭 클라이언트
     try:
-        cloudwatch = boto3.client('cloudwatch', region_name='ap-northeast-2')
+        from botocore.config import Config
+        cw_config = Config(connect_timeout=5, read_timeout=10, retries={'max_attempts': 1})
+        cloudwatch = boto3.client('cloudwatch', region_name='ap-northeast-2', config=cw_config)
     except Exception:
         cloudwatch = None
 
@@ -2593,7 +2595,12 @@ def find_clock_crossings(event):
 
 def _bedrock_kb_fallback(query, pipeline_start, step_times, topics_identified):
     """Claim DB에 관련 claim 없을 때 Bedrock KB 폴백 (Requirements 9.7)"""
-    cloudwatch = None  # CloudWatch 메트릭은 VPC Endpoint 없으면 스킵
+    try:
+        from botocore.config import Config
+        cw_config = Config(connect_timeout=5, read_timeout=10, retries={'max_attempts': 1})
+        cloudwatch = boto3.client('cloudwatch', region_name='ap-northeast-2', config=cw_config)
+    except Exception:
+        cloudwatch = None
 
     # KPI: BedrockKBFallbackRate 증가 (Requirements 15.4)
     _publish_metric(cloudwatch, 'BedrockKBFallbackRate', 1, 'Count')
@@ -2829,7 +2836,7 @@ def ingest_claims(event, context):
 
         # KPI 메트릭 발행 (Requirements 15.2)
         try:
-            cw = boto3.client('cloudwatch', region_name='ap-northeast-2')
+            from botocore.config import Config; cw = boto3.client('cloudwatch', region_name='ap-northeast-2', config=Config(connect_timeout=5, read_timeout=10, retries={'max_attempts': 1}))
             total_attempts = claims_created + documents_failed
             if total_attempts > 0:
                 success_rate = (claims_created / total_attempts) * 100
@@ -3285,7 +3292,7 @@ Evidence: {evidence}
 
         # KPI 메트릭 발행 (Requirements 15.3)
         try:
-            cw = boto3.client('cloudwatch', region_name='ap-northeast-2')
+            from botocore.config import Config; cw = boto3.client('cloudwatch', region_name='ap-northeast-2', config=Config(connect_timeout=5, read_timeout=10, retries={'max_attempts': 1}))
             if total_processed > 0:
                 _publish_metric(cw, 'ClaimVerificationPassRate',
                                 (claims_verified / total_processed) * 100, 'Percent')
@@ -3332,7 +3339,7 @@ def publish_kpi_metrics(metrics):
         return
 
     try:
-        cw = boto3.client('cloudwatch', region_name='ap-northeast-2')
+        from botocore.config import Config; cw = boto3.client('cloudwatch', region_name='ap-northeast-2', config=Config(connect_timeout=5, read_timeout=10, retries={'max_attempts': 1}))
         for metric_name, (value, unit) in metrics.items():
             _publish_metric(cw, metric_name, value, unit)
         logger.info(f"Published {len(metrics)} KPI metrics to BOS-AI/ClaimDB")
