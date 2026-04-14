@@ -788,7 +788,7 @@ def _handle_query_bedrock_kb(query, start_time, body):
         bedrock_runtime = boto3.client('bedrock-agent-runtime', region_name=BACKEND_REGION)
 
         vector_config = {
-            'searchType': search_type,
+            'overrideSearchType': search_type,
             'numberOfResults': results_count
         }
         if bedrock_filter:
@@ -1476,7 +1476,7 @@ def search_archive(event):
             bedrock_filter = {'andAll': filter_conditions}
 
         vector_config = {
-            'searchType': os.environ.get('SEARCH_TYPE', 'HYBRID'),
+            'overrideSearchType': os.environ.get('SEARCH_TYPE', 'HYBRID'),
             'numberOfResults': max_results
         }
         if bedrock_filter:
@@ -2107,6 +2107,8 @@ def verification_pipeline(query, variant=None):
     if not verified_claims:
         return _bedrock_kb_fallback(query, pipeline_start, step_times, topics_identified)
 
+    logger.info(f"DEBUG: verified_claims count={len(verified_claims)}, proceeding to step 3.5")
+
     # (3.5) Neptune Graph DB 병렬 질의 (Phase 6 — Requirements 16.12)
     step_start = time.time()
     neptune_results = []
@@ -2591,22 +2593,21 @@ def find_clock_crossings(event):
 
 def _bedrock_kb_fallback(query, pipeline_start, step_times, topics_identified):
     """Claim DB에 관련 claim 없을 때 Bedrock KB 폴백 (Requirements 9.7)"""
-    try:
-        cloudwatch = boto3.client('cloudwatch', region_name='ap-northeast-2')
-    except Exception:
-        cloudwatch = None
+    cloudwatch = None  # CloudWatch 메트릭은 VPC Endpoint 없으면 스킵
 
     # KPI: BedrockKBFallbackRate 증가 (Requirements 15.4)
     _publish_metric(cloudwatch, 'BedrockKBFallbackRate', 1, 'Count')
 
     try:
+        logger.info(json.dumps({'event': 'bedrock_kb_fallback_start', 'kb_id': BEDROCK_KB_ID, 'model_arn': os.environ.get('FOUNDATION_MODEL_ARN', 'N/A'), 'region': BACKEND_REGION}))
         bedrock_runtime = boto3.client('bedrock-agent-runtime', region_name=BACKEND_REGION)
 
         vector_config = {
-            'searchType': os.environ.get('SEARCH_TYPE', 'HYBRID'),
+            'overrideSearchType': os.environ.get('SEARCH_TYPE', 'HYBRID'),
             'numberOfResults': int(os.environ.get('SEARCH_RESULTS_COUNT', '5'))
         }
 
+        logger.info(json.dumps({'event': 'bedrock_kb_fallback_calling_retrieve_and_generate'}))
         resp = bedrock_runtime.retrieve_and_generate(
             input={'text': query},
             retrieveAndGenerateConfiguration={
