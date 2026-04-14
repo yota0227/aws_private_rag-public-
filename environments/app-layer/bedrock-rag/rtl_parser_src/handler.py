@@ -317,11 +317,13 @@ def _index_to_opensearch(metadata: dict, embedding: list):
 
         session = boto3.Session()
         credentials = session.get_credentials()
-        region = session.region_name or "us-east-1"
+        # AOSS 컬렉션이 us-east-1에 있으므로 SigV4 서명도 us-east-1로 해야 함
+        # Lambda는 ap-northeast-2에서 실행되므로 session.region_name은 사용 불가
+        aoss_region = os.environ.get("BEDROCK_REGION", "us-east-1")
         auth = AWS4Auth(
             credentials.access_key,
             credentials.secret_key,
-            region,
+            aoss_region,
             "aoss",
             session_token=credentials.token,
         )
@@ -338,10 +340,19 @@ def _index_to_opensearch(metadata: dict, embedding: list):
             "parsed_summary": generate_parsed_summary(metadata),
         }
 
-        url = f"{RTL_OPENSEARCH_ENDPOINT}/{RTL_OPENSEARCH_INDEX}/_doc/{doc_id}"
-        response = requests.put(url, auth=auth, json=doc, timeout=30)
+        # AOSS는 PUT /{index}/_doc/{id} (문서 ID 지정)를 지원하지 않음
+        # POST /{index}/_doc 사용 (ID 자동 생성)
+        url = f"{RTL_OPENSEARCH_ENDPOINT}/{RTL_OPENSEARCH_INDEX}/_doc"
+        response = requests.post(url, auth=auth, json=doc, timeout=30)
+        if response.status_code not in (200, 201):
+            logger.error(json.dumps({
+                "event": "opensearch_error_detail",
+                "status_code": response.status_code,
+                "response_body": response.text[:500],
+                "url": url,
+            }))
         response.raise_for_status()
-        logger.info(json.dumps({"event": "opensearch_indexed", "doc_id": doc_id}))
+        logger.info(json.dumps({"event": "opensearch_indexed", "file_path": metadata.get("file_path", "")}))
     except Exception as e:
         logger.error(json.dumps({"event": "opensearch_error", "error": str(e)}))
 
