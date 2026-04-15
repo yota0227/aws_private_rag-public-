@@ -48,13 +48,87 @@ bedrock_runtime = boto3.client("bedrock-runtime", region_name=BEDROCK_REGION)
 # ---------------------------------------------------------------------------
 
 def handler(event, context):
-    """S3 Event Notification 핸들러"""
+    """S3 Event Notification 핸들러 + RTL 인덱스 검색 (action: search)"""
+    # RTL 인덱스 검색 요청 처리
+    if event.get("action") == "search":
+        return _search_rtl(event)
+
     for record in event.get("Records", []):
         bucket = record["s3"]["bucket"]["name"]
         key = record["s3"]["object"]["key"]
         logger.info(json.dumps({"event": "rtl_parse_start", "bucket": bucket, "key": key}))
         _process_rtl_file(bucket, key)
     return {"statusCode": 200}
+
+
+def _search_rtl(event):
+    """RTL OpenSearch 인덱스 검색 — Main Lambda에서 동기 invoke로 호출"""
+    import requests
+    from requests_aws4auth import AWS4Auth
+
+    query = event.get("query", "")
+    max_results = int(event.get("max_results", 5))
+
+    if not query or not RTL_OPENSEARCH_ENDPOINT:
+        return {"results": [], "total_hits": 0, "query": query}
+
+    session = boto3.Session()
+    credentials = session.get_credentials()
+    aoss_region = os.environ.get("BEDROCK_REGION", "us-east-1")
+    auth = AWS4Auth(
+        credentials.access_key,
+        credentials.secret_key,
+        aoss_region,
+        "aoss",
+        session_token=credentials.token,
+    )
+
+    url = f"{RTL_OPENSEARCH_ENDPOINT}/{RTL_OPENSEARCH_INDEX}/_search"
+    search_body = {
+        "size": max_results,
+        "query": {
+            "bool": {
+                "should": [
+                    {"wildcard": {"module_name": f"*{query}*"}},
+                    {"wildcard": {"module_name": f"*{query.lower()}*"}},
+                    {"match": {"parsed_summary": query}},
+                    {"match": {"port_list": query}},
+                    {"match": {"instance_list": query}},
+                ],
+                "minimum_should_match": 1,
+            }
+        },
+        "_source": [
+            "module_name", "port_list", "parameter_list",
+            "instance_list", "file_path", "parsed_summary",
+        ],
+    }
+
+    try:
+        resp = requests.post(url, auth=auth, json=search_body,
+                             headers={"Content-Type": "application/json"}, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+
+        results = []
+        for hit in data.get("hits", {}).get("hits", []):
+            src = hit.get("_source", {})
+            results.append({
+                "module_name": src.get("module_name", ""),
+                "port_list": src.get("port_list", ""),
+                "parameter_list": src.get("parameter_list", ""),
+                "instance_list": src.get("instance_list", ""),
+                "file_path": src.get("file_path", ""),
+                "parsed_summary": src.get("parsed_summary", ""),
+                "score": hit.get("_score", 0),
+            })
+
+        total_hits = data.get("hits", {}).get("total", {}).get("value", 0)
+        return {"results": results, "total_hits": total_hits, "query": query}
+
+    except Exception as e:
+        logger.error(json.dumps({"event": "rtl_search_error", "error": str(e)}))
+        return {"results": [], "total_hits": 0, "query": query, "error": str(e)}
 
 
 def _process_rtl_file(bucket: str, key: str):

@@ -77,6 +77,10 @@ ALLOWED_TRANSITIONS = {
 # 문서 source 허용 값 (Requirements 6.5)
 VALID_SOURCES = {"archive_md", "rtl_parsed", "codebeamer", "manual_upload", "system_generated"}
 
+# RTL OpenSearch 인덱스 설정 (search-archive RTL 분기용)
+RTL_OPENSEARCH_ENDPOINT = os.environ.get('RTL_OPENSEARCH_ENDPOINT', '')
+RTL_OPENSEARCH_INDEX = os.environ.get('RTL_OPENSEARCH_INDEX', 'rtl-knowledge-base-index')
+
 
 def handler(event, context):
     """Main Lambda handler for Private RAG API Gateway"""
@@ -1438,6 +1442,7 @@ def _cascade_deprecated(table, deprecated_claim_id):
 
 def search_archive(event):
     """POST /rag/search-archive — Bedrock KB 검색 + topic/source 메타데이터 필터
+    source='rtl_parsed'일 때 RTL OpenSearch 인덱스를 직접 검색
     Requirements: 8.1, 8.4, 8.5
     """
     body = parse_body(event)
@@ -1449,6 +1454,10 @@ def search_archive(event):
     topic = body.get('topic', '')
     source = body.get('source', '')
     max_results = int(body.get('max_results', 5))
+
+    # RTL 인덱스 직접 검색 분기
+    if source == 'rtl_parsed':
+        return _search_rtl_index(query, max_results)
 
     if not BEDROCK_KB_ID:
         return response(200, {
@@ -1518,6 +1527,65 @@ def search_archive(event):
     except Exception as e:
         logger.error(f"search_archive error: {e}")
         return response(500, {'error': str(e)})
+
+
+def _search_rtl_index(query, max_results=5):
+    """RTL OpenSearch 인덱스 직접 검색 (source='rtl_parsed' 분기)
+    module_name, parsed_summary, port_list, instance_list 필드를 multi_match로 검색
+    """
+    if not RTL_OPENSEARCH_ENDPOINT:
+        return response(200, {
+            'query': query,
+            'answer': 'RTL OpenSearch endpoint not configured',
+            'results': [],
+            'count': 0,
+            'source': 'rtl_parsed'
+        })
+
+    try:
+        # RTL Parser Lambda를 동기 invoke하여 검색 위임
+        # (Main Lambda는 VPC 안이라 AOSS 직접 접근 불가, RTL Parser는 VPC 밖)
+        rtl_lambda_name = os.environ.get('RTL_PARSER_LAMBDA_NAME', 'lambda-rtl-parser-seoul-dev')
+        invoke_resp = lambda_client.invoke(
+            FunctionName=rtl_lambda_name,
+            InvocationType='RequestResponse',
+            Payload=json.dumps({
+                'action': 'search',
+                'query': query,
+                'max_results': max_results,
+            }),
+        )
+        data = json.loads(invoke_resp['Payload'].read().decode('utf-8'))
+
+        results = data.get('results', [])
+        total_hits = data.get('total_hits', 0)
+
+        # 결과 텍스트 생성
+        if results:
+            answer_parts = [f"RTL 인덱스에서 {total_hits}건 검색됨 (상위 {len(results)}건 표시):"]
+            for i, r in enumerate(results, 1):
+                answer_parts.append(
+                    f"\n[{i}] {r['module_name'] or '(unnamed)'}"
+                    f"\n    File: {r['file_path']}"
+                    f"\n    Ports: {r['port_list'][:150]}{'...' if len(r['port_list']) > 150 else ''}"
+                    f"\n    Instances: {r['instance_list'][:150]}{'...' if len(r['instance_list']) > 150 else ''}"
+                )
+            answer = '\n'.join(answer_parts)
+        else:
+            answer = f"RTL 인덱스에서 '{query}'에 대한 결과를 찾을 수 없습니다."
+
+        return response(200, {
+            'query': query,
+            'answer': answer,
+            'results': results,
+            'count': len(results),
+            'total_hits': total_hits,
+            'source': 'rtl_parsed'
+        })
+
+    except Exception as e:
+        logger.error(f"_search_rtl_index error: {e}")
+        return response(500, {'error': f'RTL index search failed: {str(e)}'})
 
 
 def get_evidence(event):
