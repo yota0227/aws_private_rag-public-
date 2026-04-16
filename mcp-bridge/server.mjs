@@ -164,6 +164,56 @@ mcpServer.tool(
   }
 );
 
+// Tool: RTL 파싱 데이터 검색 (search_archive with source=rtl_parsed)
+mcpServer.tool(
+  "search_rtl",
+  "RTL 파싱된 데이터를 검색합니다. 모듈명, 포트, 인스턴스, 토픽 등으로 검색 가능합니다. Trinity/N1B0 등 업로드된 RTL 코드의 구조 정보를 조회합니다.",
+  {
+    query: { type: "string", description: "검색어 (모듈명, 신호명, 키워드 등)" },
+    pipeline_id: { type: "string", description: "파이프라인 ID 필터 (예: tt_20260221). 생략 시 전체 검색" },
+    topic: { type: "string", description: "토픽 필터 (예: NoC, FPU, EDC, Overlay). 생략 시 전체 검색" },
+    max_results: { type: "number", description: "최대 결과 수 (기본값: 5)" }
+  },
+  async (params) => {
+    try {
+      const body = {
+        query: params.query || "",
+        source: "rtl_parsed",
+        max_results: params.max_results || 5
+      };
+      if (params.pipeline_id) body.pipeline_id = params.pipeline_id;
+      if (params.topic) body.topic = params.topic;
+
+      const resp = await ragApi("POST", "/search-archive", body);
+      if (resp.error) {
+        return { content: [{ type: "text", text: "오류: " + resp.error }], isError: true };
+      }
+
+      const results = resp.results || [];
+      const totalHits = resp.total_hits || 0;
+
+      if (results.length === 0) {
+        return { content: [{ type: "text", text: `"${params.query}" 검색 결과가 없습니다. (total_hits: ${totalHits})` }] };
+      }
+
+      let text = `RTL 검색 결과 (${results.length}/${totalHits}건):\n`;
+      results.forEach((r, i) => {
+        text += `\n[${i + 1}] ${r.module_name || "(no name)"}`;
+        if (r.topic) text += ` | 토픽: ${Array.isArray(r.topic) ? r.topic.join(", ") : r.topic}`;
+        if (r.pipeline_id) text += ` | 파이프라인: ${r.pipeline_id}`;
+        if (r.port_list) text += `\n    포트: ${r.port_list.substring(0, 200)}${r.port_list.length > 200 ? "..." : ""}`;
+        if (r.instance_list) text += `\n    인스턴스: ${r.instance_list.substring(0, 200)}${r.instance_list.length > 200 ? "..." : ""}`;
+        if (r.parameter_list) text += `\n    파라미터: ${r.parameter_list}`;
+        if (r.file_path) text += `\n    파일: ${r.file_path}`;
+      });
+
+      return { content: [{ type: "text", text }] };
+    } catch(err) {
+      return { content: [{ type: "text", text: "RTL 검색 실패: " + err.message }], isError: true };
+    }
+  }
+);
+
 // QuickSight 클라이언트 (VPC Endpoint 경유 - Private DNS)
 const { QuickSightClient, ListDashboardsCommand, DescribeDashboardCommand } = require("@aws-sdk/client-quicksight");
 
