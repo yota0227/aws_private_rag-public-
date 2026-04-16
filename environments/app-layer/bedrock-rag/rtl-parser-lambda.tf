@@ -159,7 +159,7 @@ resource "aws_iam_role_policy" "rtl_parser_kms" {
   })
 }
 
-# IAM Policy: Bedrock - Titan Embeddings v2 InvokeModel
+# IAM Policy: Bedrock - Titan Embeddings v2 + Claude 3 Haiku InvokeModel
 resource "aws_iam_role_policy" "rtl_parser_bedrock" {
   name = "rtl-parser-bedrock-access"
   role = aws_iam_role.rtl_parser_lambda.id
@@ -168,15 +168,18 @@ resource "aws_iam_role_policy" "rtl_parser_bedrock" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect   = "Allow"
-        Action   = ["bedrock:InvokeModel"]
-        Resource = ["arn:aws:bedrock:us-east-1::foundation-model/amazon.titan-embed-text-v2:0"]
+        Effect = "Allow"
+        Action = ["bedrock:InvokeModel"]
+        Resource = [
+          "arn:aws:bedrock:us-east-1::foundation-model/amazon.titan-embed-text-v2:0",
+          "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-haiku-20240307-v1:0"
+        ]
       }
     ]
   })
 }
 
-# IAM Policy: DynamoDB - 에러 테이블 PutItem
+# IAM Policy: DynamoDB - 에러 테이블 PutItem + UpdateItem + Query (분석 파이프라인 상태 추적)
 resource "aws_iam_role_policy" "rtl_parser_dynamodb" {
   name = "rtl-parser-dynamodb-access"
   role = aws_iam_role.rtl_parser_lambda.id
@@ -185,8 +188,12 @@ resource "aws_iam_role_policy" "rtl_parser_dynamodb" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect   = "Allow"
-        Action   = ["dynamodb:PutItem"]
+        Effect = "Allow"
+        Action = [
+          "dynamodb:PutItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:Query"
+        ]
         Resource = [aws_dynamodb_table.extraction_tasks.arn]
       }
     ]
@@ -228,6 +235,23 @@ resource "aws_iam_role_policy" "rtl_parser_neptune" {
         Effect   = "Allow"
         Action   = ["neptune-db:WriteDataViaQuery"]
         Resource = ["arn:aws:neptune-db:ap-northeast-2:${data.aws_caller_identity.current.account_id}:*/*"]
+      }
+    ]
+  })
+}
+
+# IAM Policy: Step Functions - StartExecution 권한 (분석 파이프라인 트리거)
+resource "aws_iam_role_policy" "rtl_parser_sfn" {
+  name = "rtl-parser-sfn-access"
+  role = aws_iam_role.rtl_parser_lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["states:StartExecution"]
+        Resource = [aws_sfn_state_machine.analysis_orchestrator.arn]
       }
     ]
   })
@@ -330,6 +354,9 @@ resource "aws_lambda_function" "rtl_parser" {
       TITAN_EMBED_MODEL_ID = "amazon.titan-embed-text-v2:0"
       DYNAMODB_ERROR_TABLE = aws_dynamodb_table.extraction_tasks.name
       LAMBDA_REGION        = "ap-northeast-2"
+      STEP_FUNCTIONS_ARN   = "arn:aws:states:ap-northeast-2:${data.aws_caller_identity.current.account_id}:stateMachine:analysis-orchestrator-${var.environment}"
+      CLAUDE_MODEL_ID      = "anthropic.claude-3-haiku-20240307-v1:0"
+      CLAIM_DB_TABLE       = aws_dynamodb_table.claim_db.name
     }
   }
 
