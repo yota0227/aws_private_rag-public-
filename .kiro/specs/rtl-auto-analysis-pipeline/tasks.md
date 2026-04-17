@@ -4,6 +4,28 @@
 
 RTL 자동 분석 파이프라인의 구현을 5단계로 진행한다: (1) 순수 로직 함수 + PBT 테스트, (2) Terraform 인프라, (3) Lambda 코드 확장, (4) LLM 통합, (5) 통합 테스트. Python 3.12(Lambda), Go 1.21 + gopter(PBT), Terraform(인프라)을 사용한다.
 
+## 배포 및 E2E 검증 결과 (2026-04-17)
+
+| 항목 | 결과 |
+|------|------|
+| RTL 재파싱 | ✅ 8,107건 (pipeline_id=tt_20260221, analysis_type=module_parse) |
+| Hierarchy Extraction | ✅ 80개 계층 노드 |
+| Topic Classification | ✅ 11개 토픽, 530개 모듈 (Overlay 124, FPU 140, NoC 84, TDMA 54, EDC 30 등) |
+| Claim Generation | ✅ 78건 (Bedrock Claude 자동 생성, 11개 토픽별 분할 실행) |
+| HDD Generation | ✅ 66개 섹션 (11개 토픽 × 6개 섹션) |
+| MCP search_rtl | ✅ Obot E2E 동작 확인 (analysis_type=claim 필터로 Claim 검색 성공) |
+| Clock Domain | ⏱️ 300초 타임아웃 (S3 9,465개 파일 → 배치 분할 필요) |
+| Dataflow | ⏱️ 미실행 (동일 이슈) |
+
+### 배포 중 발견된 이슈 및 해결
+
+1. **AOSS 제약**: `_update_by_query`, `_delete_by_query` 미지원 → 인덱스 삭제/재생성 방식으로 우회
+2. **AOSS 문서 ID PUT 미지원**: POST /_doc (ID 자동 생성) 사용
+3. **OpenSearch 페이지네이션**: AOSS scroll API 미지원 → search_after 방식 구현
+4. **Lambda 300초 타임아웃**: 토픽별 분할 실행으로 해결 (Claim/HDD), S3 파일 배치 처리는 추가 최적화 필요
+5. **IAM 권한 누락**: s3:ListBucket, lambda:InvokeFunction(self), bedrock:InvokeModel(Claude) 수동 추가
+6. **MCP Bridge**: 온프레미스 server.js에 search_rtl 도구 + analysis_type 파라미터 추가
+
 ## Tasks
 
 - [x] 1. 순수 로직 함수 구현 및 속성 기반 테스트

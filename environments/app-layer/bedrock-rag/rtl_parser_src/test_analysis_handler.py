@@ -370,3 +370,55 @@ class TestStageHandlersRegistered:
 
     def test_variant_delta_registered(self):
         assert "variant_delta" in ah._STAGE_HANDLERS
+
+    def test_backfill_pipeline_id_registered(self):
+        assert "backfill_pipeline_id" in ah._STAGE_HANDLERS
+
+
+# ---------------------------------------------------------------------------
+# 21. Backfill pipeline_id dispatch test
+# ---------------------------------------------------------------------------
+
+class TestBackfillDispatch:
+    """Dispatcher routes backfill_pipeline_id to the correct handler."""
+
+    def test_dispatch_backfill_pipeline_id(self):
+        mock_fn = MagicMock(return_value={"status": "completed", "backfilled": 100, "failed": 0})
+        with patch.dict(ah._STAGE_HANDLERS, {"backfill_pipeline_id": mock_fn}):
+            event = {"stage": "backfill_pipeline_id", "pipeline_id": "tt_20260221"}
+            result = ah.analysis_handler(event)
+            mock_fn.assert_called_once_with(event)
+            assert result["status"] == "completed"
+            assert result["backfilled"] == 100
+
+
+# ---------------------------------------------------------------------------
+# 22–23. Dispatch tests: clear_index, reparse_all
+# ---------------------------------------------------------------------------
+
+class TestClearIndexAndReparseAllDispatch:
+    """Dispatcher routes clear_index and reparse_all to correct handlers."""
+
+    def test_dispatch_clear_index(self):
+        mock_fn = MagicMock(return_value={"status": "completed"})
+        with patch.dict(ah._STAGE_HANDLERS, {"clear_index": mock_fn}):
+            event = {"stage": "clear_index", "pipeline_id": "tt_20260221"}
+            result = ah.analysis_handler(event)
+            mock_fn.assert_called_once_with(event)
+            assert result["status"] == "completed"
+
+    def test_dispatch_reparse_all(self):
+        mock_fn = MagicMock(return_value={"status": "completed", "files_triggered": 50, "errors": 0})
+        with patch.dict(ah._STAGE_HANDLERS, {"reparse_all": mock_fn}):
+            event = {"stage": "reparse_all", "pipeline_id": "tt_20260221",
+                     "s3_prefix": "rtl-sources/tt_20260221/"}
+            result = ah.analysis_handler(event)
+            mock_fn.assert_called_once_with(event)
+            assert result["status"] == "completed"
+            assert result["files_triggered"] == 50
+
+    def test_clear_index_registered(self):
+        assert "clear_index" in ah._STAGE_HANDLERS
+
+    def test_reparse_all_registered(self):
+        assert "reparse_all" in ah._STAGE_HANDLERS

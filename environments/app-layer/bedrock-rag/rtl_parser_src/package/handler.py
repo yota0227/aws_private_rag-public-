@@ -17,6 +17,8 @@ from typing import Optional
 
 import boto3
 
+from pipeline_utils import extract_pipeline_id
+
 # tiktoken은 Linux Lambda 환경에서만 정상 동작 (Windows 빌드 바이너리 비호환)
 try:
     import tiktoken
@@ -32,6 +34,7 @@ RTL_S3_BUCKET = os.environ.get("RTL_S3_BUCKET", "")
 RTL_OPENSEARCH_ENDPOINT = os.environ.get("RTL_OPENSEARCH_ENDPOINT", "")
 RTL_OPENSEARCH_INDEX = os.environ.get("RTL_OPENSEARCH_INDEX", "rtl-knowledge-base-index")
 ERROR_TABLE_NAME = os.environ.get("ERROR_TABLE_NAME", "bos-ai-rtl-parse-errors")
+DYNAMODB_EXTRACTION_TABLE = os.environ.get("DYNAMODB_EXTRACTION_TABLE", "rag-extraction-tasks")
 BEDROCK_REGION = os.environ.get("BEDROCK_REGION", "us-east-1")
 NEPTUNE_ENDPOINT = os.environ.get("NEPTUNE_ENDPOINT", "")
 TITAN_MODEL_ID = "amazon.titan-embed-text-v2:0"
@@ -48,13 +51,154 @@ bedrock_runtime = boto3.client("bedrock-runtime", region_name=BEDROCK_REGION)
 # ---------------------------------------------------------------------------
 
 def handler(event, context):
-    """S3 Event Notification 핸들러"""
+    """S3 Event Notification 핸들러 + RTL 인덱스 검색 (action: search)"""
+    # Step Functions에서 호출하는 분석 파이프라인 요청
+    if event.get("stage"):
+        from analysis_handler import analysis_handler
+        return analysis_handler(event, context)
+
+    # RTL 인덱스 검색 요청 처리
+    if event.get("action") == "search":
+        return _search_rtl(event)
+
     for record in event.get("Records", []):
         bucket = record["s3"]["bucket"]["name"]
         key = record["s3"]["object"]["key"]
         logger.info(json.dumps({"event": "rtl_parse_start", "bucket": bucket, "key": key}))
         _process_rtl_file(bucket, key)
     return {"statusCode": 200}
+
+
+def _search_rtl(event):
+    """RTL OpenSearch 인덱스 검색 — Main Lambda에서 동기 invoke로 호출.
+
+    Supports both text search (query) and filtered search
+    (pipeline_id, topic, analysis_type parameters).
+    """
+    import requests
+    from requests_aws4auth import AWS4Auth
+
+    query = event.get("query", "")
+    max_results = int(event.get("max_results", 5))
+
+    # 필터링 파라미터
+    pipeline_id = event.get("pipeline_id", "")
+    topic = event.get("topic", "")
+    analysis_type = event.get("analysis_type", "")
+
+    if not RTL_OPENSEARCH_ENDPOINT:
+        return {"results": [], "total_hits": 0, "query": query}
+
+    # 텍스트 검색도 필터 파라미터도 없으면 빈 결과
+    if not query and not pipeline_id and not topic and not analysis_type:
+        return {"results": [], "total_hits": 0, "query": query}
+
+    session = boto3.Session()
+    credentials = session.get_credentials()
+    aoss_region = os.environ.get("BEDROCK_REGION", "us-east-1")
+    auth = AWS4Auth(
+        credentials.access_key,
+        credentials.secret_key,
+        aoss_region,
+        "aoss",
+        session_token=credentials.token,
+    )
+
+    url = f"{RTL_OPENSEARCH_ENDPOINT}/{RTL_OPENSEARCH_INDEX}/_search"
+
+    # 필터 조건 구축 (build_search_query 활용)
+    from search_utils import build_search_query
+
+    filter_params = {}
+    if pipeline_id:
+        filter_params["pipeline_id"] = pipeline_id
+    if topic:
+        filter_params["topic"] = topic
+    if analysis_type:
+        filter_params["analysis_type"] = analysis_type
+
+    filter_clauses = []
+    if filter_params:
+        built = build_search_query(filter_params)
+        filter_clauses = built.get("query", {}).get("bool", {}).get("must", [])
+        # Remove match_all if present
+        filter_clauses = [c for c in filter_clauses if "match_all" not in c]
+
+    if query:
+        # 텍스트 검색 + 필터
+        should_clauses = [
+            {"wildcard": {"module_name": f"*{query}*"}},
+            {"wildcard": {"module_name": f"*{query.lower()}*"}},
+            {"match": {"parsed_summary": query}},
+            {"match": {"port_list": query}},
+            {"match": {"instance_list": query}},
+            {"match": {"claim_text": query}},
+            {"match": {"hdd_content": query}},
+        ]
+        bool_query: dict = {
+            "should": should_clauses,
+            "minimum_should_match": 1,
+        }
+        if filter_clauses:
+            bool_query["filter"] = filter_clauses
+        search_body = {
+            "size": max_results,
+            "query": {"bool": bool_query},
+            "_source": [
+                "module_name", "port_list", "parameter_list",
+                "instance_list", "file_path", "parsed_summary",
+                "pipeline_id", "topic", "analysis_type",
+                "claim_text", "claim_type", "claim_id",
+                "hdd_content", "hdd_section_title",
+            ],
+        }
+    else:
+        # 필터 전용 검색
+        search_body = {
+            "size": max_results,
+            "query": {"bool": {"must": filter_clauses}} if filter_clauses else {"match_all": {}},
+            "_source": [
+                "module_name", "port_list", "parameter_list",
+                "instance_list", "file_path", "parsed_summary",
+                "pipeline_id", "topic", "analysis_type",
+                "claim_text", "claim_type", "claim_id",
+                "hdd_content", "hdd_section_title",
+            ],
+        }
+
+    try:
+        resp = requests.post(url, auth=auth, json=search_body,
+                             headers={"Content-Type": "application/json"}, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+
+        results = []
+        for hit in data.get("hits", {}).get("hits", []):
+            src = hit.get("_source", {})
+            results.append({
+                "module_name": src.get("module_name", ""),
+                "port_list": src.get("port_list", ""),
+                "parameter_list": src.get("parameter_list", ""),
+                "instance_list": src.get("instance_list", ""),
+                "file_path": src.get("file_path", ""),
+                "parsed_summary": src.get("parsed_summary", ""),
+                "pipeline_id": src.get("pipeline_id", ""),
+                "topic": src.get("topic", ""),
+                "analysis_type": src.get("analysis_type", ""),
+                "claim_text": src.get("claim_text", ""),
+                "claim_type": src.get("claim_type", ""),
+                "claim_id": src.get("claim_id", ""),
+                "hdd_content": src.get("hdd_content", ""),
+                "hdd_section_title": src.get("hdd_section_title", ""),
+                "score": hit.get("_score", 0),
+            })
+
+        total_hits = data.get("hits", {}).get("total", {}).get("value", 0)
+        return {"results": results, "total_hits": total_hits, "query": query}
+
+    except Exception as e:
+        logger.error(json.dumps({"event": "rtl_search_error", "error": str(e)}))
+        return {"results": [], "total_hits": 0, "query": query, "error": str(e)}
 
 
 def _process_rtl_file(bucket: str, key: str):
@@ -66,6 +210,9 @@ def _process_rtl_file(bucket: str, key: str):
         _record_error(key, f"S3 GetObject 실패: {e}")
         raise
 
+    # Pipeline_ID 추출
+    pipeline_info = extract_pipeline_id(key)
+
     # Phase 6b: PyVerilog AST 파서 점진적 롤아웃 (환경 변수 기반 feature flag)
     use_pyverilog = os.environ.get("USE_PYVERILOG", "false").lower() == "true"
     if use_pyverilog:
@@ -73,6 +220,12 @@ def _process_rtl_file(bucket: str, key: str):
     else:
         metadata = parse_rtl_to_ast(rtl_content)
     metadata["file_path"] = key
+
+    # Pipeline_ID 메타데이터 추가
+    metadata["pipeline_id"] = pipeline_info["pipeline_id"]
+    metadata["chip_type"] = pipeline_info["chip_type"]
+    metadata["snapshot_date"] = pipeline_info["snapshot_date"]
+    metadata["analysis_type"] = "module_parse"
 
     # parsed JSON 저장
     parsed_key = key.replace("rtl-sources/", "rtl-parsed/") + ".parsed.json"
@@ -93,10 +246,15 @@ def _process_rtl_file(bucket: str, key: str):
     # Neptune Graph DB 관계 적재 (Phase 6)
     _load_to_neptune(metadata)
 
+    # DynamoDB 파싱 완료 이벤트 기록
+    module_name = metadata.get("module_name", "unknown")
+    _record_parse_event(pipeline_info["pipeline_id"], module_name, key)
+
     logger.info(json.dumps({
         "event": "rtl_parse_success",
         "key": key,
         "module_name": metadata.get("module_name", ""),
+        "pipeline_id": pipeline_info["pipeline_id"],
         "port_count": len(metadata.get("port_list", [])),
         "instance_count": len(metadata.get("instance_list", [])),
     }))
@@ -317,11 +475,13 @@ def _index_to_opensearch(metadata: dict, embedding: list):
 
         session = boto3.Session()
         credentials = session.get_credentials()
-        region = session.region_name or "us-east-1"
+        # AOSS 컬렉션이 us-east-1에 있으므로 SigV4 서명도 us-east-1로 해야 함
+        # Lambda는 ap-northeast-2에서 실행되므로 session.region_name은 사용 불가
+        aoss_region = os.environ.get("BEDROCK_REGION", "us-east-1")
         auth = AWS4Auth(
             credentials.access_key,
             credentials.secret_key,
-            region,
+            aoss_region,
             "aoss",
             session_token=credentials.token,
         )
@@ -336,12 +496,25 @@ def _index_to_opensearch(metadata: dict, embedding: list):
             "instance_list": " ".join(metadata.get("instance_list", [])),
             "file_path": metadata.get("file_path", ""),
             "parsed_summary": generate_parsed_summary(metadata),
+            "pipeline_id": metadata.get("pipeline_id", ""),
+            "chip_type": metadata.get("chip_type", ""),
+            "snapshot_date": metadata.get("snapshot_date", ""),
+            "analysis_type": metadata.get("analysis_type", "module_parse"),
         }
 
-        url = f"{RTL_OPENSEARCH_ENDPOINT}/{RTL_OPENSEARCH_INDEX}/_doc/{doc_id}"
-        response = requests.put(url, auth=auth, json=doc, timeout=30)
+        # AOSS는 PUT /{index}/_doc/{id} (문서 ID 지정)를 지원하지 않음
+        # POST /{index}/_doc 사용 (ID 자동 생성)
+        url = f"{RTL_OPENSEARCH_ENDPOINT}/{RTL_OPENSEARCH_INDEX}/_doc"
+        response = requests.post(url, auth=auth, json=doc, timeout=30)
+        if response.status_code not in (200, 201):
+            logger.error(json.dumps({
+                "event": "opensearch_error_detail",
+                "status_code": response.status_code,
+                "response_body": response.text[:500],
+                "url": url,
+            }))
         response.raise_for_status()
-        logger.info(json.dumps({"event": "opensearch_indexed", "doc_id": doc_id}))
+        logger.info(json.dumps({"event": "opensearch_indexed", "file_path": metadata.get("file_path", "")}))
     except Exception as e:
         logger.error(json.dumps({"event": "opensearch_error", "error": str(e)}))
 
@@ -495,6 +668,32 @@ def _load_to_neptune(metadata: dict):
         logger.error(json.dumps({
             "event": "neptune_load_error",
             "module_name": metadata.get("module_name", ""),
+            "error": str(e),
+        }))
+
+
+# ---------------------------------------------------------------------------
+# DynamoDB 파싱 완료 이벤트 기록
+# ---------------------------------------------------------------------------
+
+def _record_parse_event(pipeline_id: str, module_name: str, file_path: str):
+    """DynamoDB rag-extraction-tasks 테이블에 파싱 완료 이벤트 기록."""
+    try:
+        table = dynamodb.Table(DYNAMODB_EXTRACTION_TABLE)
+        task_id = f"parse_{pipeline_id}_{module_name}"
+        table.put_item(Item={
+            "task_id": task_id,
+            "pipeline_id": pipeline_id,
+            "status": "parsed",
+            "module_name": module_name,
+            "file_path": file_path,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as e:
+        logger.error(json.dumps({
+            "event": "parse_event_record_failed",
+            "pipeline_id": pipeline_id,
+            "module_name": module_name,
             "error": str(e),
         }))
 
