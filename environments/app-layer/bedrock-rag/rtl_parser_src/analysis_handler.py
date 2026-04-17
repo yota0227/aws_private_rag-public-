@@ -64,8 +64,14 @@ def _get_opensearch_auth():
     return auth
 
 
-def _opensearch_scroll_query(pipeline_id: str, analysis_type: str) -> list[dict]:
-    """OpenSearch에서 pipeline_id + analysis_type으로 문서를 스크롤 조회."""
+def _opensearch_scroll_query(
+    pipeline_id: str, analysis_type: str, max_docs: int = 10000,
+) -> list[dict]:
+    """OpenSearch에서 pipeline_id + analysis_type으로 문서를 페이지네이션 조회.
+
+    AOSS는 scroll API를 지원하지 않으므로 search_after 방식으로 페이지네이션한다.
+    _id 기준 정렬 후 마지막 _id를 search_after로 전달하여 다음 페이지를 조회한다.
+    """
     import requests
 
     if not OPENSEARCH_ENDPOINT:
@@ -75,35 +81,65 @@ def _opensearch_scroll_query(pipeline_id: str, analysis_type: str) -> list[dict]
     auth = _get_opensearch_auth()
     url = f"{OPENSEARCH_ENDPOINT}/{OPENSEARCH_INDEX}/_search"
     results: list[dict] = []
-    search_body: dict[str, Any] = {
-        "size": BATCH_SIZE,
-        "query": {
-            "bool": {
-                "must": [
-                    {"term": {"pipeline_id": pipeline_id}},
-                    {"term": {"analysis_type": analysis_type}},
-                ],
-            },
-        },
-    }
+    search_after: list[str] | None = None
 
-    try:
-        resp = requests.post(
-            url, auth=auth, json=search_body,
-            headers={"Content-Type": "application/json"}, timeout=60,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        for hit in data.get("hits", {}).get("hits", []):
-            doc = hit.get("_source", {})
-            doc["_id"] = hit.get("_id", "")
-            results.append(doc)
-    except Exception as e:
-        logger.error(json.dumps({
-            "event": "opensearch_scroll_error",
-            "pipeline_id": pipeline_id,
-            "error": str(e),
-        }))
+    while len(results) < max_docs:
+        search_body: dict[str, Any] = {
+            "size": BATCH_SIZE,
+            "sort": [{"_id": "asc"}],
+            "query": {
+                "bool": {
+                    "must": [
+                        {"term": {"pipeline_id": pipeline_id}},
+                        {"term": {"analysis_type": analysis_type}},
+                    ],
+                },
+            },
+        }
+        if search_after is not None:
+            search_body["search_after"] = search_after
+
+        try:
+            resp = requests.post(
+                url, auth=auth, json=search_body,
+                headers={"Content-Type": "application/json"}, timeout=60,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            hits = data.get("hits", {}).get("hits", [])
+
+            if not hits:
+                break
+
+            for hit in hits:
+                doc = hit.get("_source", {})
+                doc["_id"] = hit.get("_id", "")
+                results.append(doc)
+
+            # search_after: 마지막 hit의 sort 값
+            search_after = hits[-1].get("sort")
+            if not search_after:
+                break
+
+            logger.info(json.dumps({
+                "event": "scroll_page",
+                "pipeline_id": pipeline_id,
+                "analysis_type": analysis_type,
+                "page_size": len(hits),
+                "total_so_far": len(results),
+            }))
+
+            # 배치 크기보다 적으면 마지막 페이지
+            if len(hits) < BATCH_SIZE:
+                break
+
+        except Exception as e:
+            logger.error(json.dumps({
+                "event": "opensearch_scroll_error",
+                "pipeline_id": pipeline_id,
+                "error": str(e),
+            }))
+            break
 
     return results
 
@@ -605,56 +641,47 @@ def handle_topic_classification(event: dict[str, Any]) -> dict[str, Any]:
 def handle_claim_generation(event: dict[str, Any]) -> dict[str, Any]:
     """Claim 생성 핸들러.
 
-    1. OpenSearch에서 토픽별 모듈 조회
-    2. generate_claims() 호출
-    3. DynamoDB claim_db + OpenSearch 저장
+    module_parse 문서에서 직접 classify_topic()을 호출하여 토픽별로 그룹화한 뒤
+    generate_claims()로 Claim을 생성한다. topic 문서에 의존하지 않는다.
     """
     pipeline_id = event["pipeline_id"]
     stage = "claim_generation"
     _update_dynamodb_status(pipeline_id, stage, "in_progress")
 
     try:
-        # 토픽별 모듈 조회
         parsed_docs = _opensearch_scroll_query(pipeline_id, "module_parse")
-        topic_docs = _opensearch_scroll_query(pipeline_id, "topic")
-
-        # 토픽 매핑 구축
-        topic_map: dict[str, list[str]] = {}
-        for doc in topic_docs:
-            topics = doc.get("topics", doc.get("topic", ["unclassified"]))
-            if isinstance(topics, str):
-                topics = [topics]
-            module_name = doc.get("module_name", "")
-            for t in topics:
-                topic_map.setdefault(t, []).append(module_name)
 
         # 분석 결과 수집
         hierarchy_docs = _opensearch_scroll_query(pipeline_id, "hierarchy")
-        clock_docs = _opensearch_scroll_query(pipeline_id, "clock_domain")
-        dataflow_docs = _opensearch_scroll_query(pipeline_id, "dataflow")
-
         analysis_results: dict[str, Any] = {
             "hierarchy": hierarchy_docs[0] if hierarchy_docs else {},
-            "clock_domains": clock_docs,
-            "dataflow": dataflow_docs,
+            "clock_domains": [],
+            "dataflow": [],
         }
 
-        # 모듈 인덱스
-        module_index: dict[str, dict[str, Any]] = {}
+        # module_parse 문서에서 직접 토픽 분류 → 토픽별 그룹화
+        topic_groups: dict[str, list[dict[str, Any]]] = {}
         for doc in parsed_docs:
             name = doc.get("module_name", "")
-            if name:
-                module_index[name] = doc
+            file_path = doc.get("file_path", "")
+            if not name:
+                continue
+            topics = classify_topic(file_path, name)
+            for t in topics:
+                if t != "unclassified":
+                    topic_groups.setdefault(t, []).append(doc)
+
+        logger.info(json.dumps({
+            "event": "claim_topic_groups",
+            "pipeline_id": pipeline_id,
+            "topics": {t: len(mods) for t, mods in topic_groups.items()},
+        }))
 
         total_claims = 0
-        for topic, module_names in topic_map.items():
-            if topic == "unclassified":
-                continue
-            modules = [module_index[n] for n in module_names if n in module_index]
-            if not modules:
-                continue
-
-            claims = generate_claims(pipeline_id, topic, modules, analysis_results)
+        for topic, modules in topic_groups.items():
+            # 토픽당 최대 20개 모듈로 제한 (LLM 토큰 절약)
+            modules_subset = modules[:20]
+            claims = generate_claims(pipeline_id, topic, modules_subset, analysis_results)
 
             for claim in claims:
                 _index_document(claim)
@@ -836,6 +863,356 @@ def handle_variant_delta(event: dict[str, Any]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Backfill: 기존 문서에 pipeline_id, analysis_type 필드 추가
+# ---------------------------------------------------------------------------
+
+def handle_backfill_pipeline_id(event: dict[str, Any]) -> dict[str, Any]:
+    """기존 OpenSearch 문서에 pipeline_id, analysis_type 필드를 백필.
+
+    AOSS는 _update_by_query를 지원하지 않으므로:
+    1. pipeline_id 필드가 없는 문서를 검색 (must_not exists)
+    2. 각 문서에 pipeline_id, chip_type, snapshot_date, analysis_type 추가
+    3. 새 문서로 다시 인덱싱 (POST /_doc)
+
+    배치 처리: 100건씩
+
+    Args:
+        event: 백필 이벤트.
+            필수: ``pipeline_id`` (str)
+            선택: ``analysis_type`` (str, 기본값 "module_parse")
+
+    Returns:
+        백필 결과 dict.
+    """
+    import requests
+
+    pipeline_id = event.get("pipeline_id", "tt_20260221")
+    analysis_type = event.get("analysis_type", "module_parse")
+    stage = "backfill_pipeline_id"
+    _update_dynamodb_status(pipeline_id, stage, "in_progress")
+
+    # pipeline_id에서 chip_type, snapshot_date 추출
+    if "_" in pipeline_id:
+        chip_type, snapshot_date = pipeline_id.split("_", 1)
+    else:
+        chip_type, snapshot_date = pipeline_id, "unknown"
+
+    total_backfilled = 0
+    total_failed = 0
+
+    try:
+        if not OPENSEARCH_ENDPOINT:
+            logger.warning("OPENSEARCH_ENDPOINT not set, skipping backfill")
+            _update_dynamodb_status(pipeline_id, stage, "completed",
+                                   extra={"backfilled": 0, "skipped": True})
+            return {"status": "completed", "backfilled": 0, "failed": 0,
+                    "skipped": True}
+
+        auth = _get_opensearch_auth()
+        url = f"{OPENSEARCH_ENDPOINT}/{OPENSEARCH_INDEX}/_search"
+
+        while True:
+            # pipeline_id 필드가 없는 문서를 배치로 검색
+            search_body: dict[str, Any] = {
+                "size": BATCH_SIZE,
+                "query": {
+                    "bool": {
+                        "must_not": [
+                            {"exists": {"field": "pipeline_id"}},
+                        ],
+                    },
+                },
+            }
+
+            resp = requests.post(
+                url, auth=auth, json=search_body,
+                headers={"Content-Type": "application/json"}, timeout=60,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            hits = data.get("hits", {}).get("hits", [])
+
+            if not hits:
+                break
+
+            for hit in hits:
+                source = hit.get("_source", {})
+                # 기존 문서에 새 필드 추가
+                source["pipeline_id"] = pipeline_id
+                source["chip_type"] = chip_type
+                source["snapshot_date"] = snapshot_date
+                source["analysis_type"] = analysis_type
+
+                if _index_document(source):
+                    total_backfilled += 1
+                else:
+                    total_failed += 1
+
+            logger.info(json.dumps({
+                "event": "backfill_batch_complete",
+                "pipeline_id": pipeline_id,
+                "batch_size": len(hits),
+                "total_backfilled": total_backfilled,
+            }))
+
+        _update_dynamodb_status(pipeline_id, stage, "completed",
+                               extra={"backfilled": total_backfilled,
+                                      "failed": total_failed})
+
+        logger.info(json.dumps({
+            "event": "backfill_pipeline_id_complete",
+            "pipeline_id": pipeline_id,
+            "total_backfilled": total_backfilled,
+            "total_failed": total_failed,
+        }))
+        return {"status": "completed", "backfilled": total_backfilled,
+                "failed": total_failed}
+
+    except Exception as e:
+        _update_dynamodb_status(pipeline_id, stage, "failed",
+                               error_message=str(e))
+        logger.error(json.dumps({
+            "event": "backfill_pipeline_id_error",
+            "pipeline_id": pipeline_id,
+            "error": str(e),
+        }))
+        raise
+
+
+# ---------------------------------------------------------------------------
+# Clear Index: OpenSearch 인덱스 삭제 후 재생성
+# ---------------------------------------------------------------------------
+
+def handle_clear_index(event: dict[str, Any]) -> dict[str, Any]:
+    """OpenSearch 인덱스를 삭제하고 재생성.
+
+    AOSS는 ``_delete_by_query``를 지원하지 않으므로,
+    인덱스를 삭제(DELETE)한 뒤 동일 매핑으로 재생성(PUT)한다.
+
+    Args:
+        event: ``pipeline_id`` (str) 필수.
+
+    Returns:
+        ``{"status": "completed"}`` 또는 에러 시 raise.
+    """
+    import requests
+
+    pipeline_id = event["pipeline_id"]
+    stage = "clear_index"
+    _update_dynamodb_status(pipeline_id, stage, "in_progress")
+
+    try:
+        if not OPENSEARCH_ENDPOINT:
+            logger.warning("OPENSEARCH_ENDPOINT not set, skipping clear_index")
+            _update_dynamodb_status(pipeline_id, stage, "completed",
+                                   extra={"skipped": True})
+            return {"status": "completed", "skipped": True}
+
+        auth = _get_opensearch_auth()
+        index_url = f"{OPENSEARCH_ENDPOINT}/{OPENSEARCH_INDEX}"
+
+        # 1. DELETE /{index}
+        del_resp = requests.delete(
+            index_url, auth=auth,
+            headers={"Content-Type": "application/json"}, timeout=30,
+        )
+        # 404 = 인덱스가 이미 없음 → 무시
+        if del_resp.status_code not in (200, 404):
+            del_resp.raise_for_status()
+        logger.info(json.dumps({
+            "event": "clear_index_deleted",
+            "index": OPENSEARCH_INDEX,
+            "status_code": del_resp.status_code,
+        }))
+
+        # 2. PUT /{index} — 매핑 재생성
+        index_body: dict[str, Any] = {
+            "settings": {
+                "index": {
+                    "knn": True,
+                },
+            },
+            "mappings": {
+                "properties": {
+                    "embedding": {
+                        "type": "knn_vector",
+                        "dimension": 1024,
+                        "method": {
+                            "name": "hnsw",
+                            "space_type": "cosinesimil",
+                            "engine": "faiss",
+                        },
+                    },
+                    "module_name": {"type": "keyword"},
+                    "parent_module": {"type": "keyword"},
+                    "file_path": {"type": "keyword"},
+                    "port_list": {"type": "text"},
+                    "parameter_list": {"type": "text"},
+                    "instance_list": {"type": "text"},
+                    "parsed_summary": {"type": "text"},
+                    "pipeline_id": {"type": "keyword"},
+                    "chip_type": {"type": "keyword"},
+                    "snapshot_date": {"type": "keyword"},
+                    "analysis_type": {"type": "keyword"},
+                    "hierarchy_path": {"type": "keyword"},
+                    "clock_domains": {"type": "nested"},
+                    "is_cdc_boundary": {"type": "boolean"},
+                    "topic": {"type": "keyword"},
+                    "topics": {"type": "keyword"},
+                    "claim_id": {"type": "keyword"},
+                    "claim_type": {"type": "keyword"},
+                    "claim_text": {"type": "text"},
+                    "hdd_content": {"type": "text"},
+                    "created_at": {"type": "date"},
+                    "updated_at": {"type": "date"},
+                },
+            },
+        }
+
+        put_resp = requests.put(
+            index_url, auth=auth, json=index_body,
+            headers={"Content-Type": "application/json"}, timeout=30,
+        )
+        put_resp.raise_for_status()
+        logger.info(json.dumps({
+            "event": "clear_index_recreated",
+            "index": OPENSEARCH_INDEX,
+            "status_code": put_resp.status_code,
+        }))
+
+        _update_dynamodb_status(pipeline_id, stage, "completed")
+        return {"status": "completed"}
+
+    except Exception as e:
+        _update_dynamodb_status(pipeline_id, stage, "failed",
+                               error_message=str(e))
+        logger.error(json.dumps({
+            "event": "clear_index_error",
+            "pipeline_id": pipeline_id,
+            "error": str(e),
+        }))
+        raise
+
+
+# ---------------------------------------------------------------------------
+# Reparse All: S3 파일 목록으로 Lambda 재트리거
+# ---------------------------------------------------------------------------
+
+def handle_reparse_all(event: dict[str, Any]) -> dict[str, Any]:
+    """S3의 RTL 파일 목록을 읽어서 각 파일에 대해 Lambda를 비동기 invoke.
+
+    1. ``list_objects_v2``로 ``s3_prefix`` 경로의 ``.v/.sv/.svh`` 파일 목록 조회
+    2. 각 파일에 대해 S3 Event 형식의 payload 구성
+    3. Lambda를 비동기(``InvocationType=Event``)로 invoke
+    4. 배치 처리: 100개씩
+
+    Args:
+        event: ``pipeline_id`` (str) 필수, ``s3_prefix`` (str) 선택.
+
+    Returns:
+        ``{"status": "completed", "files_triggered": int, "errors": int}``
+    """
+    pipeline_id = event["pipeline_id"]
+    s3_prefix = event.get("s3_prefix", f"rtl-sources/{pipeline_id}/")
+    stage = "reparse_all"
+    _update_dynamodb_status(pipeline_id, stage, "in_progress")
+
+    bucket_name = RTL_S3_BUCKET or "bos-ai-rtl-src-533335672315"
+    function_name = os.environ.get(
+        "AWS_LAMBDA_FUNCTION_NAME", "lambda-rtl-parser-seoul-dev",
+    )
+    lambda_client = boto3.client("lambda", region_name="ap-northeast-2")
+
+    files_triggered = 0
+    errors = 0
+
+    try:
+        paginator = s3_client.get_paginator("list_objects_v2")
+        pages = paginator.paginate(Bucket=bucket_name, Prefix=s3_prefix)
+
+        batch: list[str] = []
+        for page in pages:
+            for obj in page.get("Contents", []):
+                key = obj["Key"]
+                if key.endswith((".v", ".sv", ".svh")):
+                    batch.append(key)
+
+                    if len(batch) >= BATCH_SIZE:
+                        triggered, errs = _invoke_reparse_batch(
+                            lambda_client, function_name, bucket_name, batch,
+                        )
+                        files_triggered += triggered
+                        errors += errs
+                        batch = []
+
+        # 남은 배치 처리
+        if batch:
+            triggered, errs = _invoke_reparse_batch(
+                lambda_client, function_name, bucket_name, batch,
+            )
+            files_triggered += triggered
+            errors += errs
+
+        _update_dynamodb_status(pipeline_id, stage, "completed",
+                               extra={"files_triggered": files_triggered,
+                                      "errors": errors})
+
+        logger.info(json.dumps({
+            "event": "reparse_all_complete",
+            "pipeline_id": pipeline_id,
+            "files_triggered": files_triggered,
+            "errors": errors,
+        }))
+        return {"status": "completed", "files_triggered": files_triggered,
+                "errors": errors}
+
+    except Exception as e:
+        _update_dynamodb_status(pipeline_id, stage, "failed",
+                               error_message=str(e))
+        logger.error(json.dumps({
+            "event": "reparse_all_error",
+            "pipeline_id": pipeline_id,
+            "error": str(e),
+        }))
+        raise
+
+
+def _invoke_reparse_batch(
+    lambda_client: Any,
+    function_name: str,
+    bucket_name: str,
+    keys: list[str],
+) -> tuple[int, int]:
+    """배치 내 각 파일에 대해 Lambda를 비동기 invoke."""
+    triggered = 0
+    errs = 0
+    for key in keys:
+        s3_event = {
+            "Records": [{
+                "s3": {
+                    "bucket": {"name": bucket_name},
+                    "object": {"key": key},
+                },
+            }],
+        }
+        try:
+            lambda_client.invoke(
+                FunctionName=function_name,
+                InvocationType="Event",
+                Payload=json.dumps(s3_event).encode(),
+            )
+            triggered += 1
+        except Exception as e:
+            errs += 1
+            logger.warning(json.dumps({
+                "event": "reparse_invoke_error",
+                "key": key,
+                "error": str(e),
+            }))
+    return triggered, errs
+
+
+# ---------------------------------------------------------------------------
 # Task 5.6: Main Dispatcher
 # ---------------------------------------------------------------------------
 
@@ -848,6 +1225,9 @@ _STAGE_HANDLERS = {
     "claim_generation": handle_claim_generation,
     "hdd_generation": handle_hdd_generation,
     "variant_delta": handle_variant_delta,
+    "backfill_pipeline_id": handle_backfill_pipeline_id,
+    "clear_index": handle_clear_index,
+    "reparse_all": handle_reparse_all,
 }
 
 
