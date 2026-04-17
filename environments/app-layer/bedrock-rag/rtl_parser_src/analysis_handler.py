@@ -643,16 +643,20 @@ def handle_claim_generation(event: dict[str, Any]) -> dict[str, Any]:
 
     module_parse 문서에서 직접 classify_topic()을 호출하여 토픽별로 그룹화한 뒤
     generate_claims()로 Claim을 생성한다. topic 문서에 의존하지 않는다.
+
+    event에 ``topic`` 파라미터가 있으면 해당 토픽만 처리한다.
+    없으면 전체 토픽을 처리하되, 300초 타임아웃 내에서 가능한 만큼만.
     """
     pipeline_id = event["pipeline_id"]
+    target_topic = event.get("topic", "")  # 단일 토픽 지정 시
     stage = "claim_generation"
     _update_dynamodb_status(pipeline_id, stage, "in_progress")
 
     try:
         parsed_docs = _opensearch_scroll_query(pipeline_id, "module_parse")
 
-        # 분석 결과 수집
-        hierarchy_docs = _opensearch_scroll_query(pipeline_id, "hierarchy")
+        # 분석 결과 수집 (hierarchy만 — 가볍게)
+        hierarchy_docs = _opensearch_scroll_query(pipeline_id, "hierarchy", max_docs=100)
         analysis_results: dict[str, Any] = {
             "hierarchy": hierarchy_docs[0] if hierarchy_docs else {},
             "clock_domains": [],
@@ -674,12 +678,20 @@ def handle_claim_generation(event: dict[str, Any]) -> dict[str, Any]:
         logger.info(json.dumps({
             "event": "claim_topic_groups",
             "pipeline_id": pipeline_id,
+            "target_topic": target_topic or "all",
             "topics": {t: len(mods) for t, mods in topic_groups.items()},
         }))
 
+        # 단일 토픽 지정 시 해당 토픽만 처리
+        if target_topic:
+            topics_to_process = {target_topic: topic_groups.get(target_topic, [])}
+        else:
+            topics_to_process = topic_groups
+
         total_claims = 0
-        for topic, modules in topic_groups.items():
-            # 토픽당 최대 20개 모듈로 제한 (LLM 토큰 절약)
+        for topic, modules in topics_to_process.items():
+            if not modules:
+                continue
             modules_subset = modules[:20]
             claims = generate_claims(pipeline_id, topic, modules_subset, analysis_results)
 
