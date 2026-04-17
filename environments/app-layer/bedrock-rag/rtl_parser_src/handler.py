@@ -132,6 +132,8 @@ def _search_rtl(event):
             {"match": {"parsed_summary": query}},
             {"match": {"port_list": query}},
             {"match": {"instance_list": query}},
+            {"match": {"claim_text": query}},
+            {"match": {"hdd_content": query}},
         ]
         bool_query: dict = {
             "should": should_clauses,
@@ -146,6 +148,8 @@ def _search_rtl(event):
                 "module_name", "port_list", "parameter_list",
                 "instance_list", "file_path", "parsed_summary",
                 "pipeline_id", "topic", "analysis_type",
+                "claim_text", "claim_type", "claim_id",
+                "hdd_content", "hdd_section_title",
             ],
         }
     else:
@@ -157,6 +161,8 @@ def _search_rtl(event):
                 "module_name", "port_list", "parameter_list",
                 "instance_list", "file_path", "parsed_summary",
                 "pipeline_id", "topic", "analysis_type",
+                "claim_text", "claim_type", "claim_id",
+                "hdd_content", "hdd_section_title",
             ],
         }
 
@@ -179,6 +185,11 @@ def _search_rtl(event):
                 "pipeline_id": src.get("pipeline_id", ""),
                 "topic": src.get("topic", ""),
                 "analysis_type": src.get("analysis_type", ""),
+                "claim_text": src.get("claim_text", ""),
+                "claim_type": src.get("claim_type", ""),
+                "claim_id": src.get("claim_id", ""),
+                "hdd_content": src.get("hdd_content", ""),
+                "hdd_section_title": src.get("hdd_section_title", ""),
                 "score": hit.get("_score", 0),
             })
 

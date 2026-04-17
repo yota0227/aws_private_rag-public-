@@ -200,7 +200,12 @@ mcpServer.tool(
       results.forEach((r, i) => {
         text += `\n[${i + 1}] ${r.module_name || "(no name)"}`;
         if (r.topic) text += ` | 토픽: ${Array.isArray(r.topic) ? r.topic.join(", ") : r.topic}`;
+        if (r.analysis_type) text += ` | 유형: ${r.analysis_type}`;
         if (r.pipeline_id) text += ` | 파이프라인: ${r.pipeline_id}`;
+        if (r.claim_text) text += `\n    Claim: ${r.claim_text.substring(0, 300)}`;
+        if (r.claim_type) text += ` [${r.claim_type}]`;
+        if (r.hdd_section_title) text += `\n    HDD: ${r.hdd_section_title}`;
+        if (r.hdd_content) text += `\n    ${r.hdd_content.substring(0, 300)}`;
         if (r.port_list) text += `\n    포트: ${r.port_list.substring(0, 200)}${r.port_list.length > 200 ? "..." : ""}`;
         if (r.instance_list) text += `\n    인스턴스: ${r.instance_list.substring(0, 200)}${r.instance_list.length > 200 ? "..." : ""}`;
         if (r.parameter_list) text += `\n    파라미터: ${r.parameter_list}`;

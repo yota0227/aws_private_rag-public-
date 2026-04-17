@@ -1457,7 +1457,8 @@ def search_archive(event):
 
     # RTL 인덱스 직접 검색 분기
     if source == 'rtl_parsed':
-        return _search_rtl_index(query, max_results)
+        pipeline_id = body.get('pipeline_id', '')
+        return _search_rtl_index(query, max_results, topic=topic, pipeline_id=pipeline_id)
 
     if not BEDROCK_KB_ID:
         return response(200, {
@@ -1529,9 +1530,10 @@ def search_archive(event):
         return response(500, {'error': str(e)})
 
 
-def _search_rtl_index(query, max_results=5):
+def _search_rtl_index(query, max_results=5, topic='', pipeline_id=''):
     """RTL OpenSearch 인덱스 직접 검색 (source='rtl_parsed' 분기)
-    module_name, parsed_summary, port_list, instance_list 필드를 multi_match로 검색
+    module_name, parsed_summary, port_list, instance_list, claim_text, hdd_content 필드를 검색
+    topic, pipeline_id 필터링 지원
     """
     if not RTL_OPENSEARCH_ENDPOINT:
         return response(200, {
@@ -1544,16 +1546,21 @@ def _search_rtl_index(query, max_results=5):
 
     try:
         # RTL Parser Lambda를 동기 invoke하여 검색 위임
-        # (Main Lambda는 VPC 안이라 AOSS 직접 접근 불가, RTL Parser는 VPC 밖)
         rtl_lambda_name = os.environ.get('RTL_PARSER_LAMBDA_NAME', 'lambda-rtl-parser-seoul-dev')
+        invoke_payload = {
+            'action': 'search',
+            'query': query,
+            'max_results': max_results,
+        }
+        if topic:
+            invoke_payload['topic'] = topic
+        if pipeline_id:
+            invoke_payload['pipeline_id'] = pipeline_id
+
         invoke_resp = lambda_client.invoke(
             FunctionName=rtl_lambda_name,
             InvocationType='RequestResponse',
-            Payload=json.dumps({
-                'action': 'search',
-                'query': query,
-                'max_results': max_results,
-            }),
+            Payload=json.dumps(invoke_payload),
         )
         data = json.loads(invoke_resp['Payload'].read().decode('utf-8'))
 
