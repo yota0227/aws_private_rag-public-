@@ -1,0 +1,637 @@
+
+╔════════════════════════════════════════════════════════════════════════════════════════╗
+║                                                                                        ║
+║                          FP-LANE VISUAL DIAGRAM                                       ║
+║                  (Floating-Point Multiply-Accumulate Unit)                            ║
+║                                                                                        ║
+╚════════════════════════════════════════════════════════════════════════════════════════╝
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                            ONE FP-LANE COMPLETE DATAPATH
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+                  OPERANDS FROM REGISTERS
+                          ↓
+         ┌────────────────┼────────────────┐
+         │                │                │
+      ┌──▼──┐          ┌──▼──┐        ┌───▼────┐
+      │SRCA │          │SRCB │        │ DEST   │
+      │ 16b │          │ 16b │        │ 32-bit │
+      │ ×8  │          │ ×8  │        │ Accum. │
+      └──┬──┘          └──┬──┘        └────────┘
+         │                │
+         └────────────────┼────────────────┐
+                          │                │
+                          ▼                ▼
+              ╔═══════════════════════════════════╗
+              ║  STAGE 0: BOOTH MULTIPLIER (×)    ║
+              ╠═══════════════════════════════════╣
+              ║                                   ║
+              ║   8 parallel multiplier pairs:    ║
+              ║                                   ║
+              ║   A[0] × B[0]  →  Prod[0]        ║
+              ║   A[1] × B[1]  →  Prod[1]        ║
+              ║   ...                            ║
+              ║   A[7] × B[7]  →  Prod[7]        ║
+              ║                                   ║
+              ║   Format-agnostic Booth encoder  ║
+              ║   (Works: INT8, INT16, FP16B)    ║
+              ║                                   ║
+              ║   Output: 8 × 32-bit products    ║
+              ║                                   ║
+              ╚═════════════┬═════════════════════╝
+                            │
+              ┌─────────────┴─────────────┐
+              │    8 Products [32:0]       │
+              │                            │
+              ▼                            ▼
+      ╔════════════════════════════════════════════╗
+      ║  STAGE 1: SOP COMPRESSOR (Wallace Tree)   ║
+      ╠════════════════════════════════════════════╣
+      ║                                            ║
+      ║  Sum of Products (4:2 Compressor)        ║
+      ║                                            ║
+      ║  Products[0..7]                           ║
+      ║         │                                 ║
+      ║         ├─ Level 1: Reduce 8→4 (CSAs)    ║
+      ║         │                                 ║
+      ║         ├─ Level 2: Reduce 4→2 (CSAs)    ║
+      ║         │                                 ║
+      ║         └─ Level 3: Final Add (CLA)      ║
+      ║                                            ║
+      ║  Output: 22-bit SOP Mantissa              ║
+      ║                                            ║
+      ╚════════════┬═════════════════════════════╝
+                   │
+       ┌───────────┴──────────────┐
+       │                          │
+       │ SOP[22:0]                │ exp[8:0]
+       │ (mantissa)               │
+       │                          ▼
+       │              ╔════════════════════════════╗
+       │              ║  EXPONENT PATH (Parallel)  ║
+       │              ╠════════════════════════════╣
+       │              ║                            ║
+       │              ║  Exp_A[8]  +               ║
+       │              ║  Exp_B[8]  -  Bias(127)   ║
+       │              ║                            ║
+       │              ║  = Exp_Product[8]         ║
+       │              ║                            ║
+       │              ║  (Overflow/underflow adj)  ║
+       │              ║                            ║
+       │              ╚════════┬════════════════════╝
+       │                       │
+       │                  Exp[8:0]
+       │                       │
+       ▼                       ▼
+   ╔═══════════════════════════════════════════════╗
+   ║  STAGE 2: ALIGNMENT SHIFTER (Barrel Shifter)  ║
+   ╠═══════════════════════════════════════════════╣
+   ║                                               ║
+   ║  Shift amount: Exp_A - Exp_B                 ║
+   ║                                               ║
+   ║  SOP_mantissa                                ║
+   ║          │                                   ║
+   ║    ┌─────┴─────────────────────────┐        ║
+   ║    │                               │         ║
+   ║    │  SOP >> shift_amount          │         ║
+   ║    │  (Align to same exponent)     │         ║
+   ║    │                               │         ║
+   ║    └─────┬─────────────────────────┘        ║
+   ║          │                                   ║
+   ║    Aligned_SOP[32:0]                        ║
+   ║                                               ║
+   ╚═══════════┬═════════════════════════════════╝
+               │
+               │ Aligned_SOP[32:0]
+               │          ▲
+               │          │
+               │      ┌───┴──────────────┐
+               │      │ DEST[32:0]       │
+               │      │ (from latch)     │
+               │      └───┬──────────────┘
+               │          │
+               ▼          ▼
+   ╔═══════════════════════════════════════════╗
+   ║  STAGE 3: CLA ADDER (32-bit Accumulation) ║
+   ╠═══════════════════════════════════════════╣
+   ║                                           ║
+   ║         Aligned_SOP[32:0]                ║
+   ║              +                            ║
+   ║         DEST[32:0]                       ║
+   ║              ↓                            ║
+   ║         (Carry-Lookahead)                ║
+   ║              ↓                            ║
+   ║       Accumulated[32:0]                  ║
+   ║                                           ║
+   ║  (Zero-latency: same cycle as DEST read)║
+   ║                                           ║
+   ╚═══════════┬═══════════════════════════════╝
+               │
+               │ Accumulated[32:0]
+               │
+               ▼
+   ╔═══════════════════════════════════════════╗
+   ║  STAGE 4-5: NORMALIZATION PIPELINE        ║
+   ╠═══════════════════════════════════════════╣
+   ║                                           ║
+   ║  ┌─────────────────────────────────────┐ ║
+   ║  │ Leading-Zero Counter (LZC)          │ ║
+   ║  │                                     │ ║
+   ║  │ Input: Accumulated[32:0]           │ ║
+   ║  │         ↓                           │ ║
+   ║  │ Count leading zeros (0-32)         │ ║
+   ║  │         ↓                           │ ║
+   ║  │ Output: lz_count[5:0]              │ ║
+   ║  └────────┬────────────────────────────┘ ║
+   ║           │                              ║
+   ║           │ lz_count                     ║
+   ║           ▼                              ║
+   ║  ┌─────────────────────────────────────┐ ║
+   ║  │ Normalization Shifter               │ ║
+   ║  │                                     │ ║
+   ║  │ Accumulated << lz_count            │ ║
+   ║  │         ↓                           │ ║
+   ║  │ Normalized_Man[32:0]               │ ║
+   ║  │ (hidden bit = 1)                   │ ║
+   ║  └────────┬────────────────────────────┘ ║
+   ║           │                              ║
+   ║           │ Normalized_Man[32:0]        ║
+   ║           ▼                              ║
+   ║  ┌─────────────────────────────────────┐ ║
+   ║  │ Exponent Adjustment                │ ║
+   ║  │                                     │ ║
+   ║  │ Exp_final = Exp - lz_count        │ ║
+   ║  │     (+ overflow/underflow adjust)  │ ║
+   ║  │                                     │ ║
+   ║  │ Output: exp[8:0]                   │ ║
+   ║  └────────┬────────────────────────────┘ ║
+   ║           │                              ║
+   ╚═══════════┼══════════════════════════════╝
+               │
+               │ exp[8:0], man[32:0]
+               │
+               ▼
+   ╔═══════════════════════════════════════════╗
+   ║  STAGE 6: ROUNDING & FORMAT CONVERSION    ║
+   ╠═══════════════════════════════════════════╣
+   ║                                           ║
+   ║  ┌─────────────────────────────────────┐ ║
+   ║  │ Rounding Unit                       │ ║
+   ║  │                                     │ ║
+   ║  │  Guard bit (G): man[24]            │ ║
+   ║  │  Round bit (R): man[23]            │ ║
+   ║  │  Sticky bit(S): OR(man[22:0])      │ ║
+   ║  │                                     │ ║
+   ║  │  Rounding modes:                   │ ║
+   ║  │  • RNE (round-to-nearest-even)    │ ║
+   ║  │  • RTZ (truncate-toward-zero)     │ ║
+   ║  │  • RDN (round-down)               │ ║
+   ║  │  • RUP (round-up)                 │ ║
+   ║  │                                     │ ║
+   ║  │  Output: rounded_man[24:0]        │ ║
+   ║  └────────┬────────────────────────────┘ ║
+   ║           │                              ║
+   ║           │ rounded_man, exp             ║
+   ║           ▼                              ║
+   ║  ┌─────────────────────────────────────┐ ║
+   ║  │ Format Converter                    │ ║
+   ║  │                                     │ ║
+   ║  │ Convert to target format:          │ ║
+   ║  │ ├─ INT16: [15:0]                  │ ║
+   ║  │ ├─ INT32: [31:0]                  │ ║
+   ║  │ ├─ FP16B: [sign][exp:5][man:10]  │ ║
+   ║  │ ├─ FP32:  [sign][exp:8][man:23]  │ ║
+   ║  │ └─ Other formats                   │ ║
+   ║  │                                     │ ║
+   ║  │ Output: result[31:0]               │ ║
+   ║  └────────┬────────────────────────────┘ ║
+   ║           │                              ║
+   ╚═══════════┼══════════════════════════════╝
+               │
+               │ result[31:0]
+               │
+               ▼
+   ╔═══════════════════════════════════════════╗
+   ║  STAGE 7: OUTPUT REGISTER                 ║
+   ╠═══════════════════════════════════════════╣
+   ║                                           ║
+   ║   Always-on pipeline register            ║
+   ║                                           ║
+   ║   o_result[31:0]    ← result             ║
+   ║   o_result_valid    ← '1'                ║
+   ║   o_result_ext      ← extended precision ║
+   ║                                           ║
+   ╚═══════════┬═══════════════════════════════╝
+               │
+               │ o_result[31:0]
+               │ o_result_valid
+               │
+               ▼
+   ╔═══════════════════════════════════════════╗
+   ║  OUTPUT → DEST WRITE (latch array)        ║
+   ║                                           ║
+   ║  ┌─────────────────────────────────────┐ ║
+   ║  │  DEST Latch Array                   │ ║
+   ║  │  (Dual-bank, 1024 rows × 4 cols)   │ ║
+   ║  │                                     │ ║
+   ║  │  o_result → DEST[row][col]         │ ║
+   ║  │                                     │ ║
+   ║  └─────────────────────────────────────┘ ║
+   ║                                           ║
+   ╚═══════════════════════════════════════════╝
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                              PIPELINE STAGES & TIMING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+   CYCLE:      N      N+1    N+2    N+3    N+4    N+5    N+6    N+7    N+8
+
+   INPUT:      [0]
+              [1]           [0]
+             [2]                 [1]    [0]
+            [3]                       [1]    [0]
+           [4]                             [1]    [0]
+          [5]                                  [1]    [0]
+         [6]                                       [1]    [0]
+        [7]                                             [1]    [0]
+       [8]                                                  [1]    [0]
+
+   S0:    ┌──────────────────────────────────────────────────────────┐
+          │ Booth Multiply (Combinational)                           │
+          └──────────────────────────────────────────────────────────┘
+
+   S1:         ┌──────────────────────────────────────────────────────┐
+               │ SOP Compressor (1 cycle)                             │
+               └──────────────────────────────────────────────────────┘
+
+   S2:              ┌──────────────────────────────────────────────────┐
+                    │ Alignment + Exp Path (1 cycle)                  │
+                    └──────────────────────────────────────────────────┘
+
+   S3:                   ┌──────────────────────────────────────────────┐
+                         │ CLA Add (1 cycle)                            │
+                         └──────────────────────────────────────────────┘
+
+   S4:                        ┌──────────────────────────────────────────┐
+                              │ Exp Adjust + Normalize (1 cycle)         │
+                              └──────────────────────────────────────────┘
+
+   S5:                             ┌──────────────────────────────────────┐
+                                   │ Rounding (1 cycle)                   │
+                                   └──────────────────────────────────────┘
+
+   S6:                                  ┌──────────────────────────────────┐
+                                        │ Format Convert (1 cycle)         │
+                                        └──────────────────────────────────┘
+
+   S7:                                       ┌──────────────────────────────┐
+                                            │ Output Reg (1 cycle)         │
+                                            └──────────────────────────────┘
+
+   OUTPUT:                                            [0]
+                                                        [1]
+                                                             [2]
+                                                                  [3]
+                                                                      [4]
+                                                                           [5]
+                                                                                [6]
+                                                                                     [7]
+                                                                                          [8]
+
+   ─────────────────────────────────────────────────────────────────────────────
+   LATENCY: 8 cycles (N → N+8)
+   THROUGHPUT: 1 result per cycle (steady-state)
+   ─────────────────────────────────────────────────────────────────────────────
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                         COMPONENT INTERNAL STRUCTURE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+    BOOTH MULTIPLIER (8 pairs × 16-bit × 16-bit)
+
+    ┌─────────────────────────────────────────┐
+    │  A[0][15:0]  B[0][15:0]                 │
+    │       ↓          ↓                       │
+    │   ┌──────────────────┐                  │
+    │   │  Radix-4 Booth   │  8-bit × 8-bit  │
+    │   │  Encoder         │  Multiplier     │
+    │   └────────┬─────────┘                  │
+    │            ↓                            │
+    │      prod[0][31:0]                      │
+    │                                         │
+    │   [Similar for A[1]×B[1] .. A[7]×B[7]]│
+    │                                         │
+    │   Output: 8 × 32-bit products         │
+    └─────────────────────────────────────────┘
+
+
+    SOP COMPRESSOR (Wallace/Dadda Tree)
+
+    Products[0..7]                  Mantissa path
+         ↓
+    ┌────────────────┐
+    │  CSA Level 1   │  (Carry-Save Adder)
+    │  (3:2 compress)│  Reduces 8 products → 4
+    └────────┬───────┘
+             ↓
+    ┌────────────────┐
+    │  CSA Level 2   │  Reduces 4 → 2
+    └────────┬───────┘
+             ↓
+    ┌────────────────┐
+    │  CLA Final Add │  Final carry-lookahead
+    └────────┬───────┘
+             ↓
+    SOP[22:0] (22-bit mantissa sum)
+
+
+    BARREL SHIFTER (37-bit wide)
+
+    ┌─────────────────────────────────┐
+    │  Input: Mantissa[36:0]          │
+    │  Shift amount: 6 bits (0-64)    │
+    │                                  │
+    │  ┌─────────────────────────────┐│
+    │  │   Multiplexer tree (2^6)    ││  Selects output based on
+    │  │   Each layer: 2→1 mux       ││  shift amount
+    │  │   6 layers total            ││
+    │  └─────────────────────────────┘│
+    │                                  │
+    │  Output: Shifted[36:0]          │
+    └─────────────────────────────────┘
+
+
+    NORMALIZER (LZC + Shifter)
+
+    Input: Accumulated[32:0]
+       ↓
+    ┌──────────────────────┐
+    │  Leading-Zero        │
+    │  Counter (LZC)       │
+    │                      │  Finds position of
+    │  Scans left for      │  first '1' bit
+    │  first '1' bit       │
+    └──────────┬───────────┘
+               ↓
+          lz_count[5:0]
+               ↓
+    ┌──────────────────────┐
+    │  Barrel Shifter      │
+    │                      │  Left-shift by
+    │  Man << lz_count     │  lz_count positions
+    └──────────┬───────────┘
+               ↓
+         Normalized_Man[32:0]
+               ↓
+    ┌──────────────────────┐
+    │  Exponent Adjust     │
+    │                      │
+    │  exp_final =         │  Decreases exponent
+    │  exp - lz_count      │  by shift amount
+    └──────────┬───────────┘
+               ↓
+          exp[8:0]
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                    TWO INDEPENDENT FP-LANE INSTANCES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+    Per FP-Tile, Column (8 columns total):
+
+    ┌──────────────────────────────────────────────────────┐
+    │  COLUMN 0                                            │
+    ├──────────────────────────────────────────────────────┤
+    │                                                      │
+    │  ┌────────────────────┐    ┌────────────────────┐   │
+    │  │  FP-LANE r0        │    │  FP-LANE r1        │   │
+    │  │  LANE_ID = 0       │    │  LANE_ID = 1       │   │
+    │  │                    │    │                    │   │
+    │  │ 8 MACs per cycle   │    │ 8 MACs per cycle   │   │
+    │  │ (INT16 mode)       │    │ (INT16 mode)       │   │
+    │  │                    │    │                    │   │
+    │  │ or                 │    │ or                 │   │
+    │  │ 8 MACs per cycle   │    │ 8 MACs per cycle   │   │
+    │  │ (INT8_2x mode,     │    │ (INT8_2x mode,     │   │
+    │  │  2 phases)         │    │  2 phases)         │   │
+    │  │                    │    │                    │   │
+    │  │ Independent        │    │ Independent        │   │
+    │  │ datapath           │    │ datapath           │   │
+    │  │ Separate alu_instr_│    │ Separate alu_instr_│   │
+    │  │ valid signal       │    │ valid signal       │   │
+    │  │                    │    │                    │   │
+    │  │ Output: 16-bit     │    │ Output: 16-bit     │   │
+    │  │ or 32-bit result   │    │ or 32-bit result   │   │
+    │  └────────────────────┘    └────────────────────┘   │
+    │         ↓                           ↓                │
+    │    DEST write             DEST write                │
+    │                                                      │
+    │  Total per column: 16 MACs/cycle (both lanes)      │
+    │  Total per FP-Tile (8 cols): 128 MACs/cycle        │
+    │                                                      │
+    └──────────────────────────────────────────────────────┘
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                     INT8 vs INT16 MODE (Same Hardware!)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+    INT16 MODE:
+    ───────────
+
+    Cycle N:
+    ┌────────────────────────────────┐
+    │  FP-LANE r0:                   │
+    │  A[0..7]: 16-bit × 8 datums   │
+    │  B[0..7]: 16-bit × 8 datums   │
+    │                                │
+    │  Booth: 8 pairs × 16×16 mult  │
+    │  Result: 8 INT16 MACs/cycle   │
+    └────────────────────────────────┘
+
+    ┌────────────────────────────────┐
+    │  FP-LANE r1:                   │
+    │  A[8..15]: 16-bit × 8 datums  │
+    │  B[8..15]: 16-bit × 8 datums  │
+    │                                │
+    │  Booth: 8 pairs × 16×16 mult  │
+    │  Result: 8 INT16 MACs/cycle   │
+    └────────────────────────────────┘
+
+    Total: 16 INT16 MACs/cycle per column
+
+
+    INT8 MODE (2-PHASE TRANSPARENCY):
+    ──────────────────────────────────
+
+    Cycle N - Negative Phase (Latch Transparent):
+    ┌────────────────────────────────────────────┐
+    │  FP-LANE r0:                               │
+    │  SRCA[0..7]: 16-bit datums (2 INT8 each)  │
+    │  = 16 INT8 values                         │
+    │                                            │
+    │  Booth: 8 pairs × (8-bit×8-bit) × 2      │
+    │  Result: 16 INT8 MACs (from Phase 1)     │
+    └────────────────────────────────────────────┘
+
+    Cycle N - Positive Phase (Latch Opaque):
+    ┌────────────────────────────────────────────┐
+    │  FP-LANE r1:                               │
+    │  SRCA[0..7]: same datums (latched phase) │
+    │  = 16 different INT8 values               │
+    │                                            │
+    │  Booth: 8 pairs × (8-bit×8-bit) × 2      │
+    │  Result: 16 INT8 MACs (from Phase 2)     │
+    └────────────────────────────────────────────┘
+
+    Total: 32 INT8 MACs/cycle per column
+    (Both phases in SAME cycle via ICG gating!)
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                          DATA WIDTH THROUGH PIPELINE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+    Stage              Input Width      Operation           Output Width
+    ──────────────────────────────────────────────────────────────────────────
+    0 (Booth)      16-bit × 16-bit     Multiply            32-bit (8 products)
+
+    1 (SOP)        32-bit × 8          Sum products         22-bit mantissa
+
+    2 (Exp path)   9-bit + 9-bit       Add exponents        9-bit
+
+    2 (Alignment)  22-bit + 9-bit      Barrel shift         37-bit
+
+    3 (Add)        37-bit + 32-bit     CLA add              32-bit
+
+    4-5 (Normal)   32-bit + 9-bit      LZC + shift          32-bit + 9-bit
+
+    6 (Round)      32-bit (G/R/S)      Apply rounding       24-bit
+
+    6 (Convert)    24-bit + 9-bit      Extract fields       32-bit (or 16-bit)
+
+    7 (Register)   32-bit              Store result         32-bit → DEST
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                          AGGREGATION TO CLUSTER LEVEL
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+                   1 FP-LANE
+                 ┌────────────┐
+                 │ 8 MACs/cy  │
+                 │ (INT16)    │
+                 └─────┬──────┘
+                       │
+         ┌─────────────┼─────────────┐
+         │             │             │
+    ┌────▼────┐   ┌────▼────┐   ┌───▼────┐
+    │ Lane0   │   │ Lane1   │...│ Lane7  │
+    │ 8 MACs  │   │ 8 MACs  │   │ 8 MACs │
+    └────┬────┘   └────┬────┘   └───┬────┘
+         └─────────────┼─────────────┘
+                       ↓
+                 1 FP-TILE
+              ┌──────────────┐
+              │ 128 MACs/cy  │
+              │ (16 lanes)   │
+              └──────┬───────┘
+                     │
+    ┌────────────────┼────────────────┐
+    │                │                │
+    └────┬───────────┼───────────┬────┘
+    ┌────▼─┐ ┌──────▼──┐ ┌─────▼────┐
+    │Tile0 │ │Tile1   │ │Tile2...  │
+    │128   │ │128 MACs│ │          │
+    │MACs  │ │        │ │          │
+    └────┬─┘ └──────┬──┘ └─────┬────┘
+         └─────────────┼─────────────┘
+                       ↓
+                  M-TILE (8 rows)
+              ┌──────────────────┐
+              │ 512 MACs/cy      │
+              │ (128 × 4 rows)   │
+              └────────┬─────────┘
+                       │
+    ┌──────────────────┼──────────────────┐
+    ▼                  ▼                  ▼
+  M-Tile0          M-Tile1          M-Tile2
+  512 MACs         512 MACs         512 MACs
+    │                │                │
+    └────────────────┼────────────────┘
+                     ▼
+                 G-TILE
+              ┌──────────────┐
+              │1,024 MACs/cy │
+              │ (2 M-Tiles)  │
+              └──────┬───────┘
+                     │
+    ┌────────────────┼────────────────┐
+    │                │                │
+    ▼                ▼                ▼
+  G-Tile0        G-Tile1        G-Tile2
+  1024 MACs      1024 MACs      1024 MACs
+    │                │                │
+    └────────────────┼────────────────┘
+                     ▼
+                 TENSIX TILE
+              ┌──────────────┐
+              │2,048 MACs/cy │
+              │ (2 G-Tiles)  │
+              └──────┬───────┘
+                     │
+    ┌────────────────┼────────────────────────┐
+    │                │                        │
+    ▼                ▼                        ▼
+  Tensix0         Tensix1      ...        Tensix7
+  2048 MACs       2048 MACs               2048 MACs
+    │                │                        │
+    └────────────────┼────────────────────────┘
+                     ▼
+                  CLUSTER
+              ┌──────────────────┐
+              │16,384 MACs/cy    │
+              │(INT16)           │
+              │                  │
+              │32,768 MACs/cy    │
+              │(INT8 with 2-phase)
+              └──────────────────┘
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+KEY FACTS:
+
+✓ FP-Lane is a COMPLETE multiply-accumulate unit
+  └─ All 8 pipeline stages in one module
+  └─ ~25,000 gates per lane
+  └─ 256 lanes per Tensix × 25K = 6.4M gates
+
+✓ Format-agnostic (same Booth hardware)
+  └─ INT8/16/32, FP16B, FP32, TF32, MXFP4
+  └─ Just reinterpret the bits
+
+✓ Two-phase operation for INT8_2x
+  └─ r0 and r1 lanes process different phases in same cycle
+  └─ Doubles INT8 throughput (16 MACs instead of 8)
+
+✓ Pipelined for sustained throughput
+  └─ 8-cycle latency but 1 result/cycle
+  └─ All 256 lanes active every cycle
+
+✓ Zero-latency DEST integration
+  └─ Latch array allows combinational read-modify-write
+  └─ No stall cycles for back-to-back MACs
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

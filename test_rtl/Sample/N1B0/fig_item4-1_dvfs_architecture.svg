@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1400" height="900" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .title { font-size: 20px; font-weight: bold; }
+      .header { font-size: 12px; font-weight: bold; }
+      .text { font-size: 10px; }
+    </style>
+  </defs>
+
+  <text x="700" y="30" text-anchor="middle" class="title">Item 4-1: Advanced DVFS with Power Gating</text>
+
+  <!-- Analysis Engine -->
+  <rect x="100" y="80" width="280" height="80" rx="10" fill="#E6F3FF" stroke="black" stroke-width="2"/>
+  <text x="240" y="115" text-anchor="middle" class="header">Workload Analysis</text>
+  <text x="240" y="130" text-anchor="middle" class="text">IPC, Memory BW, Thermal</text>
+
+  <!-- Arrow -->
+  <line x1="380" y1="120" x2="420" y2="120" stroke="black" stroke-width="2"/>
+  <polygon points="420,120 410,115 410,125" fill="black"/>
+
+  <!-- DVFS Control -->
+  <rect x="420" y="80" width="280" height="80" rx="10" fill="#FFE6D5" stroke="black" stroke-width="2"/>
+  <text x="560" y="115" text-anchor="middle" class="header">DVFS Control</text>
+  <text x="560" y="130" text-anchor="middle" class="text">200-1000 MHz | 0.75-1.2V</text>
+
+  <!-- Workload Operating Points -->
+  <text x="700" y="200" text-anchor="middle" class="header">Operating Points per Workload:</text>
+
+  <!-- Vision -->
+  <rect x="100" y="230" width="350" height="100" rx="8" fill="#FFE6E6" stroke="black" stroke-width="1"/>
+  <text x="275" y="250" text-anchor="middle" class="header">Vision (YOLOv8)</text>
+  <text x="275" y="268" text-anchor="middle" class="text">f=750 MHz, V=1.0V</text>
+  <text x="275" y="283" text-anchor="middle" class="text">P=22W (prefill) → 2W (post-process)</text>
+  <text x="275" y="298" text-anchor="middle" class="text" font-weight="bold">Avg: 20.6W</text>
+
+  <!-- Language -->
+  <rect x="525" y="230" width="350" height="100" rx="8" fill="#FFFFE6" stroke="black" stroke-width="1"/>
+  <text x="700" y="250" text-anchor="middle" class="header">Language (Llama 2)</text>
+  <text x="700" y="268" text-anchor="middle" class="text">f=1000 MHz, V=1.2V (prefill)</text>
+  <text x="700" y="283" text-anchor="middle" class="text">f=600 MHz, V=0.95V (decode)</text>
+  <text x="700" y="298" text-anchor="middle" class="text" font-weight="bold">Avg: 13.2W</text>
+
+  <!-- Action -->
+  <rect x="950" y="230" width="350" height="100" rx="8" fill="#E6F9E6" stroke="black" stroke-width="1"/>
+  <text x="1125" y="250" text-anchor="middle" class="header">Action (Robot Control)</text>
+  <text x="1125" y="268" text-anchor="middle" class="text">f=400 MHz, V=0.85V</text>
+  <text x="1125" y="283" text-anchor="middle" class="text">P=8W | Latency: 12ms</text>
+  <text x="1125" y="298" text-anchor="middle" class="text" font-weight="bold">Deadline: 33ms ✓</text>
+
+  <!-- Power Reduction Summary -->
+  <rect x="150" y="400" width="1100" height="120" rx="10" fill="#E6F9E6" stroke="#228B22" stroke-width="2"/>
+  <text x="700" y="430" text-anchor="middle" class="header" fill="#228B22" font-weight="bold">Power Reduction Results:</text>
+  <text x="700" y="455" text-anchor="middle" class="text" fill="#228B22" font-weight="bold">✓ Action: 80W → 10W (8× reduction)</text>
+  <text x="700" y="475" text-anchor="middle" class="text" fill="#228B22" font-weight="bold">✓ Language: 50W → 13W (3.8× reduction)</text>
+  <text x="700" y="495" text-anchor="middle" class="text" fill="#228B22" font-weight="bold">✓ Vision: 80W → 21W (3.8× reduction)</text>
+
+  <!-- Key formula -->
+  <text x="700" y="600" text-anchor="middle" class="header">P_dynamic = C × V² × f × A</text>
+  <text x="700" y="625" text-anchor="middle" class="text">동적 전력 감소로 실시간 처리 및 배터리 수명 확대</text>
+</svg>

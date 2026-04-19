@@ -1,0 +1,25 @@
+Category,Module_or_File,Parameter_Name,20260221_Value,20260404_Value,Change_Type,Impact,Notes
+Module Definition,tt_edc1_serial_bus_repeater,DEPTH,default=1,default=1,No Change,None,Backward compatible
+Module Definition,tt_edc1_serial_bus_repeater,NODE_DISABLE,—,default=0,NEW,Optional disable feature,Added for power management/harvest
+Module Definition,tt_overlay_edc_wrapper,EDC_REP_NUM,1,1,No Change,None,Repeater count parameter
+Module Definition,tt_overlay_edc_wrapper,EDC_OUT_REP_NUM,1,1,No Change,None,Egress repeater count
+Module Definition,tt_overlay_edc_wrapper,EDC_IN_REP_NUM,—,1,NEW,Finer control,Added for ingress repeater control
+Module Definition,tt_noc_overlay_edc_repeater,REP_DEPTH,5,5,No Change,None,Loopback repeater depth unchanged
+Instantiation,tt_instrn_engine_wrapper,Total Repeaters,~15,~20,+5 instances,Minimal area impact,All DEPTH=1 additions
+Instantiation,tt_instrn_engine_wrapper,DEPTH=0 repeaters,2,2,No Change,None,FPU modules
+Instantiation,tt_instrn_engine_wrapper,DEPTH=1 repeaters,13,18,+5 instances,+5 FF stages,6 new named repeaters
+Instantiation,tt_instrn_engine_wrapper,DEPTH=2 repeaters,2,2,No Change,None,Instruction engine core
+Instantiation,tt_t6_l1_partition,serial_bus_repeater DEPTH,1,1,No Change,None,L1 entry
+Instantiation,tt_t6_l1_partition,misc_bus_repeater DEPTH,3,3,No Change,None,L1 misc path
+Instantiation,tt_fpu_gtile,Repeater DEPTH values,0/1,0/1,No Change,None,FPU repeaters
+Instantiation,tt_trin_noc_niu_router_wrap,loopback REP_DEPTH,5,5,No Change,None,Format cleanup only
+Instantiation,tt_dispatch_engine,Repeater DEPTH values,1/2,1/2,No Change,None,Dispatch repeaters
+Timing,Global,Ring Latency,~16 stages,~16 stages,No Change,None,Same REP_DEPTH values
+Timing,Global,MCPDLY (BIU cycles),7,7,No Change,None,Unchanged
+Power,NODE_DISABLE,Enable/Disable Capability,Disabled per design,Parameterized,NEW,Power savings,Allows selective node shutdown
+Area,20260404 Delta,Repeater instances,Baseline,+5 DEPTH=1,+5,<1% increase,Small footprint
+Area,20260404 Delta,NODE_DISABLE MUX,None,Combinational mux,+mux logic,Negligible,Per repeater instance
+Compatibility,Overall,Backward Compatibility,N/A,Full,Preserved,None,New params have safe defaults
+RTL Path,Core repeater,tt_edc1_serial_bus_repeater.sv,Used,Used + NODE_DISABLE,Enhanced,None,Same logic flow
+RTL Path,Overlay wrapper,tt_overlay_edc_wrapper.sv,Standard,Enhanced parameterization,Enhanced,None,Better control
+RTL Path,Instruction engine,tt_instrn_engine_wrapper.sv,15 repeaters,20 repeaters,+5 additions,+5 instances,Better EDC coverage

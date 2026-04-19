@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1400" height="800" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .title { font-size: 24px; font-weight: bold; }
+      .header { font-size: 14px; font-weight: bold; }
+      .text { font-size: 11px; }
+      .box-red { fill: #FF6B6B; stroke: black; stroke-width: 2; }
+      .box-blue { fill: #4ECDC4; stroke: black; stroke-width: 2; }
+      .box-green { fill: #A8E6CF; stroke: #228B22; stroke-width: 2; }
+      .box-gray { fill: #CCCCCC; stroke: black; stroke-width: 2; }
+    </style>
+  </defs>
+
+  <text x="700" y="40" text-anchor="middle" class="title">Item 1-1: Memory Hierarchy Enhancement</text>
+
+  <!-- Current Architecture (Left) -->
+  <text x="200" y="80" class="header">Current Architecture</text>
+
+  <!-- Tensix Core -->
+  <rect x="50" y="120" width="300" height="80" rx="10" class="box-red"/>
+  <text x="200" y="165" text-anchor="middle" class="text">Tensix Core</text>
+  <text x="200" y="180" text-anchor="middle" class="text">MAC 64×256 + SFPU</text>
+
+  <!-- L1 -->
+  <line x1="200" y1="200" x2="200" y2="240" stroke="black" stroke-width="2"/>
+  <text x="220" y="220" class="text">4 cycle</text>
+  <rect x="50" y="240" width="300" height="70" rx="10" class="box-blue"/>
+  <text x="200" y="280" text-anchor="middle" class="text">L1 SRAM (512 KB, 128-bit)</text>
+
+  <!-- L2 -->
+  <line x1="200" y1="310" x2="200" y2="350" stroke="black" stroke-width="2"/>
+  <rect x="50" y="350" width="300" height="70" rx="10" class="box-blue"/>
+  <text x="200" y="390" text-anchor="middle" class="text">L2 Cache (1 MB)</text>
+
+  <!-- DRAM -->
+  <line x1="200" y1="420" x2="200" y2="460" stroke="black" stroke-width="2"/>
+  <rect x="50" y="460" width="300" height="70" rx="10" class="box-gray"/>
+  <text x="200" y="500" text-anchor="middle" class="text">DRAM</text>
+
+  <text x="200" y="600" text-anchor="middle" class="text" fill="red">Bandwidth: 128-bit</text>
+  <text x="200" y="620" text-anchor="middle" class="text" fill="red">Latency: High (10-50 cycles)</text>
+
+  <!-- Enhanced Architecture (Right) -->
+  <text x="1100" y="80" class="header" fill="#228B22">Enhanced Architecture</text>
+
+  <!-- Tensix Core Enhanced -->
+  <rect x="900" y="120" width="450" height="90" rx="10" class="box-green"/>
+  <text x="1125" y="155" text-anchor="middle" class="text" fill="#228B22">Tensix Core (Enhanced)</text>
+  <text x="1125" y="172" text-anchor="middle" class="text" fill="#228B22">L1i:64KB | L1d:448KB(dual-port 256-bit)</text>
+  <text x="1125" y="189" text-anchor="middle" class="text" fill="#228B22">Scratch:64KB</text>
+
+  <!-- L1.5 -->
+  <line x1="1125" y1="210" x2="1125" y2="250" stroke="#228B22" stroke-width="3"/>
+  <text x="1150" y="230" class="text" fill="#228B22" font-weight="bold">3 cycle</text>
+  <rect x="900" y="250" width="450" height="70" rx="10" class="box-green"/>
+  <text x="1125" y="295" text-anchor="middle" class="text" fill="#228B22">L1.5 FIFO Buffer (128 KB)</text>
+
+  <!-- L2 -->
+  <line x1="1125" y1="320" x2="1125" y2="360" stroke="#228B22" stroke-width="2"/>
+  <rect x="900" y="360" width="450" height="70" rx="10" class="box-green"/>
+  <text x="1125" y="405" text-anchor="middle" class="text" fill="#228B22">L2 Cache (2 MB, Coherency)</text>
+
+  <!-- DRAM -->
+  <line x1="1125" y1="430" x2="1125" y2="470" stroke="#228B22" stroke-width="2"/>
+  <rect x="900" y="470" width="450" height="70" rx="10" class="box-green"/>
+  <text x="1125" y="515" text-anchor="middle" class="text" fill="#228B22">DRAM (512-bit, Multi-channel)</text>
+
+  <text x="1125" y="600" text-anchor="middle" class="text" fill="green" font-weight="bold">✓ 256-bit BW (2x) | 3-cycle latency</text>
+  <text x="1125" y="620" text-anchor="middle" class="text" fill="green" font-weight="bold">Vision: 25→150 GFLOPS</text>
+</svg>

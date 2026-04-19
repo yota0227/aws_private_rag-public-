@@ -1,0 +1,330 @@
+╔════════════════════════════════════════════════════════════════════════════════════╗
+║                                                                                    ║
+║           G-TILE MAC/s AND TOPS CALCULATION (WITH INT8 CASE)                      ║
+║                                                                                    ║
+║                          Assuming 1.5 GHz Clock Frequency                         ║
+║                                                                                    ║
+╚════════════════════════════════════════════════════════════════════════════════════╝
+
+
+═══════════════════════════════════════════════════════════════════════════════════════
+                        CALCULATION METHODOLOGY
+═══════════════════════════════════════════════════════════════════════════════════════
+
+Formula:
+────────
+        MACs/cycle × Clock Frequency (GHz)
+GOPS =  ───────────────────────────────────
+                    10^9
+
+        GOPS
+TOPS =  ────
+        10^3
+
+Example (G-Tile INT16):
+───────────────────────
+GOPS = 2,048 MACs/cycle × 1.5 GHz = 3,072 GOPS
+
+TOPS = 3,072 / 1,000 = 3.072 TFLOPS (or TOPS)
+
+
+═══════════════════════════════════════════════════════════════════════════════════════
+                    DETAILED HIERARCHICAL CALCULATION
+═══════════════════════════════════════════════════════════════════════════════════════
+
+
+LEVEL 1: SINGLE FP-LANE
+───────────────────────
+
+1 FP-Lane = NUM_PAIR = 8 multiplier pairs
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Format      │ MACs/cycle  │ @ 1.5 GHz       │ GOPS        │ TOPS           │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ INT16       │ 8           │ 8 × 1.5         │ 12 GOPS     │ 0.012 TOPS     │
+│ INT8        │ 16*         │ 16 × 1.5        │ 24 GOPS     │ 0.024 TOPS     │
+│             │ (2-phase)   │                 │             │                │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+* INT8 case uses two-phase latch transparency (HALF_FP_BW=1):
+  - r0 lane phase 1: 8 INT8 MACs
+  - r1 lane phase 2: 8 INT8 MACs (same cycle)
+  - Total: 16 INT8 MACs per cycle
+
+
+LEVEL 2: ONE FP-TILE (8 columns × 2 lanes/column = 16 lanes)
+──────────────────────────────────────────────────────────────
+
+Lanes per FP-Tile:
+├─ 8 columns
+├─ 2 lanes per column (r0, r1 instances)
+└─ Total: 16 FP-Lane instances
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Format      │ MACs/cycle      │ @ 1.5 GHz           │ GOPS        │ TOPS  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ INT16       │ 16 × 8 = 128    │ 128 × 1.5           │ 192 GOPS    │ 0.192 │
+│ INT8        │ 16 × 16 = 256   │ 256 × 1.5           │ 384 GOPS    │ 0.384 │
+│             │ (2-phase)       │                     │             │       │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+Calculation:
+├─ INT16: 16 lanes × 8 MACs/lane/cycle × 1.5 GHz = 192 GOPS
+└─ INT8:  16 lanes × 16 MACs/lane/cycle × 1.5 GHz = 384 GOPS
+
+
+LEVEL 3: ONE M-TILE (8 FP-Tiles, rows 0-7 or 8-15)
+────────────────────────────────────────────────────
+
+FP-Tiles per M-Tile:
+├─ 8 rows (Row 0 through Row 7)
+├─ Each row = 1 FP-Tile with 8 columns
+└─ Total: 8 × (8 columns × 2 lanes) = 128 lanes
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Format      │ MACs/cycle        │ @ 1.5 GHz             │ GOPS      │ TOPS  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ INT16       │ 8 × 128 = 1,024   │ 1,024 × 1.5           │ 1,536 GO  │ 1.536 │
+│             │                   │ (1,024 MACs/cy×1.5)   │ PS        │       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ INT8        │ 8 × 256 = 2,048   │ 2,048 × 1.5           │ 3,072 GO  │ 3.072 │
+│             │ (2-phase)         │ (2,048 MACs/cy×1.5)   │ PS        │       │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+Calculation:
+├─ INT16: 8 rows × 128 MACs/row/cycle × 1.5 GHz = 1,536 GOPS = 1.536 TOPS
+└─ INT8:  8 rows × 256 MACs/row/cycle × 1.5 GHz = 3,072 GOPS = 3.072 TOPS
+
+
+LEVEL 4: ONE G-TILE (2 M-Tiles)
+────────────────────────────────
+
+M-Tiles per G-Tile:
+├─ M-Tile 0 (rows 0-7)
+├─ M-Tile 1 (rows 8-15)
+└─ Total: 2 M-Tiles × 128 lanes = 256 lanes
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Format      │ MACs/cycle        │ @ 1.5 GHz             │ GOPS      │ TOPS  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ INT16       │ 2 × 1,024 = 2,048 │ 2,048 × 1.5           │ 3,072 GO  │ 3.072 │
+│             │                   │ (2,048 MACs/cy×1.5)   │ PS        │       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ INT8        │ 2 × 2,048 = 4,096 │ 4,096 × 1.5           │ 6,144 GO  │ 6.144 │
+│             │ (2-phase)         │ (4,096 MACs/cy×1.5)   │ PS        │       │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+✓ THIS IS THE ANSWER: **G-TILE = 3.072 TOPS (INT16) or 6.144 TOPS (INT8)**
+
+Calculation:
+├─ INT16: 2 M-Tiles × 1,024 MACs/M-Tile/cycle × 1.5 GHz
+│         = 2,048 MACs/cycle × 1.5 GHz
+│         = 3,072 GOPS
+│         = 3.072 TOPS
+│
+└─ INT8:  2 M-Tiles × 2,048 MACs/M-Tile/cycle × 1.5 GHz
+          = 4,096 MACs/cycle × 1.5 GHz
+          = 6,144 GOPS
+          = 6.144 TOPS
+
+
+═══════════════════════════════════════════════════════════════════════════════════════
+                    EXTENDED HIERARCHY TABLE (All Levels)
+═══════════════════════════════════════════════════════════════════════════════════════
+
+
+Entity              │ INT16 MACs/cy   │ INT8 MACs/cy    │ INT16 @ 1.5GHz │ INT8 @ 1.5GHz
+                    │ (per cycle)     │ (2-phase)       │                │
+────────────────────┼─────────────────┼─────────────────┼────────────────┼──────────────
+1 FP-Lane           │ 8               │ 16              │ 0.012 TOPS     │ 0.024 TOPS
+1 FP-Tile           │ 128             │ 256             │ 0.192 TOPS     │ 0.384 TOPS
+1 M-Tile (8 rows)   │ 1,024           │ 2,048           │ 1.536 TOPS     │ 3.072 TOPS
+1 G-Tile (2 M-Tiles)│ 2,048           │ 4,096           │ 3.072 TOPS     │ 6.144 TOPS
+1 Tensix (2 G-Tiles)│ 4,096           │ 8,192           │ 6.144 TOPS     │ 12.288 TOPS
+1 Cluster (8 Tensix)│ 32,768          │ 65,536          │ 49.152 TOPS    │ 98.304 TOPS
+
+
+═══════════════════════════════════════════════════════════════════════════════════════
+                        DETAILED G-TILE BREAKDOWN
+═══════════════════════════════════════════════════════════════════════════════════════
+
+
+G-TILE INT16 CASE (3.072 TOPS @ 1.5 GHz):
+──────────────────────────────────────────
+
+M-Tile 0:
+  Row 0 (FP-Tile): 8 cols × 2 lanes × 8 pairs = 128 MACs/cycle
+  Row 1 (FP-Tile): 8 cols × 2 lanes × 8 pairs = 128 MACs/cycle
+  Row 2 (FP-Tile): 8 cols × 2 lanes × 8 pairs = 128 MACs/cycle
+  Row 3 (FP-Tile): 8 cols × 2 lanes × 8 pairs = 128 MACs/cycle
+  Row 4 (FP-Tile): 8 cols × 2 lanes × 8 pairs = 128 MACs/cycle
+  Row 5 (FP-Tile): 8 cols × 2 lanes × 8 pairs = 128 MACs/cycle
+  Row 6 (FP-Tile): 8 cols × 2 lanes × 8 pairs = 128 MACs/cycle
+  Row 7 (FP-Tile): 8 cols × 2 lanes × 8 pairs = 128 MACs/cycle
+  ─────────────────────────────────────────────────────────────
+  M-Tile 0 Total: 8 × 128 = 1,024 MACs/cycle
+
+M-Tile 1:
+  Row 8-15: Same structure as M-Tile 0
+  ─────────────────────────────────────────────────────────────
+  M-Tile 1 Total: 8 × 128 = 1,024 MACs/cycle
+
+G-Tile Total: 1,024 + 1,024 = 2,048 MACs/cycle
+
+TOPS Calculation:
+  2,048 MACs/cycle × 1.5 GHz ÷ 10^9 = 3,072 × 10^9 OPs ÷ 10^12 = 3.072 TFLOPS
+
+
+G-TILE INT8 CASE (6.144 TOPS @ 1.5 GHz):
+──────────────────────────────────────────
+
+Same physical structure, but each lane processes 2× INT8 values via two-phase:
+
+M-Tile 0:
+  Row 0 (FP-Tile): 8 cols × 2 lanes × 16 pairs (2-phase) = 256 MACs/cycle
+  Row 1 (FP-Tile): 8 cols × 2 lanes × 16 pairs (2-phase) = 256 MACs/cycle
+  ... (same for rows 2-7)
+  ─────────────────────────────────────────────────────────────
+  M-Tile 0 Total: 8 × 256 = 2,048 MACs/cycle
+
+M-Tile 1:
+  Row 8-15: Same as M-Tile 0
+  ─────────────────────────────────────────────────────────────
+  M-Tile 1 Total: 8 × 256 = 2,048 MACs/cycle
+
+G-Tile Total: 2,048 + 2,048 = 4,096 MACs/cycle
+
+TOPS Calculation:
+  4,096 MACs/cycle × 1.5 GHz ÷ 10^9 = 6,144 × 10^9 OPs ÷ 10^12 = 6.144 TFLOPS
+
+
+═══════════════════════════════════════════════════════════════════════════════════════
+                      COMPREHENSIVE CLUSTER SUMMARY
+═══════════════════════════════════════════════════════════════════════════════════════
+
+
+N1B0 CLUSTER = 8 TENSIX TILES (4×2 grid) + Dispatch Engines
+
+┌──────────────────────┬──────────────┬──────────────┬──────────────┬──────────────┐
+│ Entity               │ Count        │ INT16 TOPS   │ INT8 TOPS    │ @ 1.5 GHz    │
+│                      │ per Cluster  │ per unit     │ per unit     │              │
+├──────────────────────┼──────────────┼──────────────┼──────────────┼──────────────┤
+│ FP-Lane (r0/r1)      │ 512          │ 0.012        │ 0.024        │ per lane     │
+│ FP-Tile              │ 256          │ 0.192        │ 0.384        │ per tile     │
+│ M-Tile               │ 64           │ 1.536        │ 3.072        │ per M-Tile   │
+│ G-Tile               │ 16           │ 3.072        │ 6.144        │ per G-Tile   │
+│ Tensix               │ 8            │ 6.144        │ 12.288       │ per Tensix   │
+├──────────────────────┼──────────────┼──────────────┼──────────────┼──────────────┤
+│ **CLUSTER TOTAL**    │ **—**        │ **49.152**   │ **98.304**   │ **TOPS**     │
+└──────────────────────┴──────────────┴──────────────┴──────────────┴──────────────┘
+
+
+DETAILED CLUSTER CALCULATION:
+─────────────────────────────
+
+INT16 Performance:
+├─ 8 Tensix tiles × 2,048 MACs/Tensix/cycle = 16,384 MACs/cycle
+├─ 16,384 MACs/cycle × 1.5 GHz = 24,576 × 10^9 OPs
+└─ 24,576 × 10^9 OPs ÷ 10^12 = 24.576 TFLOPS per Tensix pair
+                    × 2 = 49.152 TFLOPS total
+
+Wait, let me recalculate:
+├─ Per Tensix: 4,096 MACs/cycle × 1.5 GHz = 6.144 TOPS
+├─ 8 Tensix tiles × 6.144 TOPS = 49.152 TOPS ✓
+└─ INT16 Cluster Performance: 49.152 TOPS
+
+INT8 Performance (2-phase):
+├─ Per Tensix: 8,192 MACs/cycle × 1.5 GHz = 12.288 TOPS
+├─ 8 Tensix tiles × 12.288 TOPS = 98.304 TOPS ✓
+└─ INT8 Cluster Performance: 98.304 TOPS
+
+
+═══════════════════════════════════════════════════════════════════════════════════════
+                            QUICK REFERENCE TABLE
+═══════════════════════════════════════════════════════════════════════════════════════
+
+╔═══════════════════════════════════════════════════════════════════════════════════╗
+║                                                                                   ║
+║  PERFORMANCE SUMMARY @ 1.5 GHz CLOCK FREQUENCY                                   ║
+║                                                                                   ║
+╠═══════════════════════════════════════════════════════════════════════════════════╣
+║                                                                                   ║
+║  G-TILE (Our Focus):                                                             ║
+║  ────────────────────                                                            ║
+║  • INT16: 2,048 MACs/cycle        →  3.072 TFLOPS (3.072 TOPS)                  ║
+║  • INT8:  4,096 MACs/cycle        →  6.144 TFLOPS (6.144 TOPS)                  ║
+║                                                                                   ║
+║  Extended Hierarchy:                                                              ║
+║  ───────────────────                                                              ║
+║  • FP-Tile (INT16):    0.192 TOPS                                                ║
+║  • FP-Tile (INT8):     0.384 TOPS                                                ║
+║  • M-Tile (INT16):     1.536 TOPS                                                ║
+║  • M-Tile (INT8):      3.072 TOPS                                                ║
+║  • Tensix (INT16):     6.144 TOPS                                                ║
+║  • Tensix (INT8):     12.288 TOPS                                                ║
+║  • Cluster (INT16):   49.152 TOPS                                                ║
+║  • Cluster (INT8):    98.304 TOPS                                                ║
+║                                                                                   ║
+║  Key Facts:                                                                       ║
+║  ──────────                                                                       ║
+║  • Each G-Tile = 256 FP-Lanes total (16 lanes/FP-Tile × 8 tiles × 2 M-Tiles)   ║
+║  • INT8 achieves 2× throughput via two-phase latch transparency                  ║
+║  • 1.5 GHz is nominal clock frequency for N1B0                                   ║
+║  • All calculations assume 100% utilization (peak performance)                   ║
+║                                                                                   ║
+╚═══════════════════════════════════════════════════════════════════════════════════╝
+
+
+═══════════════════════════════════════════════════════════════════════════════════════
+                            FORMULA VERIFICATION
+═══════════════════════════════════════════════════════════════════════════════════════
+
+G-Tile MAC/cycle formula:
+═════════════════════════
+
+MACs/cycle = 2 M-Tiles
+           × 8 FP-Tiles/M-Tile
+           × 8 columns/FP-Tile
+           × 2 lanes/column
+           × NUM_PAIR
+           × 1 MAC/pair/cycle
+
+INT16: 2 × 8 × 8 × 2 × 8 × 1 = 2,048 MACs/cycle ✓
+INT8:  2 × 8 × 8 × 2 × 16 × 1 = 4,096 MACs/cycle ✓
+       (NUM_PAIR doubles to 16 due to 2-phase processing)
+
+
+TOPS Calculation Formula:
+════════════════════════
+
+        MACs/cycle × Clock_GHz
+TOPS =  ──────────────────────
+               10^3
+
+INT16: (2,048 × 1.5) / 1,000 = 3,072 / 1,000 = 3.072 TOPS ✓
+INT8:  (4,096 × 1.5) / 1,000 = 6,144 / 1,000 = 6.144 TOPS ✓
+
+
+═══════════════════════════════════════════════════════════════════════════════════════
+                              KEY TAKEAWAYS
+═══════════════════════════════════════════════════════════════════════════════════════
+
+✓ G-TILE PERFORMANCE:
+  └─ INT16: 3.072 TOPS (Tera Operations Per Second)
+  └─ INT8:  6.144 TOPS (with two-phase latch transparency)
+
+✓ WHY 2× FOR INT8?
+  └─ Each FP-Lane has 8 Booth multiplier pairs (NUM_PAIR=8)
+  └─ Each pair can process 2 INT8 values (2 INT8 = 1 × 16-bit)
+  └─ Two-phase latch transparency allows both INT8 pairs to execute in same cycle
+  └─ Result: 8 pairs × 2 phases = 16 INT8 MACs per lane per cycle
+
+✓ CLOCK FREQUENCY:
+  └─ 1.5 GHz is nominal for N1B0 (may vary with corner/voltage)
+  └─ Scales linearly: 2× frequency → 2× TOPS
+
+✓ SCALING:
+  └─ 1 G-Tile = 16 G-Tiles in Cluster (16 × 3.072 = 49.152 TOPS for INT16)
+  └─ Linear scaling across all hierarchy levels
+
+═══════════════════════════════════════════════════════════════════════════════════════

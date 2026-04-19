@@ -1,0 +1,86 @@
+FPU_Grid_Mapping,One_NEO_Detailed_Component_List
+,
+"Component_Type","ID","G-Tile","Column_Index","Row_Count","FP_Lanes_Per_Row","Total_FP_Lanes","Rows_With_Active_Output","M_Tile_Index","Purpose"
+,
+"G-Tile Container","G-Tile[0]","0","(0-7)","8","2","128","4 (rows 0-3)","0-7","Column container, routes SRCA/SRCB/DEST to M-Tiles 0-7"
+"G-Tile Container","G-Tile[1]","1","(8-15)","8","2","128","4 (rows 0-3)","8-15","Column container, routes SRCA/SRCB/DEST to M-Tiles 8-15"
+,
+"M-Tile (Booth Column)","M-Tile[0]","0","0","8","2","16","4","0","One Booth multiplier column, reads SRCA[col0], SRCB[col0]"
+"M-Tile (Booth Column)","M-Tile[1]","0","1","8","2","16","4","1","One Booth multiplier column, reads SRCA[col1], SRCB[col1]"
+"M-Tile (Booth Column)","M-Tile[2]","0","2","8","2","16","4","2","One Booth multiplier column, reads SRCA[col2], SRCB[col2]"
+"M-Tile (Booth Column)","M-Tile[3]","0","3","8","2","16","4","3","One Booth multiplier column, reads SRCA[col3], SRCB[col3]"
+"M-Tile (Booth Column)","M-Tile[4]","0","4","8","2","16","4","4","One Booth multiplier column, reads SRCA[col4], SRCB[col4]"
+"M-Tile (Booth Column)","M-Tile[5]","0","5","8","2","16","4","5","One Booth multiplier column, reads SRCA[col5], SRCB[col5]"
+"M-Tile (Booth Column)","M-Tile[6]","0","6","8","2","16","4","6","One Booth multiplier column, reads SRCA[col6], SRCB[col6]"
+"M-Tile (Booth Column)","M-Tile[7]","0","7","8","2","16","4","7","One Booth multiplier column, reads SRCA[col7], SRCB[col7]"
+"M-Tile (Booth Column)","M-Tile[8]","1","8","8","2","16","4","8","One Booth multiplier column, reads SRCA[col8], SRCB[col8]"
+"M-Tile (Booth Column)","M-Tile[9]","1","9","8","2","16","4","9","One Booth multiplier column, reads SRCA[col9], SRCB[col9]"
+"M-Tile (Booth Column)","M-Tile[10]","1","10","8","2","16","4","10","One Booth multiplier column, reads SRCA[col10], SRCB[col10]"
+"M-Tile (Booth Column)","M-Tile[11]","1","11","8","2","16","4","11","One Booth multiplier column, reads SRCA[col11], SRCB[col11]"
+"M-Tile (Booth Column)","M-Tile[12]","1","12","8","2","16","4","12","One Booth multiplier column, reads SRCA[col12], SRCB[col12]"
+"M-Tile (Booth Column)","M-Tile[13]","1","13","8","2","16","4","13","One Booth multiplier column, reads SRCA[col13], SRCB[col13]"
+"M-Tile (Booth Column)","M-Tile[14]","1","14","8","2","16","4","14","One Booth multiplier column, reads SRCA[col14], SRCB[col14]"
+"M-Tile (Booth Column)","M-Tile[15]","1","15","8","2","16","4","15","One Booth multiplier column, reads SRCA[col15], SRCB[col15]"
+,
+"FP-Tile (Multiplier Row)","FP-Tile[0][0]","0","0","2 (logical)","1","2","2","0","Booth multiplier row 0, contains 2 FP-Lanes (r0, r1)"
+"FP-Tile (Multiplier Row)","FP-Tile[1][0]","0","1","2 (logical)","1","2","2","1","Booth multiplier row 0, contains 2 FP-Lanes (r0, r1)"
+"FP-Tile (Multiplier Row)","FP-Tile[2][0]","0","2","2 (logical)","1","2","2","2","Booth multiplier row 0, contains 2 FP-Lanes (r0, r1)"
+"FP-Tile (Multiplier Row)","FP-Tile[0][1]","0","0","2 (logical)","1","2","2","0","Booth multiplier row 1, contains 2 FP-Lanes (r0, r1)"
+,
+"FP-Lane (MAC Unit)","Lane[col0][row0][r0]","0","0","","1","1","1","0","Physical MAC unit: INT8_A × INT8_C"
+"FP-Lane (MAC Unit)","Lane[col0][row0][r1]","0","0","","1","1","1","0","Physical MAC unit: INT8_B × INT8_D"
+"FP-Lane (MAC Unit)","Lane[col0][row1][r0]","0","0","","1","1","1","0","Physical MAC unit: INT8_A × INT8_C"
+"FP-Lane (MAC Unit)","Lane[col0][row1][r1]","0","0","","1","1","1","0","Physical MAC unit: INT8_B × INT8_D"
+,
+"Register File (Shared)","SRCA","","N/A","256 rows","16 cols","256 × 16 = 4,096 datums","","N/A","K-dimension weights, 16 KB per bank (2 banks dual-buffered)"
+"Register File (Shared)","SRCB","","N/A","256 rows","32 cols","256 × 32 = 8,192 datums","","N/A","K-dimension weights, 32 KB per bank (2 banks dual-buffered)"
+"Register File (Shared)","SRCS","","N/A","48 rows","16 cols","48 × 16 = 768 datums","","N/A","SFPU operands, 384 B per bank (2 banks dual-buffered)"
+"Register File (Shared)","DEST","","N/A","512 rows","4 cols","512 × 4 = 2,048 entries","","N/A","Accumulation results, 32 KB total (2 × 16 KB banks)"
+,
+"Summary Statistics","Value","","",
+"FPU_Grid_Columns","16 (labeled 0-15)","","",
+"FPU_Grid_Rows","8 (labeled 0-7)","","",
+"G_Tiles_Per_NEO","2 (G-Tile[0], G-Tile[1])","","",
+"M_Tiles_Per_G_Tile","8","","",
+"M_Tiles_Total_Per_NEO","16 (M-Tile[0..15])","","",
+"FP_Lanes_Per_M_Tile","16 (8 rows × 2 lanes/row)","","",
+"FP_Lanes_Total_Per_NEO","256 (16 cols × 8 rows × 2 lanes)","","",
+"INT8_MACs_Per_Cycle_Single_Phase","128 per G-Tile (FP_ROWS=4 active × 8 cols × 2 INT8/Booth)","","",
+"INT8_MACs_Per_Cycle_Dual_Phase","512 per NEO (2 G-Tiles × 256 with HALF_FP_BW=1)","","",
+"Register_File_Per_NEO_Total","80.4 KB (SRCA+SRCB+SRCS+DEST)","","",
+,
+"Column Understanding","","","",
+"What_Is_A_Column","A 'column' = ONE M-Tile = ONE Booth multiplier running vertically","","",
+"Column_Dimension","Horizontal (X-axis in grid diagram)","","",
+"Column_Count","16 columns per NEO (split between 2 G-Tiles: 0-7 and 8-15)","","",
+"Column_Input","Each column reads different SRCB[col] (broadcasted to all 8 rows)","","",
+"Column_Output","Produces 16 results per cycle (8 rows × 2 FP-Lanes/row)","","",
+,
+"Row Understanding","","","",
+"What_Is_A_Row","A 'row' = Output row in the GEMM matrix (M-dimension)","","",
+"Row_Dimension","Vertical (Y-axis in grid diagram)","","",
+"Row_Count","8 rows per column (but only 4 active output rows per G-Tile at a time)","","",
+"Row_Input","All rows in same column share same SRCB[col] (broadcast)","","",
+"Row_Output","Each row accumulates to different DEST rows","","",
+,
+"G-Tile Understanding","","","",
+"What_Is_G_Tile","Container module that holds 8 M-Tile columns","","",
+"G_Tile_Count","2 per NEO (G-Tile[0] and G-Tile[1])","","",
+"G_Tile_Columns","G-Tile[0]: columns 0-7; G-Tile[1]: columns 8-15","","",
+"G_Tile_Rows","Both G-Tiles see same 8 rows","","",
+"G_Tile_Clock_Gating","Per-G-Tile enable for power saving","","",
+,
+"M-Tile Understanding","","","",
+"What_Is_M_Tile","Physical MAC compute engine = ONE Booth multiplier column","","",
+"M_Tile_Count","16 per NEO (8 per G-Tile)","","",
+"M_Tile_Inputs","Reads same SRCB[col] for all 8 rows (broadcast)","","",
+"M_Tile_Outputs","Produces 16 INT8 MACs per cycle (8 rows × 2 lanes)","","",
+"M_Tile_Clock_Gating","Per-M-Tile enable for independent power control","","",
+"M_Tile_Name_Confusion","Note: 'M-Tile' in firmware parlance = mode (INT8), not a physical tile","","",
+,
+"FP-Lane Understanding","","","",
+"What_Is_FP_Lane","Physical MAC unit (Booth multiplier + adder tree)","","",
+"FP_Lane_Count","256 per NEO, 12,288 per chip","","",
+"FP_Lane_Purpose","Computes one multiply-add per cycle","","",
+"FP_Lane_INT8_Dual_Processing","With INT8_2x packing: processes INT8_A×INT8_C (lane r0) and INT8_B×INT8_D (lane r1) in same cycle","","",
+"FP_Lane_Pipeline_Depth","5 stages internally","","",

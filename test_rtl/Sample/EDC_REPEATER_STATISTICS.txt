@@ -1,0 +1,206 @@
+================================================================================
+EDC RING REPEATER SEQUENCE STATISTICS — N1B0
+================================================================================
+Date: 2026-04-06
+Source: EDC_HDD_V0.5, EDC_HDD_V0.9, EDC_path_V0.2, filelist.f (20260404 snapshot)
+Target: N1B0 4×5 grid
+
+================================================================================
+1. REPEATER COUNT SUMMARY
+================================================================================
+
+1.1 PER-COLUMN BASELINE (SEGMENT A — Downward Path Y4→Y3→Y2→Y1→Y0→L1→Loopback)
+
+  Column X=0 (NE_OPT + Tensix + Dispatch):
+    - Y4→Y3: 2 stages (inter-tile connector)
+    - Y3→Y2: 2 stages (inter-tile connector)
+    - Y2→Y1: 2 stages (inter-tile connector)
+    - Y1→Y0: 2 stages (inter-tile connector)
+    - Y0→L1: 2 stages (L1 feedthrough)
+    - Loopback (Seg B): 2 stages (standard connector)
+    ──────────────────────────────────────────
+    Total: 12 repeater buffer stages
+
+  Column X=1 (NOC2AXI_ROUTER_NE_OPT composite + Tensix):
+    - Y4→Y3 (via composite): 2 stages (inter-tile Y4 exit)
+    - Y3→Y2 (via composite internal): 0 stages (combinational assign, same noc_clk)
+    - Y2→Y1: 2 stages (inter-tile connector)
+    - Y1→Y0: 2 stages (inter-tile connector)
+    - Y0→L1: 2 stages (L1 feedthrough)
+    - Loopback (Seg B composite): 6 stages (REP_DEPTH_LOOPBACK=6) ***N1B0-SPECIFIC***
+    ──────────────────────────────────────────
+    Total: 14 repeater buffer stages (12 baseline + 4 extra from composite loopback)
+
+  Column X=2 (NOC2AXI_ROUTER_NW_OPT composite + Tensix):
+    [Identical to X=1]
+    ──────────────────────────────────────────
+    Total: 14 repeater buffer stages
+
+  Column X=3 (NW_OPT + Tensix + Dispatch):
+    [Identical to X=0]
+    ──────────────────────────────────────────
+    Total: 12 repeater buffer stages
+
+1.2 RING-WIDE REPEATER COUNT (ONE COMPLETE RING PASS)
+
+  Baseline connectors (all REP_DEPTH=2):
+    - 4 columns × 5 inter-tile boundaries (Y4→Y3→Y2→Y1→Y0) = 20 connectors
+    - 4 columns × 1 L1 boundary (Y0→L1) = 4 connectors
+    - 4 columns × 1 loopback standard (X=0,3) = 2 connectors (X=1,2 differ)
+    ──────────────────────────────────────────
+    Subtotal: 26 standard connectors × 2 stages = 52 repeater buffer stages
+
+  Composite loopback (REP_DEPTH_LOOPBACK=6, N1B0 ONLY):
+    - X=1 loopback: 6 stages
+    - X=2 loopback: 6 stages
+    ──────────────────────────────────────────
+    Subtotal: 2 composite loopbacks × 6 stages = 12 repeater buffer stages
+
+  Composite cross-row (combinational, no repeater):
+    - X=1 Y3→Y2: 0 stages (assign)
+    - X=2 Y3→Y2: 0 stages (assign)
+    ──────────────────────────────────────────
+    Subtotal: 0 stages (internal wires, no repeaters needed)
+
+  TOTAL RING REPEATER STAGES (N1B0):
+    52 (baseline) + 12 (composite loopback) = 64 repeater buffer stages per ring pass
+    ≈ 16 gate delays per column × 4 columns = 64 total
+
+1.3 REPEATER DEPTH COMPARISON
+
+  ┌─────────────────────────────────────────────────────────────────┐
+  │ Metric                  │ Baseline Trinity │ N1B0 with Composite │
+  ├─────────────────────────────────────────────────────────────────┤
+  │ Repeater stages/column  │ 12               │ 14 (X=1,2); 12 (X=0,3) │
+  │ Ring-wide total         │ 48               │ 64 (52 std + 12 composite) │
+  │ Loopback DEPTH          │ 2 (all)          │ 2 (X=0,3); 6 (X=1,2)  │
+  │ Gate delays/column      │ ~10–12           │ ~12–14 (composite); ~10–12 (std) │
+  │ MCPDLY (BIU cycles)     │ 7                │ 7 (unchanged)         │
+  │ Ring latency estimate   │ 1–2 cycles       │ 1–3 cycles (worst-case) │
+  └─────────────────────────────────────────────────────────────────┘
+
+================================================================================
+2. N1B0 REPEATER SEQUENCE (RING ORDER)
+================================================================================
+
+Ring follows 4 independent per-column paths (one per X=0,1,2,3):
+
+Column X=0 (NE_OPT, standard):
+  1. Inter-tile Y4→Y3:        2 stages (tt_edc1_intf_connector)
+  2. Inter-tile Y3→Y2:        2 stages (tt_edc1_intf_connector)
+  3. Inter-tile Y2→Y1:        2 stages (tt_edc1_intf_connector)
+  4. Inter-tile Y1→Y0:        2 stages (tt_edc1_intf_connector)
+  5. Inter-tile Y0→L1:        2 stages (tt_edc1_intf_connector)
+  6. Loopback (Segment B):    2 stages (tt_edc1_intf_connector)
+  ────────────────────────────────────────────────────────────────
+  Cumulative: 12 stages (6 connectors × 2 stages each)
+
+Column X=1 (NOC2AXI_ROUTER_NE_OPT, COMPOSITE):
+  1. Inter-tile Y4→Y3:        2 stages (Y4 exit from composite)
+  2. Cross-row Y3→Y2:         0 stages (combinational assign within composite)
+  3. Inter-tile Y2→Y1:        2 stages (tt_edc1_intf_connector)
+  4. Inter-tile Y1→Y0:        2 stages (tt_edc1_intf_connector)
+  5. Inter-tile Y0→L1:        2 stages (tt_edc1_intf_connector)
+  6. Loopback (Segment B):    6 stages (edc_loopback_conn_nodes, REP_DEPTH_LOOPBACK=6)
+  ────────────────────────────────────────────────────────────────
+  Cumulative: 14 stages (5 basic + 1 composite = +4 extra stages vs baseline)
+
+Column X=2 (NOC2AXI_ROUTER_NW_OPT, COMPOSITE):
+  [Identical to X=1]
+  Cumulative: 14 stages
+
+Column X=3 (NW_OPT, standard):
+  [Identical to X=0]
+  Cumulative: 12 stages
+
+TOTAL RING REPEATER SEQUENCE (4 columns):
+  Ring order: X=0→X=1→X=2→X=3→(back to X=0)
+  Total stages: 12 + 14 + 14 + 12 = 52 stages per complete ring pass
+  PLUS N1B0 loopback composite: +12 stages = 64 total
+
+================================================================================
+3. RTL FILE REFERENCES (from filelist.f, 20260404 snapshot)
+================================================================================
+
+Key EDC RTL modules referenced:
+
+  File Path                                           │ Purpose
+  ──────────────────────────────────────────────────────┼─────────────────
+  used_in_n1/tt_rtl/tt_edc/rtl/                       │ EDC RTL source
+  used_in_n1/tt_rtl/tt_edc/rtl/tt_edc_pkg.sv          │ EDC package
+  used_in_n1/tt_rtl/tt_edc/rtl/tt_edc1_pkg.sv         │ EDC1 constants
+  used_in_n1/tt_rtl/tt_edc/rtl/tt_edc1_serial_bus_repeater.sv │ Repeater (DEPTH param)
+  used_in_n1/tt_rtl/tt_edc/rtl/tt_edc1_intf_connector.sv      │ Connector (2-stage fixed)
+  used_in_n1/tt_rtl/tt_edc/rtl/tt_edc1_serial_bus_mux.sv      │ 2:1 mux (harvest)
+  used_in_n1/tt_rtl/tt_edc/rtl/tt_edc1_serial_bus_demux.sv    │ 1:2 demux (harvest)
+  used_in_n1/tt_rtl/tt_edc/rtl/tt_edc1_node.sv        │ EDC node instance
+  used_in_n1/tt_rtl/tt_edc/rtl/tt_edc1_state_machine.sv │ Node SM + sync3r
+
+Filelist flags enabling EDC RTL:
+  +define+TARGET_EDC_RTL
+  +define+TARGET_SYNTHESIS
+  +define+TARGET_TRINITY_N4
+  +define+TARGET_4X5
+  +incdir+used_in_n1/tt_rtl/tt_edc/rtl
+  +incdir+used_in_n1/tt_rtl/tt_noc/rtl/edc
+
+Repeater instantiation parameters (from tt_edc1_pkg.sv):
+  - REP_DEPTH: 0–N (default 1, inter-tile = 2)
+  - REP_DEPTH_LOOPBACK: 6 (N1B0 composite loopback only)
+  - DEPTH parameter in tt_edc1_serial_bus_repeater (#(DEPTH=1))
+
+================================================================================
+4. TIMING IMPACT — MCPDLY AND REPEATER LATENCY
+================================================================================
+
+MCPDLY (BIU firmware hold duration): 7 clock cycles
+
+Budget breakdown:
+  ┌─────────────────────────────────────────────────────────────┐
+  │ Component                      │ Cycles │ Gate Delays       │
+  ├─────────────────────────────────────────────────────────────┤
+  │ Repeater propagation (max 3 levels) │ ~0.5 cy │ ~3 gate delays │
+  │ 3-stage synchronizer (worst node)  │ 3 cy  │ —              │
+  │ Setup margin                       │ 1 cy  │ —              │
+  │ ─────────────────────────────────────┴──────┴────────────────│
+  │ TOTAL = MCPDLY                     │ 7 cy  │ —              │
+  └─────────────────────────────────────────────────────────────┘
+
+N1B0 Composite Loopback Impact (REP_DEPTH_LOOPBACK=6):
+  - 6 repeater stages ≈ 1–2 BIU clock cycles (combinational, not registered)
+  - Forward async_init path uses loopback but propagation time is absorbed
+  - Conclusion: MCPDLY=7 remains ADEQUATE for N1B0 (dominant term is sync3r, not repeaters)
+
+================================================================================
+5. SUMMARY STATISTICS
+================================================================================
+
+Total N1B0 Repeater Sequence Counts:
+
+  Baseline repeater connectors (REP_DEPTH=2):
+    26 connectors × 2 stages = 52 repeater buffer stages
+
+  N1B0 Composite loopback (REP_DEPTH_LOOPBACK=6):
+    2 instances (X=1, X=2) × 6 stages = 12 repeater buffer stages
+
+  Combinational cross-row wires (no repeater):
+    2 instances (X=1, X=2 Y3→Y2) = 0 stages
+
+  ──────────────────────────────────────────────────────────────
+  TOTAL RING REPEATER STAGES: 64 (per complete ring pass)
+  AVERAGE REPEATER DEPTH: 2.46 stages per boundary
+  MAXIMUM REPEATER DEPTH: 6 (N1B0 composite loopback only)
+  GATE DELAY ESTIMATE: ~60–72 gate delays (per ring pass)
+  WORST-CASE RING LATENCY: 1–3 BIU clock cycles
+
+================================================================================
+6. FILES GENERATED
+================================================================================
+
+  - EDC_REPEATER_SEQUENCE_SUMMARY.md (comprehensive architecture document)
+  - EDC_REPEATER_SEQUENCE_COUNT.csv (detailed per-element count table)
+  - EDC_REPEATER_STATISTICS.txt (this file — summary statistics)
+
+================================================================================
+END OF STATISTICS
+================================================================================

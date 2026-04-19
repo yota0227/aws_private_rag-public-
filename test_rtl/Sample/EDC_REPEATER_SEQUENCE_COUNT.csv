@@ -1,0 +1,25 @@
+Ring_Order,Tile_X,Tile_Y,Tile_Type,Ring_Element,Repeater_Type,DEPTH_Param,DEPTH_Value,Gate_Delays,Element_Instance_Path,Clock_Domain,Notes
+1,0,4,NE_OPT,Inter-tile Y4->Y3,tt_edc1_intf_connector,N/A,2,2,gen_x[0].gen_y[4].top_nodes_edc_connections.edc_direct_conn_nodes,-,Baseline connector
+2,0,3,DISPATCH_E,Inter-tile Y3->Y2,tt_edc1_intf_connector,N/A,2,2,gen_x[0].gen_y[3].top_nodes_edc_connections.edc_direct_conn_nodes,-,Baseline connector
+3,0,2,Tensix,Inter-tile Y2->Y1,tt_edc1_intf_connector,N/A,2,2,gen_x[0].gen_y[2].top_nodes_edc_connections.edc_direct_conn_nodes,-,Baseline connector
+4,0,1,Tensix,Inter-tile Y1->Y0,tt_edc1_intf_connector,N/A,2,2,gen_x[0].gen_y[1].top_nodes_edc_connections.edc_direct_conn_nodes,-,Baseline connector
+5,0,0,Tensix,Inter-tile Y0->L1,tt_edc1_intf_connector,N/A,2,2,gen_x[0].gen_y[0].top_nodes_edc_connections.edc_direct_conn_nodes,-,L1 feedthrough
+6,0,0,L1_PART,Loopback (Segment B),tt_edc1_intf_connector,N/A,2,2,gen_x[0].edc_loopback_conn_nodes,-,Standard loopback connector
+7,1,4,NOC2AXI_ROUTER_NE_OPT,Inter-tile Y4->Y3,tt_edc1_intf_connector,N/A,2,2,gen_x[1].gen_y[4].top_nodes_edc_connections.edc_direct_conn_nodes,-,Baseline (Y4 exit)
+8,1,3,NOC2AXI_ROUTER_NE_OPT,Cross-row Y3->Y2 (internal),assign_wire,N/A,0,0,gen_x[1].gen_y[3].(combinational),-,Composite internal; no repeater
+9,1,2,Tensix,Inter-tile Y2->Y1,tt_edc1_intf_connector,N/A,2,2,gen_x[1].gen_y[2].top_nodes_edc_connections.edc_direct_conn_nodes,-,Baseline connector
+10,1,1,Tensix,Inter-tile Y1->Y0,tt_edc1_intf_connector,N/A,2,2,gen_x[1].gen_y[1].top_nodes_edc_connections.edc_direct_conn_nodes,-,Baseline connector
+11,1,0,Tensix,Inter-tile Y0->L1,tt_edc1_intf_connector,N/A,2,2,gen_x[1].gen_y[0].top_nodes_edc_connections.edc_direct_conn_nodes,-,L1 feedthrough
+12,1,0,L1_PART,Loopback (Segment B composite),edc_loopback_conn_nodes,REP_DEPTH_LOOPBACK,6,6,gen_x[1].edc_loopback_conn_nodes,-,N1B0 COMPOSITE: 6 stages
+13,2,4,NOC2AXI_ROUTER_NW_OPT,Inter-tile Y4->Y3,tt_edc1_intf_connector,N/A,2,2,gen_x[2].gen_y[4].top_nodes_edc_connections.edc_direct_conn_nodes,-,Baseline (Y4 exit)
+14,2,3,NOC2AXI_ROUTER_NW_OPT,Cross-row Y3->Y2 (internal),assign_wire,N/A,0,0,gen_x[2].gen_y[3].(combinational),-,Composite internal; no repeater
+15,2,2,Tensix,Inter-tile Y2->Y1,tt_edc1_intf_connector,N/A,2,2,gen_x[2].gen_y[2].top_nodes_edc_connections.edc_direct_conn_nodes,-,Baseline connector
+16,2,1,Tensix,Inter-tile Y1->Y0,tt_edc1_intf_connector,N/A,2,2,gen_x[2].gen_y[1].top_nodes_edc_connections.edc_direct_conn_nodes,-,Baseline connector
+17,2,0,Tensix,Inter-tile Y0->L1,tt_edc1_intf_connector,N/A,2,2,gen_x[2].gen_y[0].top_nodes_edc_connections.edc_direct_conn_nodes,-,L1 feedthrough
+18,2,0,L1_PART,Loopback (Segment B composite),edc_loopback_conn_nodes,REP_DEPTH_LOOPBACK,6,6,gen_x[2].edc_loopback_conn_nodes,-,N1B0 COMPOSITE: 6 stages
+19,3,4,NW_OPT,Inter-tile Y4->Y3,tt_edc1_intf_connector,N/A,2,2,gen_x[3].gen_y[4].top_nodes_edc_connections.edc_direct_conn_nodes,-,Baseline connector
+20,3,3,DISPATCH_W,Inter-tile Y3->Y2,tt_edc1_intf_connector,N/A,2,2,gen_x[3].gen_y[3].top_nodes_edc_connections.edc_direct_conn_nodes,-,Baseline connector
+21,3,2,Tensix,Inter-tile Y2->Y1,tt_edc1_intf_connector,N/A,2,2,gen_x[3].gen_y[2].top_nodes_edc_connections.edc_direct_conn_nodes,-,Baseline connector
+22,3,1,Tensix,Inter-tile Y1->Y0,tt_edc1_intf_connector,N/A,2,2,gen_x[3].gen_y[1].top_nodes_edc_connections.edc_direct_conn_nodes,-,Baseline connector
+23,3,0,Tensix,Inter-tile Y0->L1,tt_edc1_intf_connector,N/A,2,2,gen_x[3].gen_y[0].top_nodes_edc_connections.edc_direct_conn_nodes,-,L1 feedthrough
+24,3,0,L1_PART,Loopback (Segment B),tt_edc1_intf_connector,N/A,2,2,gen_x[3].edc_loopback_conn_nodes,-,Standard loopback connector

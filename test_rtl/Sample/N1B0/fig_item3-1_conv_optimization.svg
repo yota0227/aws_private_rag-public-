@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1400" height="700" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .title { font-size: 20px; font-weight: bold; }
+      .header { font-size: 13px; font-weight: bold; }
+      .text { font-size: 11px; }
+    </style>
+  </defs>
+
+  <text x="700" y="30" text-anchor="middle" class="title">Item 3-1: Convolution Memory Efficiency</text>
+
+  <!-- Traditional Im2Col (Left) -->
+  <text x="250" y="80" text-anchor="middle" class="header" fill="red">Traditional Im2Col</text>
+
+  <rect x="100" y="100" width="300" height="60" rx="8" fill="#FFE6E6" stroke="red" stroke-width="2"/>
+  <text x="250" y="135" text-anchor="middle" class="text">Input: 224×224×3 = 1.2 MB</text>
+
+  <line x1="250" y1="160" x2="250" y2="180" stroke="red" stroke-width="2"/>
+  <rect x="100" y="180" width="300" height="60" rx="8" fill="#FFE6E6" stroke="red" stroke-width="2"/>
+  <text x="250" y="210" text-anchor="middle" class="text">Im2Col Expand: 32.4 MB</text>
+  <text x="250" y="225" text-anchor="middle" class="text">(27× bloat)</text>
+
+  <line x1="250" y1="240" x2="250" y2="260" stroke="red" stroke-width="2"/>
+  <rect x="100" y="260" width="300" height="60" rx="8" fill="#FFE6E6" stroke="red" stroke-width="2"/>
+  <text x="250" y="295" text-anchor="middle" class="text">GEMM</text>
+
+  <line x1="250" y1="320" x2="250" y2="340" stroke="red" stroke-width="2"/>
+  <rect x="100" y="340" width="300" height="60" rx="8" fill="#FFE6E6" stroke="red" stroke-width="2"/>
+  <text x="250" y="375" text-anchor="middle" class="text">Output</text>
+
+  <text x="250" y="480" text-anchor="middle" class="text" fill="red" font-weight="bold">Problems:</text>
+  <text x="250" y="500" text-anchor="middle" class="text" fill="red">Memory explosion | Cache thrashing</text>
+  <text x="250" y="520" text-anchor="middle" class="text" fill="red">Locality: 20%</text>
+
+  <!-- Sliding Window (Right) -->
+  <text x="1050" y="80" text-anchor="middle" class="header" fill="#228B22">Sliding Window Tiling</text>
+
+  <rect x="900" y="100" width="300" height="60" rx="8" fill="#E6F9F0" stroke="#228B22" stroke-width="2"/>
+  <text x="1050" y="135" text-anchor="middle" class="text" fill="#228B22">Input Tile: 16×16×C = 1 KB</text>
+
+  <line x1="1050" y1="160" x2="1050" y2="180" stroke="#228B22" stroke-width="2"/>
+  <rect x="900" y="180" width="300" height="60" rx="8" fill="#E6F9F0" stroke="#228B22" stroke-width="2"/>
+  <text x="1050" y="210" text-anchor="middle" class="text" fill="#228B22">Slide Kernel</text>
+  <text x="1050" y="225" text-anchor="middle" class="text" fill="#228B22">Reuse: 9-25×</text>
+
+  <line x1="1050" y1="240" x2="1050" y2="260" stroke="#228B22" stroke-width="2"/>
+  <rect x="900" y="260" width="300" height="60" rx="8" fill="#E6F9F0" stroke="#228B22" stroke-width="2"/>
+  <text x="1050" y="295" text-anchor="middle" class="text" fill="#228B22">Systolic Output</text>
+
+  <line x1="1050" y1="320" x2="1050" y2="340" stroke="#228B22" stroke-width="2"/>
+  <rect x="900" y="340" width="300" height="60" rx="8" fill="#E6F9F0" stroke="#228B22" stroke-width="2"/>
+  <text x="1050" y="375" text-anchor="middle" class="text" fill="#228B22">Write: 16×16×C = 2 KB</text>
+
+  <text x="1050" y="480" text-anchor="middle" class="text" fill="#228B22" font-weight="bold">Benefits:</text>
+  <text x="1050" y="500" text-anchor="middle" class="text" fill="#228B22">310× memory reduction (32MB→103KB)</text>
+  <text x="1050" y="520" text-anchor="middle" class="text" fill="#228B22">Locality: 90% | BW: 80%→15%</text>
+</svg>

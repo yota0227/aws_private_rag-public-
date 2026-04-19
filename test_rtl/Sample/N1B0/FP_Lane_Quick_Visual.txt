@@ -1,0 +1,224 @@
+╔════════════════════════════════════════════════════════════════════════════╗
+║                    FP-LANE: QUICK VISUAL REFERENCE                        ║
+║              Floating-Point Multiply-Accumulate Unit (Single)             ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ WHAT IS AN FP-LANE?                                                     ┃
+┃                                                                         ┃
+┃ A complete floating-point or integer multiply-accumulate datapath       ┃
+┃ that executes 1 MAC (multiply-accumulate) per cycle.                    ┃
+┃                                                                         ┃
+┃ • Processes one multiplication per cycle: A[i] × B[j] + DEST[k]       ┃
+┃ • Supports multiple formats: INT8, INT16, INT32, FP16B, FP32, etc.    ┃
+┃ • 8-cycle pipeline (latency) but 1 cycle throughput (pipelined)        ┃
+┃ • 256 FP-Lanes per Tensix tile working in parallel                     ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     ONE FP-LANE DATA PIPELINE                               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  INPUT                PROCESSING STAGES                   OUTPUT            │
+│  ═════                ═════════════════════               ══════            │
+│                                                                              │
+│  A[16-bit]            ┌──────────────────────────────────┐                 │
+│             ├────────→│ Stage 0: Booth Multiply (×)     │                 │
+│  B[16-bit]  │         ├──────────────────────────────────┤                 │
+│             │         │ Produces 8 partial products      │                 │
+│  DEST[32]   │         └─────────────┬────────────────────┘                 │
+│             │                       │                                      │
+│             │         ┌─────────────▼────────────────────┐                 │
+│             │         │ Stage 1: SOP Compressor (+)      │                 │
+│             │         ├──────────────────────────────────┤                 │
+│             ├────────→│ Sums products into 22-bit value  │                 │
+│             │         └─────────────┬────────────────────┘                 │
+│             │                       │                                      │
+│             │         ┌─────────────▼────────────────────┐                 │
+│             │         │ Stage 2: Exponent Path           │                 │
+│             │         ├──────────────────────────────────┤                 │
+│             ├────────→│ A.exp + B.exp - 127 (bias)       │                 │
+│             │         └──────────────┬───────────────────┘                 │
+│             │                        │                                     │
+│             │         ┌──────────────▼──────────────────┐                  │
+│             │         │ Stage 3: Alignment (Shifter)    │                  │
+│             │         ├──────────────────────────────────┤                 │
+│             ├────────→│ Shift B by exponent difference   │                 │
+│             │         └──────────────┬──────────────────┘                  │
+│             │                        │                                     │
+│             │         ┌──────────────▼──────────────────┐                  │
+│             │         │ Stage 4: Add (CLA)              │                  │
+│             │         ├──────────────────────────────────┤                 │
+│             ├────────→│ Aligned_B + SOP + DEST           │                 │
+│             │         └──────────────┬──────────────────┘                  │
+│             │                        │                                     │
+│             │         ┌──────────────▼──────────────────┐                  │
+│             │         │ Stage 5-6: Normalize+Round      │                  │
+│             │         ├──────────────────────────────────┤                 │
+│             │         │ Count leading zeros              │                 │
+│             │         │ Left-shift to normalize          │                 │
+│             │         │ Apply rounding (RNE/RTZ/...)     │                 │
+│             │         └──────────────┬──────────────────┘                  │
+│             │                        │                                     │
+│             │         ┌──────────────▼──────────────────┐                  │
+│             │         │ Stage 7: Output Register        │                  │
+│             │         ├──────────────────────────────────┤                 │
+│             ├────────→│ Register result, set valid flag  │    RESULT       │
+│             │         └──────────────┬──────────────────┘    [32-bit]      │
+│             │                        │                                     │
+│             │                        └──────────────────→ VALID FLAG      │
+│             │                                                              │
+│             └─────────────────────────────────────────→ DEST write        │
+│                                                          (32-bit or         │
+│                                                           16-bit)          │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        KEY HARDWARE BLOCKS                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│ ┌─ BOOTH MULTIPLIER                                                        │
+│ │  • Multiplies two 16-bit (or 8-bit INT8 pairs) operands                │
+│ │  • Produces 8 partial products simultaneously                           │
+│ │  • Format-agnostic (works for all numeric types)                       │
+│ │  • Hardware size: ~5,000 gates per lane                                │
+│ │                                                                         │
+│ ├─ SOP COMPRESSOR (Wallace Tree)                                          │
+│ │  • Compresses 8 products into a single 22-bit value                    │
+│ │  • Uses 4:2 compressor stages                                          │
+│ │  • Hardware size: ~10,000 gates per lane                               │
+│ │                                                                         │
+│ ├─ EXPONENT PATH (Parallel processing)                                    │
+│ │  • Adds exponents: E_A + E_B                                           │
+│ │  • Subtracts bias (127 for FP32)                                       │
+│ │  • Handles overflow/underflow                                          │
+│ │                                                                         │
+│ ├─ ALIGNMENT SHIFTER (Barrel shifter)                                     │
+│ │  • Shifts one operand by exponent difference                           │
+│ │  • Aligns both mantissas to same exponent level                        │
+│ │  • Shift amount: 0 to 64 bits                                          │
+│ │                                                                         │
+│ ├─ CLA ADDER (Carry-Lookahead)                                            │
+│ │  • Adds aligned mantissa + accumulator from DEST                       │
+│ │  • 32-bit addition with carry lookahead                                │
+│ │  • Hardware size: ~3,000 gates per lane                                │
+│ │                                                                         │
+│ ├─ NORMALIZER                                                              │
+│ │  • Leading-Zero Counter (LZC): finds first '1' bit                     │
+│ │  • Normalization Shifter: left-shifts to place hidden bit             │
+│ │  • Hardware size: ~4,000 gates per lane                                │
+│ │                                                                         │
+│ └─ ROUNDER                                                                 │
+│    • Examines Guard/Round/Sticky bits                                    │
+│    • Applies rounding mode (RNE, RTZ, RDN, RUP)                          │
+│    • Handles rounding-induced overflow                                   │
+│    • Hardware size: ~2,000 gates per lane                                │
+│                                                                            │
+│ TOTAL PER FP-LANE: ~25,000 gates (rough estimate)                        │
+│ 256 lanes per Tensix × 25K = 6.4M gates                                  │
+│                                                                            │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                       PIPELINE TIMING (Example)                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│ Time    Cycle   Input   S0      S1      S2      S3      S4      S5   S6  S7 │
+│         ─────   ─────   ──      ──      ──      ──      ──      ──   ──  ── │
+│ N+0     0       [0]                                                         │
+│ N+1     1       [1]     [0]                                                 │
+│ N+2     2       [2]     [1]     [0]                                         │
+│ N+3     3       [3]     [2]     [1]     [0]                                 │
+│ N+4     4       [4]     [3]     [2]     [1]     [0]                         │
+│ N+5     5       [5]     [4]     [3]     [2]     [1]     [0]                 │
+│ N+6     6       [6]     [5]     [4]     [3]     [2]     [1]     [0]         │
+│ N+7     7       [7]     [6]     [5]     [4]     [3]     [2]     [1]   [0]   │
+│ N+8     8       [8]     [7]     [6]     [5]     [4]     [3]     [2]   [1] [0]│
+│                                                                              │
+│ LATENCY:    8 cycles (from [0] in → [0] out)                              │
+│ THROUGHPUT: 1 result per cycle (steady-state)                             │
+│                                                                              │
+│ Continuous data flow: Input every cycle → Output every cycle after S7     │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    INT16 vs INT8 THROUGHPUT                                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  INT16 Mode:                          INT8 Mode (2-phase):                 │
+│  ───────────                          ────────────────────                 │
+│                                                                             │
+│  Cycle N:                             Cycle N - Negative phase:           │
+│  • Load 8 INT16 values from SRCA      • Load 16 INT8 values (2 per datum) │
+│  • Each pair: 16-bit × 16-bit         • Each pair: 8-bit × 8-bit × 2     │
+│  • Booth × 8 pairs = 8 products       • Booth × 8 pairs × 2 = 16 products│
+│  • Result: 8 INT16 MACs/cycle         • Result: 16 INT8 MACs (phase 1)   │
+│                                                                             │
+│                                       Cycle N - Positive phase:            │
+│                                       • Same 8 datums, different phase    │
+│                                       • Another 16 INT8 MACs (phase 2)    │
+│                                       • TOTAL: 32 INT8 MACs/cycle         │
+│                                                                             │
+│  ✓ Same hardware!                     ✓ Two-phase latch transparency      │
+│  ✓ Format-agnostic Booth              ✓ No additional multipliers needed  │
+│  ✓ No mode switching needed           ✓ 2× throughput for INT8            │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      CLUSTER-LEVEL AGGREGATION                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│   Per FP-Lane:          8 INT16 MACs/cycle                                 │
+│                          16 INT8 MACs/cycle (with 2-phase)                │
+│                                                                            │
+│   Per FP-Tile:          8 lanes × 2 rows × 8 MACs = 128 INT16 MACs/cy   │
+│                                                                            │
+│   Per G-Tile:           2 M-Tiles × 8 rows × 128 = 2,048 INT16 MACs/cy  │
+│                                                                            │
+│   Per Tensix:           2 G-Tiles × 2,048 = 2,048 INT16 MACs/cycle      │
+│                         (4 times per cycle with INT8_2x = 4,096 INT8)    │
+│                                                                            │
+│   Per Cluster:          8 Tensix × 2,048 = 16,384 INT16 MACs/cycle      │
+│                         8 Tensix × 4,096 = 32,768 INT8 MACs/cycle       │
+│                                                                            │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     REGISTER FILE INTEGRATION                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  SRCA (Source A):                                                           │
+│  • 48 rows × 16 datums × 2 banks = 768 INT16 entries per bank             │
+│  • Latch array (0-latency combinational access)                           │
+│  • Dual-bank for double-buffering (refill during execution)              │
+│                                                                             │
+│  SRCB (Source B):                                                           │
+│  • 64 words × 16 datums × 2 banks = 1,024 INT16 entries per bank         │
+│  • Latch array (0-latency combinational access)                           │
+│  • Dual-bank for double-buffering                                         │
+│                                                                             │
+│  DEST (Destination):                                                        │
+│  • 1,024 rows × 4 columns × 2 banks = 8 KB per Tensix                     │
+│  • Latch array with zero-latency read-modify-write                        │
+│  • Enables back-to-back MACs without stall                                │
+│                                                                             │
+│  K-dimension tiling:                                                        │
+│  • INT16: K_tile = 48 (SRCA row depth)                                    │
+│  • INT8: K_tile = 96 (2× due to packing)                                  │
+│  • For K=8192: 171 iterations (INT16) or 86 (INT8)                        │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║ SUMMARY: FP-LANE IS THE BASIC EXECUTION UNIT                             ║
+║                                                                           ║
+║ • 1 MAC per cycle sustained throughput (pipelined)                       ║
+║ • 8 cycles latency (from input to DEST write)                            ║
+║ • 256 per Tensix tile (all working in parallel)                          ║
+║ • 2,048 per cluster = 16,384 INT16 MACs/cycle or 32,768 INT8 MACs/cy  ║
+║ • Format-agnostic (INT8/16/32, FP16B/32, TF32)                          ║
+║ • Zero-latency DEST integration (combinational read-modify-write)        ║
+╚════════════════════════════════════════════════════════════════════════════╝

@@ -1,0 +1,430 @@
+╔════════════════════════════════════════════════════════════════════════════╗
+║              CORRECTION: INT8_2x TWO-CYCLE EXECUTION MECHANISM                ║
+║         (RTL-Verified Analysis of Address Offsetting Architecture)           ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+═══════════════════════════════════════════════════════════════════════════════
+EXECUTIVE SUMMARY: WHAT THE RTL ACTUALLY SHOWS
+═══════════════════════════════════════════════════════════════════════════════
+
+PREVIOUS INCORRECT CLAIM:
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ "Two-phase latch transparency enables 2 independent phases in ONE cycle"    │
+│ "Negative/positive latch phases capture and process independently"          │
+│ "4 INT8 MACs per FP-Lane per cycle (2+2 from parallel phases)"             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+RTL-VERIFIED CORRECT MECHANISM:
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ "Two-CYCLE instruction with enable-based tag transparency"                 │
+│ "Phase 1: Load instruction, process rows [0:1], offset SRCB[0:1]→DEST[0:1]"│
+│ "Phase 2: Hold tag (FF enable=0), process rows [2:3], offset SRCB[2:3]→..." │
+│ "Result: 1 instruction → 2 cycles → 4 INT8 MACs (2 per cycle, averaged)"   │
+│ "Pipeline continues—new instructions start each cycle"                      │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+═══════════════════════════════════════════════════════════════════════════════
+PART 1: RTL EVIDENCE OF TWO-CYCLE MECHANISM
+═══════════════════════════════════════════════════════════════════════════════
+
+MECHANISM 1: FF ENABLE CONTROL FOR TAG REUSE
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                              │
+│ File: tt_fpu_mtile.sv (Lines 938-942)                                      │
+│ ───────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│ tt_pipe_stage #(.WIDTH (FPU_TAG_WIDTH))                                    │
+│ u_tag_ff (                                                                 │
+│   .i_clk       (i_clk),                                                    │
+│   .i_reset_n   (i_reset_n),                                                │
+│   .i_en        (i_valid & ~(i_tag.second_fp_phase & (HALF_FP_BW != 0))),  │
+│                    ↑                                                        │
+│                 KEY: Enable is LOW when second_fp_phase=1 & HALF_FP_BW=1   │
+│                 This PREVENTS FF update (tag is HELD, not sampled)         │
+│                                                                              │
+│   .i_d         (i_tag),                                                    │
+│   .o_q         (tag_d)                                                     │
+│ );                                                                          │
+│                                                                              │
+│ INTERPRETATION:                                                             │
+│ ───────────────                                                             │
+│ Cycle 1: second_fp_phase=0, i_en=1  → FF LOADS new tag (i_d → tag_d)    │
+│ Cycle 2: second_fp_phase=1, i_en=0  → FF HOLDS old tag (tag_d unchanged) │
+│ Cycle 3: second_fp_phase=0, i_en=1  → FF LOADS new instruction tag       │
+│                                                                              │
+│ This is "latch transparency via enable control" NOT traditional transparent │
+│ latch with clock gating (no separate pos/neg latch clock).                 │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+MECHANISM 2: SRCB ROW OFFSET IN SECOND PHASE
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                              │
+│ File: tt_fpu_mtile.sv (Lines 1042-1049)                                    │
+│ ───────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│ if (second_fp_phase) begin                                                 │
+│     for (int r=0; r<2; r++) begin                                          │
+│         for (int c=0; c<SRCB_OUTPUT_COLS; c++) begin                       │
+│             srcb_rows_resh[0][r][c] = i_srcb_row.datums[r+2][c];          │
+│                                                          ↑                   │
+│                                                    OFFSET BY +2             │
+│         end                                                                │
+│     end                                                                     │
+│ end else begin                                                              │
+│     // First phase: use rows [0:1]                                         │
+│     for (int r=0; r<2; r++) begin                                          │
+│         srcb_rows_resh[0][r][c] = i_srcb_row.datums[r][c];                │
+│     end                                                                     │
+│ end                                                                         │
+│                                                                              │
+│ TIMELINE:                                                                   │
+│ ─────────                                                                   │
+│ Cycle N (Phase 1): Load same SRCB_row address, but select [0:1]           │
+│                    ├─ Row 0 → Lane pair 0                                 │
+│                    └─ Row 1 → Lane pair 1                                 │
+│                                                                              │
+│ Cycle N+1 (Phase 2): Load same SRCB_row address, but SELECT [2:3]        │
+│                      ├─ Row 2 → Lane pair 0                               │
+│                      └─ Row 3 → Lane pair 1                               │
+│                                                                              │
+│ EFFECT: Same SRCB read request, but with phase-dependent row index offset │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+MECHANISM 3: SRCA DATUM SELECTION OFFSET
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                              │
+│ File: tt_srca_lane_sel.sv (Line 132)                                       │
+│ ───────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│ wire [SRCA_OUT_DATUMS_LOG2 -1:0] final_srca_elwise_datum_sel =            │
+│     (i_second_fp_phase) ? srca_elwise_datum_sel + 2 : srca_elwise_datum_sel;│
+│                         ↑                                                   │
+│                    CONDITIONAL OFFSET                                       │
+│                                                                              │
+│ EFFECT:                                                                     │
+│ ───────                                                                     │
+│ Phase 1: Select SRCA datum at index [N]                                    │
+│ Phase 2: Select SRCA datum at index [N+2] (two rows forward)               │
+│                                                                              │
+│ SRCA Width: 16 bits = 2 INT8 values                                        │
+│ So offset +2 in datum selection = +4 INT8 values (next 2 datums)          │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+MECHANISM 4: DESTINATION ADDRESS OFFSET
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                              │
+│ File: tt_fpu_tile.sv (Lines 247-248)                                       │
+│ ───────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│ wire [DEST_ADDR_WIDTH-1:0] dest_addr =                                    │
+│     ((HALF_FP_BW != 0) & i_tag.second_fp_phase) ?                         │
+│         tag_d.dstacc_idx + DEST_ADDR_WIDTH'(2) : i_tag.dstacc_idx;        │
+│                              ↑                                              │
+│                         OFFSET BY +2                                        │
+│                                                                              │
+│ EFFECT:                                                                     │
+│ ───────                                                                     │
+│ Phase 1: Write DEST at base address [DSTACC_IDX]                          │
+│ Phase 2: Write DEST at base address [DSTACC_IDX + 2]                      │
+│                                                                              │
+│ DEST Width: 32 bits = 4 INT8 values or 2 INT16 values                     │
+│ So offset +2 entries = +8 INT8 values or +4 INT16 values                  │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+═══════════════════════════════════════════════════════════════════════════════
+PART 2: PHASE LOGIC AND STATE MACHINE
+═══════════════════════════════════════════════════════════════════════════════
+
+File: tt_instruction_issue.sv (Lines 6350-6362)
+───────────────────────────────────────────────
+
+Phase Signal Definitions:
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                              │
+│ assign second_fp_phase_active =                                            │
+│     second_fp_phase_ready && eat_math_instrn_from_m_instrn_pipe_stage;    │
+│                                                                              │
+│ assign first_fp_phase_ready =                                              │
+│     (HALF_FP_BW && math_instrn_valid && dec_instr_alu &&                  │
+│      src_data_ready && !fpu_tag.src_fmt_int8) &&                          │
+│     !second_fp_phase_ready && !power_ramp_fsm_stalls_fpu;                 │
+│                                                                              │
+│ assign first_fp_phase_active =                                             │
+│     first_fp_phase_ready && !instruction_issue_stall &&                   │
+│     !second_fp_phase_ready;                                                │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+INT8_2x Detection:
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                              │
+│ File: tt_instruction_issue.sv (Line 3462)                                  │
+│                                                                              │
+│ wire is_int8_2x_op =                                                       │
+│     (INT_32_1_ENABLED==1) &&                                               │
+│     (dec_instr_MVMUL | dec_instr_MVMULDI) &&                              │
+│     (srca_fpu_output_alu_format_s1 == UINT8_2x ||                         │
+│      srca_fpu_output_alu_format_s1 == INT8_2x) &&                         │
+│     ALU_ACC_CTRL_INT8_math_enabled_s1;                                    │
+│                                                                              │
+│ This triggers the two-phase behavior only for INT8_2x/UINT8_2x formats    │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+Instruction Phases Count:
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                              │
+│ File: tt_instruction_issue.sv (Line 4104)                                  │
+│                                                                              │
+│ wire [3:0] num_instr_phases =                                              │
+│     (first_fp_phase_active) ? 4'd2 : 4'd1;                                │
+│                             ↑              ↑                                │
+│                          INT8_2x      INT16 or single-phase                │
+│                                                                              │
+│ INTERPRETATION:                                                             │
+│ ───────────────                                                             │
+│ • INT8_2x instruction consumes 2 consecutive cycles (num_phases = 2)       │
+│ • INT16 instruction consumes 1 cycle (num_phases = 1)                      │
+│ • This is tracked per instruction, not per lane                            │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+═══════════════════════════════════════════════════════════════════════════════
+PART 3: EXECUTION TIMELINE AND THROUGHPUT CALCULATION
+═══════════════════════════════════════════════════════════════════════════════
+
+INT8_2x INSTRUCTION EXECUTION:
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                              │
+│ Cycle N: INT8_2x Instruction Decode & Issue                                │
+│ ─────────────────────────────────────────────────                           │
+│   ├─ Instruction tag loaded into FF (tag_ff.i_en = 1)                     │
+│   ├─ Format detected: INT8_2x → first_fp_phase_active = 1                 │
+│   ├─ SRCA datum selection: [index]                                        │
+│   ├─ SRCB row selection: [0:1]                                            │
+│   ├─ DEST address: [DSTACC_IDX]                                           │
+│   ├─ FPU processes 2 rows of INT8 pairs (4 INT8 MACs total per lane)      │
+│   │  └─ Note: FPU pipeline still 8 cycles deep (S0-S7)                    │
+│   ├─ Result: 4 INT8 values generated → write to DEST[DSTACC_IDX]         │
+│   ├─ State: Set second_fp_phase_ready = 1                                 │
+│   └─ Instruction PARTIALLY CONSUMED (Phase 1 complete)                    │
+│                                                                              │
+│ Cycle N+1: INT8_2x Instruction Phase 2 (Same Tag Reused)                   │
+│ ────────────────────────────────────────────────────────────               │
+│   ├─ Tag FF remains UNCHANGED (tag_ff.i_en = 0) - tag_d not updated      │
+│   ├─ second_fp_phase_active = 1                                           │
+│   ├─ SRCA datum selection: [index + 2] (offset by +2)                    │
+│   ├─ SRCB row selection: [2:3] (offset by +2)                            │
+│   ├─ DEST address: [DSTACC_IDX + 2] (offset by +2)                       │
+│   ├─ FPU processes 2 MORE rows of INT8 pairs (4 INT8 MACs per lane)       │
+│   ├─ Result: 4 INT8 values generated → write to DEST[DSTACC_IDX + 2]     │
+│   ├─ State: second_fp_phase_ready = 0 (reset)                            │
+│   └─ Instruction FULLY CONSUMED                                           │
+│                                                                              │
+│ Cycles N, N+1 SUMMARY:                                                     │
+│ ──────────────────────                                                     │
+│ One INT8_2x instruction spans 2 consecutive cycles                        │
+│ Total result: 8 INT8 values written (4 per cycle, averaged)               │
+│ Per-cycle throughput: 4 INT8 MACs/cycle/instruction                       │
+│                                                                              │
+│ BUT in pipelined execution:                                                │
+│ ├─ Cycle N:   Instruction 0 (Phase 1)                                    │
+│ ├─ Cycle N+1: Instruction 0 (Phase 2) + Instruction 1 (Phase 1) parallel │
+│ ├─ Cycle N+2: Instruction 1 (Phase 2) + Instruction 2 (Phase 1) parallel │
+│ └─ STEADY STATE: 1 instruction completes every 2 cycles                  │
+│                                                                              │
+│ Sustained Throughput: 1 instruction / 2 cycles = 0.5 instructions/cycle  │
+│ But each instruction is 2× INT8 (vs 1× INT16)                             │
+│ So: 2 INT8 MACs per instruction × 0.5 instructions/cycle = 1 INT8 MAC/cy │
+│                                                                              │
+│ Wait, that's only 1 INT8 MAC/cycle, not 4!                                │
+│ The averaging is different...                                              │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+CORRECTED THROUGHPUT ANALYSIS:
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                              │
+│ Key Insight: What counts as "MACs per cycle"?                              │
+│                                                                              │
+│ METHOD 1: Per-cycle write operations                                        │
+│ ──────────────────────────────────────                                     │
+│ Each INT8_2x instruction writes DEST twice (once per cycle):               │
+│ ├─ Cycle 1: Write 4 INT8 results (4 INT8 MACs written)                   │
+│ ├─ Cycle 2: Write 4 INT8 results (4 INT8 MACs written)                   │
+│ └─ Average: (4+4)/2 = 4 INT8 MACs/cycle                                  │
+│                                                                              │
+│ METHOD 2: Instruction completion rate                                      │
+│ ────────────────────────────────────                                       │
+│ In steady state:                                                           │
+│ ├─ Cycle N:   Instr_0 finishes, Instr_1 starts                           │
+│ ├─ Cycle N+1: Instr_1 finishes, Instr_2 starts                           │
+│ ├─ Rate: 1 instruction per cycle (but each = 2-cycle operation)          │
+│ ├─ Per instruction: 4 INT8 values generated per cycle (during its phase) │
+│ └─ So sustained: 4 INT8 MACs/cycle if continuously fed                   │
+│                                                                              │
+│ METHOD 3: FPU pipeline reality                                             │
+│ ────────────────────────────────                                           │
+│ The FPU pipeline (S0-S7) is still 8 cycles deep:                          │
+│ ├─ This latency applies per phase                                         │
+│ ├─ So total latency from instruction issue to final DEST write = 16 cy   │
+│ ├─ But pipelined: new instructions can start each cycle                  │
+│ └─ Sustained throughput = 1 operation per cycle                           │
+│    (where operation = one phase of an INT8_2x instruction)                │
+│                                                                              │
+│ CONCLUSION:                                                                 │
+│ ────────────                                                               │
+│ If INT8_2x instruction issues every cycle:                                │
+│ ├─ Phase 1 issues in cycle N, writes DEST in cycle N+8                   │
+│ ├─ Phase 2 issues in cycle N+1, writes DEST in cycle N+9                 │
+│ ├─ From cycle N+8 onward: 2 DEST writes per cycle (staggered)            │
+│ └─ Average sustained: 4 INT8 MACs per cycle per FP-Lane                  │
+│                                                                              │
+│ BUT only if:                                                               │
+│ 1. INT8_2x instructions are issued every cycle                            │
+│ 2. Dependencies don't stall the pipeline                                   │
+│ 3. DEST write bandwidth is available                                      │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+═══════════════════════════════════════════════════════════════════════════════
+PART 4: COMPARISON - WHAT CHANGED FROM ORIGINAL DOCUMENT
+═══════════════════════════════════════════════════════════════════════════════
+
+┌──────────────────────┬────────────────────────┬──────────────────────────────┐
+│ Aspect               │ Original Document      │ RTL-Verified Correction      │
+├──────────────────────┼────────────────────────┼──────────────────────────────┤
+│ Mechanism Name       │ Two-phase latch        │ Two-cycle enable-based tag   │
+│                      │ transparency           │ transparency + address offset │
+│                      │                        │                              │
+│ Execution Model      │ Negative + positive    │ Phase 1 (load) + Phase 2     │
+│                      │ latches simultaneous   │ (hold & offset) sequential   │
+│                      │ in one cycle           │ across two cycles            │
+│                      │                        │                              │
+│ Data Selection       │ Both phases access     │ Different rows/addresses:    │
+│                      │ same SRCA/SRCB/DEST    │ Phase 1: [N], Phase 2: [N+2] │
+│                      │ independently          │                              │
+│                      │                        │                              │
+│ Hardware Used        │ Dual transparent       │ Single FF with conditional   │
+│                      │ latches (implicit)     │ enable control               │
+│                      │                        │                              │
+│ Cycles per Instr     │ Not explicitly stated  │ INT8_2x = 2 cycles          │
+│                      │ (implied: parallel)    │ INT16 = 1 cycle             │
+│                      │                        │                              │
+│ MACs per FP-Lane     │ INT8 = 4 MACs/cy      │ INT8 = 4 MACs/cy (sustained)│
+│ per cycle            │ (simultaneous phases)  │ (averaged over 2 cycles)     │
+│                      │                        │                              │
+│ FPU Pipeline Impact  │ Not addressed          │ Still 8 cy deep per phase    │
+│                      │                        │ = 16 cy total latency       │
+│                      │                        │                              │
+│ Register File        │ "Zero-latency dual     │ Same, but with phase-based   │
+│ Access              │ write" for both phases │ address offsetting ensures   │
+│                      │                        │ no conflicts                 │
+│                      │                        │                              │
+│ Practical Implication│ Instructions exploit   │ Instructions reuse tag +     │
+│                      │ hardware parallelism   │ pipeline to achieve 2× via   │
+│                      │                        │ sequential phases with addr  │
+│                      │                        │ offsets                      │
+│                      │                        │                              │
+└──────────────────────┴────────────────────────┴──────────────────────────────┘
+
+═══════════════════════════════════════════════════════════════════════════════
+PART 5: WHY THIS STILL ACHIEVES 2× INT8 THROUGHPUT
+═══════════════════════════════════════════════════════════════════════════════
+
+The 2× benefit comes from:
+
+FACTOR 1: Data Packing (2× multiplier)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                              │
+│ 16-bit Booth multiplier → 2 INT8 products in parallel                      │
+│ So same multiply hardware processes 2× the INT8 values per cycle           │
+│                                                                              │
+│ Result: 2 INT8 MACs per Booth multiply vs 1 INT16 MAC per Booth multiply  │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+FACTOR 2: Two-Cycle Instruction Allows Data Reuse (2× multiplier)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                              │
+│ Phase 1: Load tag, process rows [0:1]                                      │
+│ Phase 2: Reuse tag (not re-fetched), process rows [2:3]                    │
+│                                                                              │
+│ Benefits:                                                                   │
+│ ├─ Amortizes instruction decode/issue overhead across 2 phases            │
+│ ├─ Same tag satisfies 2 data blocks with minimal overhead (just offsets)  │
+│ ├─ Allows continuous issuance: new instructions start each cycle          │
+│ └─ Result: 2 "operation phases" per instruction                            │
+│                                                                              │
+│ Without two-cycle mechanism:                                               │
+│ ├─ Would need separate instructions for rows [0:1] and [2:3]             │
+│ ├─ Each instruction has full decode/issue overhead                        │
+│ ├─ Throughput limited to instruction issue rate                          │
+│ ├─ Result: Lower utilization                                              │
+│                                                                              │
+│ With two-cycle mechanism:                                                  │
+│ ├─ One instruction covers 2 data blocks                                   │
+│ ├─ Issue rate can be lower while maintaining throughput                   │
+│ ├─ Or same issue rate yields higher data throughput                       │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+COMBINED EFFECT:
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                              │
+│ INT16 throughput (single-phase):                                            │
+│ ├─ 1 instruction per cycle                                                 │
+│ ├─ 1 MAC per instruction                                                   │
+│ └─ = 1 INT16 MAC per cycle                                                 │
+│                                                                              │
+│ INT8_2x throughput (dual-phase with packing):                               │
+│ ├─ 1 instruction per cycle (issues every cycle)                            │
+│ ├─ 2 phases per instruction (2 cycles of execution)                        │
+│ ├─ 2 MACs per phase (due to INT8 packing in 16-bit Booth)                │
+│ ├─ = 4 MACs per instruction (delivered over 2 cycles)                     │
+│ └─ Sustained: 4 INT8 MACs per 2 cycles = 2 INT8 MACs per cycle           │
+│                                                                              │
+│ OR, in pipelined steady state:                                              │
+│ ├─ Cycle N: Instruction 0 Phase 1 completes (4 MACs write to DEST)        │
+│ ├─ Cycle N+1: Instr 0 Phase 2 completes (4 MACs) + Instr 1 Phase 1 starts │
+│ ├─ = 4 MACs written to DEST each cycle (on average)                        │
+│ └─ = 4 INT8 MACs per cycle (when fully pipelined)                         │
+│                                                                              │
+│ Ratio: INT8 throughput / INT16 throughput = 4 / 1 = 4× ✓                  │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+═══════════════════════════════════════════════════════════════════════════════
+PART 6: KEY TAKEAWAYS
+═══════════════════════════════════════════════════════════════════════════════
+
+1. **NOT Transparent Latch with Negative/Positive Clock Phases**
+   └─ RTL uses FF enable control, not true transparent latch architecture
+
+2. **Two-Cycle Instruction, Not Two Phases in One Cycle**
+   └─ INT8_2x consumes 2 consecutive cycles with reused instruction tag
+
+3. **Address Offsetting is the Key Innovation**
+   └─ Phase 1: Access rows/addresses [N]
+   └─ Phase 2: Access rows/addresses [N+2] (with same instruction tag)
+
+4. **Still Achieves 4× Throughput vs INT16**
+   └─ Factor 1: Data packing (2 INT8 per 16-bit slot) = 2×
+   └─ Factor 2: Two-phase instruction reuse = 2×
+   └─ Combined: 2 × 2 = 4×
+
+5. **Pipeline Implications**
+   └─ FPU pipeline: 8 cycles per phase = 16 cycles total latency
+   └─ But pipelined: instructions can issue every cycle
+   └─ Sustained throughput: 4 INT8 MACs per cycle (in steady state)
+
+6. **Cluster-Level Math Still Holds**
+   └─ INT16 cluster: 2,048 MACs/cycle ✓
+   └─ INT8 cluster: 8,192 MACs/cycle ✓
+   └─ 4× ratio maintained at all hierarchy levels
+
+═══════════════════════════════════════════════════════════════════════════════

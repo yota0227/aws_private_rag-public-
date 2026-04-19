@@ -1,0 +1,15 @@
+Module,File,BOS_Exists,NOCCLK_plain,NOCCLK_vir,NOCCLK_Period_plain,NOCCLK_Period_vir,Δ_NOCCLK_plain,Δ_NOCCLK_Period_plain,AICLK_plain,AICLK_vir,AICLK_Period_plain,AICLK_Period_vir,OVLCLK_plain,OVLCLK_vir,OVLCLK_Period_plain,OVLCLK_Period_vir
+trinity_noc2axi_n_opt,trinity_noc2axi_n_opt.final.sdc,No,2,36,1,35,N/A,N/A,2,2,1,3,2,2,1,3
+trinity_noc2axi_ne_opt,trinity_noc2axi_ne_opt.final.sdc,Yes,2,32,1,31,2,-32,2,2,1,3,2,2,1,3
+trinity_noc2axi_nw_opt,trinity_noc2axi_nw_opt.final.sdc,Yes,2,32,1,31,2,-32,2,2,1,3,2,2,1,3
+tt_disp_eng_l1_partition,tt_disp_eng_l1_partition.final.sdc,No,4,5,1,3,N/A,N/A,0,0,0,0,0,2,0,1
+tt_disp_eng_noc_niu_router,tt_disp_eng_noc_niu_router.final.sdc,No,3,41,1,36,N/A,N/A,0,2,0,1,3,28,1,29
+tt_disp_eng_overlay_wrapper,tt_disp_eng_overlay_wrapper.final.sdc,No,17,65,1,66,N/A,N/A,0,0,0,0,17,63,1,64
+tt_dispatch_engine,tt_dispatch_engine.final.sdc,No,1,4,1,3,N/A,N/A,0,0,0,0,1,1,1,2
+tt_fpu_gtile,tt_fpu_gtile.final.sdc,Yes,0,0,0,0,0,0,3,13525,9,13522,0,0,0,0
+tt_instrn_engine_wrapper,tt_instrn_engine_wrapper.final.sdc,Yes,0,0,0,0,0,0,7,34282,9,34280,0,0,0,0
+tt_neo_overlay_wrapper,tt_neo_overlay_wrapper.final.sdc,Yes,2,10414,1,10412,0,-2,3,7372,1,7368,1,1190,1,1188
+tt_t6_l1_partition,tt_t6_l1_partition.final.sdc,Yes,2,8334,1,8330,0,-2,2,37504,1,37502,0,0,0,0
+tt_trin_disp_eng_noc_niu_router_east,tt_trin_disp_eng_noc_niu_router_east.final.sdc,No,7,31,1,32,N/A,N/A,0,2,0,1,3,30,1,31
+tt_trin_disp_eng_noc_niu_router_west,tt_trin_disp_eng_noc_niu_router_west.final.sdc,No,7,31,1,32,N/A,N/A,0,2,0,1,3,30,1,31
+tt_trin_noc_niu_router_wrap,tt_trin_noc_niu_router_wrap.final.sdc,Yes,2,18789,1,18785,0,-2,2,8670,1,8667,1,1142,1,1137

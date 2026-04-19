@@ -1,0 +1,36 @@
+No.,Check,Category,Constraint Pattern,BOS_ORG Files,V10_TT_ORG Files,Value Example BOS_ORG,Value Example V10_TT_ORG,Delta,Severity,Notes
+1,O,CLOCK DEFINITIONS,create_clock -name AICLK,All core files,All core files,-period $::AICLK_PERIOD,-period $::AICLK_PERIOD,0,LOW,AI clock period unchanged
+2,O,CLOCK DEFINITIONS,create_clock -name NOCCLK,All core files,All core files,-period $::NOCCLK_PERIOD,-period $::NOCCLK_PERIOD,0,LOW,NOC clock period unchanged
+3,O,CLOCK DEFINITIONS,create_clock -name OVLCLK,All core files,All core files,-period $::OVLCLK_PERIOD,-period $::OVLCLK_PERIOD,0,LOW,Overlay clock period unchanged
+4,X,CLOCK DEFINITIONS,create_clock -name TCK,NOT PRESENT,tt_disp_eng_overlay_wrapper.final.sdc,N/A,-period $::TCK_PERIOD,+1,MEDIUM,NEW IJTAG test clock from dispatch engine
+5,X,CLOCK DEFINITIONS,create_clock -name Tessent,NOT PRESENT,tt_disp_eng_l1_partition.final.sdc,N/A,-period $::vir_tessent_ssn_bus_clock_network_PERIOD,+1,MEDIUM,NEW DFX test clock for dispatch L1
+6,X,CLOCK DEFINITIONS,PRTNUN_CLK_* removed,7 clocks defined,NOT PRESENT,PRTNUN_CLK_0/1/2/3/FPU_L/FPU_R/L1/NOC_L1,CONSOLIDATED,-7,HIGH,Partition clocks consolidated into dispatch hierarchy
+7,X,OUTPUT_DELAY,ck_feedthru 80%,0,tt_disp_eng_* files,N/A,80.0 * ck_feedthru / 100,+91,CRITICAL,NEW dispatch_to_tensix timing margin (tightened)
+8,X,OUTPUT_DELAY,vir_NOCCLK 80%,~70,~98,70-80% range,80.0 * NOC / 100,+28,CRITICAL,NEW NOC domain constraint on dispatch_to_tensix
+9,X,OUTPUT_DELAY,vir_OVLCLK 80%,0,tt_disp_eng_* files,N/A,80.0 * OVLCLK / 100,+28,CRITICAL,NEW OVERLAY domain constraint on dispatch_to_tensix
+10,X,OUTPUT_DELAY,vir_NOCCLK 65%,~422,~460,65.0% constraint,65.0 * NOC / 100,+38,HIGH,Dispatch NOC routing timing paths
+11,X,OUTPUT_DELAY,vir_OVLCLK 65%,0,tt_disp_eng_* files,N/A,65.0 * OVLCLK / 100,+38,HIGH,Dispatch overlay routing timing paths
+12,X,OUTPUT_DELAY,ck_feedthru 70%,~347,~367,70.0% constraint,70.0 * feedthru / 100,+20,MEDIUM,Dispatch L1 output timing
+13,X,INPUT_DELAY,0% (zero-delay test),~480,~556,test signals delayed 0%,0 * PERIOD / 100,+76,HIGH,NEW test control inputs in dispatch L1 (test_si/test_so)
+14,X,INPUT_DELAY,100% (default),~70509,~70437,100% default path,100.0 * PERIOD / 100,-72,LOW,Slight reduction (dispatch L1 uses 0% instead)
+15,X,MULTICYCLE_PATH,set_multicycle_path -setup,All files,All files,Various MCP values,-setup 4,+165 new,HIGH,+165 dispatch MCP (+67 overlay) -132 core
+16,X,MULTICYCLE_PATH,overlay_wrapper MCP,69,67,69 paths,67 paths,-2,MEDIUM,Core overlay optimized
+17,X,MULTICYCLE_PATH,dispatch_overlay_wrapper MCP,NOT PRESENT,tt_disp_eng_overlay_wrapper,N/A,+67,+67,HIGH,NEW dispatch overlay multi-cycle paths (largest)
+18,X,MULTICYCLE_PATH,dispatch_noc_niu_router MCP,NOT PRESENT,tt_disp_eng_noc_niu_router,N/A,+38,+38,HIGH,NEW dispatch NOC routing multi-cycle
+19,X,FALSE_PATH,set_false_path -setup,All files,All files,Various patterns,-setup ...,+31,HIGH,+205 dispatch (+102 overlay) -174 old
+20,X,FALSE_PATH,dispatch_overlay false,87 per dispatch,102 per dispatch_overlay,87 (old west/east),102 (NEW),+15,HIGH,Dispatch overlay async paths INCREASED
+21,X,FALSE_PATH,dispatch_noc_niu false,NOT PRESENT,tt_disp_eng_noc_niu_router,N/A,+46,+46,HIGH,NEW dispatch NOC false paths
+22,X,CLOCK_UNCERTAINTY,set_clock_uncertainty,1,464,0.100 [all_clocks],0.100 [all_clocks],+463,CRITICAL,NEW clock skew constraints added (dispatch-driven)
+23,X,MAX_TRANSITION,set_max_transition,270,280,0.250 [all_clocks],0.250 [all_clocks],+10,MEDIUM,Dispatch power intent constraints
+24,X,REMOVED,set_ideal_network,51,0,set_ideal_network -no_delay,N/A,-51,MEDIUM,Network modeling simplified in V10_TT
+25,X,REMOVED,set_case_analysis,5,0,set_case_analysis 1'b0,N/A,-5,LOW,Mode select constraints removed
+26,O,STABLE,set_clock_groups,54,53,set_clock_groups -exclusive,-exclusive,−1,LOW,Asynchronous clock groups (one minor reduction)
+27,O,STABLE,create_generated_clock,3,3,OVL_UNCORE_CLK divide_by 2,divide_by 2,0,LOW,Generated clock hierarchy unchanged
+28,X,FILE_CHANGES,Dispatch Architecture,tt_dispatch_top_west/east (2 files),tt_dispatch_engine + 5 variants (6 files),280 constraints each,+882 total,+322,CRITICAL,Complete dispatch restructuring
+29,X,FILE_CHANGES,Router Architecture,trinity_noc2axi_router_ne/nw_opt (2 files),trinity_noc2axi_n_opt (1 new),24 each,24 new,−24 old + 24 new,HIGH,Router consolidation + center variant
+30,X,FILE_CHANGES,L1 Memory Timing,tt_t6_l1_partition (1 file),tt_t6_l1_partition + tt_disp_eng_l1_partition (2 files),8,642 constraints,+102 (dispatch L1),+102,MEDIUM,Dispatch L1 separate with different timing
+31,X,REMOVED,Tensix ETM variant,tt_tensix_with_l1.etm.sdc,NOT PRESENT,624 constraints,REMOVED,−624,MEDIUM,ETM debug variant no longer included
+32,X,CRITICAL_FINDING,Tri-Domain Dispatch Timing,ck_feedthru 50%,ck_feedthru 80% + NOC 80% + OVL 80%,Single clock domain,3 clock domains,+147 paths,CRITICAL,Fundamental architecture change
+33,X,CRITICAL_FINDING,L1 Timing Divergence,Tensix L1 @ 70%,Dispatch L1 @ 60% feedthru + 50% NOC,Feed 70% NOC 70%,Feed 60% NOC 50% (tighter),−10–20%,CRITICAL,Not interchangeable designs
+34,X,CRITICAL_FINDING,Partition Clock Consolidation,PRTNUN_CLK_* (7 clocks),Implicit in dispatch engine,Explicit timing per partition,Consolidated,−7 clocks,CRITICAL,Major clock distribution redesign
+35,O,SUMMARY,Total Constraint Count,151,170,151,635,+465,+0.31%,SMALL,Overall modest growth despite massive redistribution
