@@ -422,3 +422,65 @@ class TestClearIndexAndReparseAllDispatch:
 
     def test_reparse_all_registered(self):
         assert "reparse_all" in ah._STAGE_HANDLERS
+
+
+# ---------------------------------------------------------------------------
+# 24–27. Dispatch tests: chip_config, edc_topology, noc_protocol, overlay_deep_analysis
+# ---------------------------------------------------------------------------
+
+class TestSubsystemStageDispatch:
+    """Dispatcher routes subsystem analysis stages to correct handlers."""
+
+    def test_dispatch_chip_config(self):
+        mock_fn = MagicMock(return_value={"status": "completed", "files_processed": 3})
+        with patch.dict(ah._STAGE_HANDLERS, {"chip_config": mock_fn}):
+            event = {"stage": "chip_config", "pipeline_id": "tt_20260221"}
+            result = ah.analysis_handler(event)
+            mock_fn.assert_called_once_with(event)
+            assert result["status"] == "completed"
+            assert result["files_processed"] == 3
+
+    def test_dispatch_edc_topology(self):
+        mock_fn = MagicMock(return_value={"status": "completed", "modules_processed": 10})
+        with patch.dict(ah._STAGE_HANDLERS, {"edc_topology": mock_fn}):
+            event = {"stage": "edc_topology", "pipeline_id": "tt_20260221"}
+            result = ah.analysis_handler(event)
+            mock_fn.assert_called_once_with(event)
+            assert result["status"] == "completed"
+            assert result["modules_processed"] == 10
+
+    def test_dispatch_noc_protocol(self):
+        mock_fn = MagicMock(return_value={"status": "completed", "noc_modules": 5, "routing_algorithms": 3})
+        with patch.dict(ah._STAGE_HANDLERS, {"noc_protocol": mock_fn}):
+            event = {"stage": "noc_protocol", "pipeline_id": "tt_20260221"}
+            result = ah.analysis_handler(event)
+            mock_fn.assert_called_once_with(event)
+            assert result["status"] == "completed"
+            assert result["routing_algorithms"] == 3
+
+    def test_dispatch_overlay_deep_analysis(self):
+        mock_fn = MagicMock(return_value={"status": "completed", "overlay_modules": 8, "roles_identified": 5})
+        with patch.dict(ah._STAGE_HANDLERS, {"overlay_deep_analysis": mock_fn}):
+            event = {"stage": "overlay_deep_analysis", "pipeline_id": "tt_20260221"}
+            result = ah.analysis_handler(event)
+            mock_fn.assert_called_once_with(event)
+            assert result["status"] == "completed"
+            assert result["roles_identified"] == 5
+
+
+# ---------------------------------------------------------------------------
+# 28. New stages registered in _STAGE_HANDLERS
+# ---------------------------------------------------------------------------
+
+class TestSubsystemStageHandlersRegistered:
+    def test_chip_config_registered(self):
+        assert "chip_config" in ah._STAGE_HANDLERS
+
+    def test_edc_topology_registered(self):
+        assert "edc_topology" in ah._STAGE_HANDLERS
+
+    def test_noc_protocol_registered(self):
+        assert "noc_protocol" in ah._STAGE_HANDLERS
+
+    def test_overlay_deep_analysis_registered(self):
+        assert "overlay_deep_analysis" in ah._STAGE_HANDLERS

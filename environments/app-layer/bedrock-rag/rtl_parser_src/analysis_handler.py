@@ -23,6 +23,19 @@ from topic_classifier import classify_topic, suggest_inherited_topic
 from claim_generator import generate_claims
 from hdd_generator import generate_hdd_section
 from variant_delta import extract_variant_delta
+from package_extractor import extract_package_params, identify_chip_config, extract_enum_mapping
+from edc_analyzer import (
+    build_edc_topology, identify_harvest_bypass,
+    extract_serial_bus_interface, build_node_id_table,
+)
+from noc_analyzer import (
+    extract_routing_algorithms, extract_flit_structure,
+    extract_struct_fields, extract_axi_address_gasket, identify_security_fence,
+)
+from overlay_analyzer import (
+    extract_cpu_cluster_params, identify_submodule_roles,
+    extract_l1_cache_params, extract_apb_slaves,
+)
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -1225,6 +1238,356 @@ def _invoke_reparse_batch(
 
 
 # ---------------------------------------------------------------------------
+# Task 11.2: Chip Config (Package Parameter Extraction)
+# ---------------------------------------------------------------------------
+
+def handle_chip_config(event: dict[str, Any]) -> dict[str, Any]:
+    """패키지 파라미터 추출 및 칩 구성 분석 핸들러.
+
+    1. S3에서 *_pkg.sv 파일을 읽기
+    2. extract_package_params() + identify_chip_config() + extract_enum_mapping()
+    3. OpenSearch에 analysis_type=chip_config 문서로 인덱싱
+    4. DynamoDB 상태 업데이트
+    """
+    pipeline_id = event["pipeline_id"]
+    stage = "chip_config"
+    _update_dynamodb_status(pipeline_id, stage, "in_progress")
+
+    try:
+        s3_prefix = event.get("s3_prefix", f"rtl-sources/{pipeline_id}/")
+        files_processed = 0
+
+        paginator = s3_client.get_paginator("list_objects_v2")
+        pages = paginator.paginate(Bucket=RTL_S3_BUCKET, Prefix=s3_prefix)
+
+        for page in pages:
+            for obj in page.get("Contents", []):
+                key = obj["Key"]
+                if not key.endswith("_pkg.sv"):
+                    continue
+
+                try:
+                    resp = s3_client.get_object(Bucket=RTL_S3_BUCKET, Key=key)
+                    content = resp["Body"].read().decode("utf-8", errors="replace")
+                except Exception as e:
+                    logger.warning(json.dumps({
+                        "event": "chip_config_s3_read_error",
+                        "key": key, "error": str(e),
+                    }))
+                    continue
+
+                params = extract_package_params(content)
+                chip_config = identify_chip_config(params)
+                enum_mapping = extract_enum_mapping(content)
+
+                pkg_name = key.rsplit("/", 1)[-1]
+                doc = {
+                    "pipeline_id": pipeline_id,
+                    "analysis_type": "chip_config",
+                    "package_file": pkg_name,
+                    "file_path": key,
+                    "parameters": chip_config.get("chip_params", {}),
+                    "grid_size": chip_config.get("grid_size", {}),
+                    "enums": enum_mapping,
+                    "all_localparams": params.get("localparams", {}),
+                    "all_parameters": params.get("parameters", {}),
+                }
+                _index_document(doc)
+                files_processed += 1
+
+        _update_dynamodb_status(pipeline_id, stage, "completed",
+                               extra={"files_processed": files_processed})
+
+        logger.info(json.dumps({
+            "event": "chip_config_complete",
+            "pipeline_id": pipeline_id,
+            "files_processed": files_processed,
+        }))
+        return {"status": "completed", "files_processed": files_processed}
+
+    except Exception as e:
+        _update_dynamodb_status(pipeline_id, stage, "failed",
+                               error_message=str(e))
+        logger.error(json.dumps({
+            "event": "chip_config_error",
+            "pipeline_id": pipeline_id,
+            "error": str(e),
+        }))
+        raise
+
+
+# ---------------------------------------------------------------------------
+# Task 11.5: EDC Topology Analysis
+# ---------------------------------------------------------------------------
+
+def handle_edc_topology(event: dict[str, Any]) -> dict[str, Any]:
+    """EDC 토폴로지 분석 핸들러.
+
+    1. OpenSearch에서 EDC 관련 모듈 조회
+    2. build_edc_topology() + identify_harvest_bypass() + build_node_id_table()
+    3. S3에서 tt_edc1_pkg.sv 읽어 extract_serial_bus_interface()
+    4. OpenSearch에 analysis_type=edc_topology 문서로 인덱싱
+    5. DynamoDB 상태 업데이트
+    """
+    pipeline_id = event["pipeline_id"]
+    stage = "edc_topology"
+    _update_dynamodb_status(pipeline_id, stage, "in_progress")
+
+    try:
+        # OpenSearch에서 EDC 모듈 조회
+        parsed_docs = _opensearch_scroll_query(pipeline_id, "module_parse")
+        edc_modules = [
+            d for d in parsed_docs
+            if d.get("module_name", "").lower().startswith("tt_edc")
+        ]
+
+        if not edc_modules:
+            _update_dynamodb_status(pipeline_id, stage, "completed",
+                                   extra={"modules_processed": 0})
+            return {"status": "completed", "modules_processed": 0}
+
+        topology = build_edc_topology(edc_modules)
+        bypass_paths = identify_harvest_bypass(edc_modules)
+        node_table = build_node_id_table(edc_modules)
+
+        # S3에서 tt_edc1_pkg.sv 읽기
+        serial_bus: dict[str, Any] = {"signals": []}
+        s3_prefix = event.get("s3_prefix", f"rtl-sources/{pipeline_id}/")
+        try:
+            paginator = s3_client.get_paginator("list_objects_v2")
+            pages = paginator.paginate(Bucket=RTL_S3_BUCKET, Prefix=s3_prefix)
+            for page in pages:
+                for obj in page.get("Contents", []):
+                    key = obj["Key"]
+                    if "edc" in key.lower() and key.endswith("_pkg.sv"):
+                        resp = s3_client.get_object(Bucket=RTL_S3_BUCKET, Key=key)
+                        pkg_content = resp["Body"].read().decode("utf-8", errors="replace")
+                        serial_bus = extract_serial_bus_interface(pkg_content)
+                        break
+                if serial_bus.get("signals"):
+                    break
+        except Exception as e:
+            logger.warning(json.dumps({
+                "event": "edc_pkg_read_error", "error": str(e),
+            }))
+
+        doc = {
+            "pipeline_id": pipeline_id,
+            "analysis_type": "edc_topology",
+            "ring_topology": {
+                "segment_a": topology.get("segment_a", []),
+                "u_turn": topology.get("u_turn", ""),
+                "segment_b": topology.get("segment_b", []),
+            },
+            "harvest_bypass_paths": bypass_paths,
+            "serial_bus_interface": serial_bus,
+            "node_id_table": node_table,
+            "connections": topology.get("connections", []),
+        }
+        _index_document(doc)
+
+        _update_dynamodb_status(pipeline_id, stage, "completed",
+                               extra={"modules_processed": len(edc_modules)})
+
+        logger.info(json.dumps({
+            "event": "edc_topology_complete",
+            "pipeline_id": pipeline_id,
+            "modules_processed": len(edc_modules),
+        }))
+        return {"status": "completed", "modules_processed": len(edc_modules)}
+
+    except Exception as e:
+        _update_dynamodb_status(pipeline_id, stage, "failed",
+                               error_message=str(e))
+        logger.error(json.dumps({
+            "event": "edc_topology_error",
+            "pipeline_id": pipeline_id,
+            "error": str(e),
+        }))
+        raise
+
+
+# ---------------------------------------------------------------------------
+# Task 11.8: NoC Protocol Analysis
+# ---------------------------------------------------------------------------
+
+def handle_noc_protocol(event: dict[str, Any]) -> dict[str, Any]:
+    """NoC 프로토콜 분석 핸들러.
+
+    1. S3에서 tt_noc_pkg.sv 읽기
+    2. extract_routing_algorithms() + extract_flit_structure() + extract_axi_address_gasket()
+    3. OpenSearch에서 NoC 모듈 조회 → identify_security_fence()
+    4. OpenSearch에 analysis_type=noc_protocol 문서로 인덱싱
+    5. DynamoDB 상태 업데이트
+    """
+    pipeline_id = event["pipeline_id"]
+    stage = "noc_protocol"
+    _update_dynamodb_status(pipeline_id, stage, "in_progress")
+
+    try:
+        s3_prefix = event.get("s3_prefix", f"rtl-sources/{pipeline_id}/")
+        pkg_content = ""
+
+        # S3에서 tt_noc_pkg.sv 읽기
+        try:
+            paginator = s3_client.get_paginator("list_objects_v2")
+            pages = paginator.paginate(Bucket=RTL_S3_BUCKET, Prefix=s3_prefix)
+            for page in pages:
+                for obj in page.get("Contents", []):
+                    key = obj["Key"]
+                    if "noc" in key.lower() and key.endswith("_pkg.sv"):
+                        resp = s3_client.get_object(Bucket=RTL_S3_BUCKET, Key=key)
+                        pkg_content = resp["Body"].read().decode("utf-8", errors="replace")
+                        break
+                if pkg_content:
+                    break
+        except Exception as e:
+            logger.warning(json.dumps({
+                "event": "noc_pkg_read_error", "error": str(e),
+            }))
+
+        routing = extract_routing_algorithms(pkg_content) if pkg_content else []
+        flit = extract_flit_structure(pkg_content) if pkg_content else {}
+        axi_gasket = extract_axi_address_gasket(pkg_content) if pkg_content else {}
+
+        # OpenSearch에서 NoC 모듈 조회 → 보안 펜스 식별
+        parsed_docs = _opensearch_scroll_query(pipeline_id, "module_parse")
+        noc_modules = [
+            d for d in parsed_docs
+            if d.get("module_name", "").lower().startswith("tt_noc")
+        ]
+        security = identify_security_fence(noc_modules)
+
+        doc = {
+            "pipeline_id": pipeline_id,
+            "analysis_type": "noc_protocol",
+            "routing_algorithms": routing,
+            "flit_structure": flit,
+            "axi_address_gasket": axi_gasket,
+            "security_fence": security,
+        }
+        _index_document(doc)
+
+        _update_dynamodb_status(pipeline_id, stage, "completed",
+                               extra={"noc_modules": len(noc_modules)})
+
+        logger.info(json.dumps({
+            "event": "noc_protocol_complete",
+            "pipeline_id": pipeline_id,
+            "routing_algorithms": len(routing),
+            "noc_modules": len(noc_modules),
+        }))
+        return {"status": "completed", "noc_modules": len(noc_modules),
+                "routing_algorithms": len(routing)}
+
+    except Exception as e:
+        _update_dynamodb_status(pipeline_id, stage, "failed",
+                               error_message=str(e))
+        logger.error(json.dumps({
+            "event": "noc_protocol_error",
+            "pipeline_id": pipeline_id,
+            "error": str(e),
+        }))
+        raise
+
+
+# ---------------------------------------------------------------------------
+# Task 11.11: Overlay Deep Analysis
+# ---------------------------------------------------------------------------
+
+def handle_overlay_deep_analysis(event: dict[str, Any]) -> dict[str, Any]:
+    """Overlay 심화 분석 핸들러.
+
+    1. S3에서 tt_overlay_pkg.sv 읽기 → extract_cpu_cluster_params()
+    2. OpenSearch에서 Overlay 모듈 조회 → identify_submodule_roles()
+    3. S3에서 tt_overlay_memory_wrapper 읽기 → extract_l1_cache_params()
+    4. S3에서 tt_overlay_reg_xbar_slave_decode 읽기 → extract_apb_slaves()
+    5. OpenSearch에 analysis_type=overlay_deep 문서로 인덱싱
+    6. DynamoDB 상태 업데이트
+    """
+    pipeline_id = event["pipeline_id"]
+    stage = "overlay_deep_analysis"
+    _update_dynamodb_status(pipeline_id, stage, "in_progress")
+
+    try:
+        s3_prefix = event.get("s3_prefix", f"rtl-sources/{pipeline_id}/")
+
+        # S3에서 overlay 관련 파일 읽기
+        pkg_content = ""
+        memory_content = ""
+        xbar_content = ""
+
+        try:
+            paginator = s3_client.get_paginator("list_objects_v2")
+            pages = paginator.paginate(Bucket=RTL_S3_BUCKET, Prefix=s3_prefix)
+            for page in pages:
+                for obj in page.get("Contents", []):
+                    key = obj["Key"]
+                    lower_key = key.lower()
+                    if "overlay" in lower_key and key.endswith("_pkg.sv") and not pkg_content:
+                        resp = s3_client.get_object(Bucket=RTL_S3_BUCKET, Key=key)
+                        pkg_content = resp["Body"].read().decode("utf-8", errors="replace")
+                    elif "overlay_memory_wrapper" in lower_key and not memory_content:
+                        resp = s3_client.get_object(Bucket=RTL_S3_BUCKET, Key=key)
+                        memory_content = resp["Body"].read().decode("utf-8", errors="replace")
+                    elif "xbar_slave_decode" in lower_key and not xbar_content:
+                        resp = s3_client.get_object(Bucket=RTL_S3_BUCKET, Key=key)
+                        xbar_content = resp["Body"].read().decode("utf-8", errors="replace")
+        except Exception as e:
+            logger.warning(json.dumps({
+                "event": "overlay_s3_read_error", "error": str(e),
+            }))
+
+        cpu_params = extract_cpu_cluster_params(pkg_content) if pkg_content else {}
+
+        # OpenSearch에서 Overlay 모듈 조회
+        parsed_docs = _opensearch_scroll_query(pipeline_id, "module_parse")
+        overlay_modules = [
+            d for d in parsed_docs
+            if d.get("module_name", "").lower().startswith("tt_overlay")
+            or d.get("module_name", "") in (
+                "tt_idma_wrapper", "tt_rocc_accel", "tt_fds_wrapper",
+            )
+        ]
+
+        roles = identify_submodule_roles(overlay_modules)
+        l1_cache = extract_l1_cache_params(memory_content) if memory_content else {}
+        apb_slaves = extract_apb_slaves(xbar_content) if xbar_content else []
+
+        doc = {
+            "pipeline_id": pipeline_id,
+            "analysis_type": "overlay_deep",
+            "cpu_cluster": cpu_params,
+            "submodule_roles": roles,
+            "l1_cache": l1_cache,
+            "apb_slaves": apb_slaves,
+        }
+        _index_document(doc)
+
+        _update_dynamodb_status(pipeline_id, stage, "completed",
+                               extra={"overlay_modules": len(overlay_modules)})
+
+        logger.info(json.dumps({
+            "event": "overlay_deep_analysis_complete",
+            "pipeline_id": pipeline_id,
+            "overlay_modules": len(overlay_modules),
+            "roles_identified": len(roles),
+        }))
+        return {"status": "completed", "overlay_modules": len(overlay_modules),
+                "roles_identified": len(roles)}
+
+    except Exception as e:
+        _update_dynamodb_status(pipeline_id, stage, "failed",
+                               error_message=str(e))
+        logger.error(json.dumps({
+            "event": "overlay_deep_analysis_error",
+            "pipeline_id": pipeline_id,
+            "error": str(e),
+        }))
+        raise
+
+
+# ---------------------------------------------------------------------------
 # Task 5.6: Main Dispatcher
 # ---------------------------------------------------------------------------
 
@@ -1240,6 +1603,10 @@ _STAGE_HANDLERS = {
     "backfill_pipeline_id": handle_backfill_pipeline_id,
     "clear_index": handle_clear_index,
     "reparse_all": handle_reparse_all,
+    "chip_config": handle_chip_config,
+    "edc_topology": handle_edc_topology,
+    "noc_protocol": handle_noc_protocol,
+    "overlay_deep_analysis": handle_overlay_deep_analysis,
 }
 
 
