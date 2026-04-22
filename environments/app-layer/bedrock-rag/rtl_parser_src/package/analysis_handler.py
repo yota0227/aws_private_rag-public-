@@ -36,6 +36,7 @@ from overlay_analyzer import (
     extract_cpu_cluster_params, identify_submodule_roles,
     extract_l1_cache_params, extract_apb_slaves,
 )
+from sram_inventory import build_sram_inventory
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -755,6 +756,22 @@ def handle_hdd_generation(event: dict[str, Any]) -> dict[str, Any]:
         dataflow_docs = _opensearch_scroll_query(pipeline_id, "dataflow")
         topic_docs = _opensearch_scroll_query(pipeline_id, "topic")
 
+        # 심화 분석 결과 5종 조회 (조회 실패 시 빈 리스트로 폴백)
+        deep_analysis: dict[str, Any] = {}
+        for atype in ("chip_config", "edc_topology", "noc_protocol",
+                       "overlay_deep", "sram_inventory"):
+            try:
+                docs = _opensearch_scroll_query(pipeline_id, atype, max_docs=100)
+                if docs:
+                    deep_analysis[atype] = docs
+            except Exception as da_err:
+                logger.warning(json.dumps({
+                    "event": "deep_analysis_query_fallback",
+                    "pipeline_id": pipeline_id,
+                    "analysis_type": atype,
+                    "error": str(da_err),
+                }))
+
         # 토픽 목록 추출
         topics: set[str] = set()
         for doc in topic_docs:
@@ -778,6 +795,7 @@ def handle_hdd_generation(event: dict[str, Any]) -> dict[str, Any]:
                 result = generate_hdd_section(
                     pipeline_id, topic, hierarchy,
                     clock_docs, dataflow_docs, claim_docs,
+                    deep_analysis=deep_analysis if deep_analysis else None,
                 )
             except RuntimeError as e:
                 logger.error("HDD generation failed for topic=%s: %s", topic, e)
@@ -1244,56 +1262,96 @@ def _invoke_reparse_batch(
 def handle_chip_config(event: dict[str, Any]) -> dict[str, Any]:
     """패키지 파라미터 추출 및 칩 구성 분석 핸들러.
 
-    1. S3에서 *_pkg.sv 파일을 읽기
+    1. OpenSearch module_parse 문서에서 *_pkg.sv 파일 경로만 추출 (S3 ListObjects 최소화)
     2. extract_package_params() + identify_chip_config() + extract_enum_mapping()
     3. OpenSearch에 analysis_type=chip_config 문서로 인덱싱
     4. DynamoDB 상태 업데이트
     """
     pipeline_id = event["pipeline_id"]
     stage = "chip_config"
+    topic_filter = event.get("topic_filter", "")  # 분할 실행 시 토픽 필터
     _update_dynamodb_status(pipeline_id, stage, "in_progress")
 
     try:
-        s3_prefix = event.get("s3_prefix", f"rtl-sources/{pipeline_id}/")
-        files_processed = 0
+        # OpenSearch에서 *_pkg.sv 파일만 직접 쿼리 (module_parse 전체 조회 대신)
+        import requests as _requests
+        pkg_files: list[str] = []
 
-        paginator = s3_client.get_paginator("list_objects_v2")
-        pages = paginator.paginate(Bucket=RTL_S3_BUCKET, Prefix=s3_prefix)
-
-        for page in pages:
-            for obj in page.get("Contents", []):
-                key = obj["Key"]
-                if not key.endswith("_pkg.sv"):
-                    continue
-
-                try:
-                    resp = s3_client.get_object(Bucket=RTL_S3_BUCKET, Key=key)
-                    content = resp["Body"].read().decode("utf-8", errors="replace")
-                except Exception as e:
-                    logger.warning(json.dumps({
-                        "event": "chip_config_s3_read_error",
-                        "key": key, "error": str(e),
-                    }))
-                    continue
-
-                params = extract_package_params(content)
-                chip_config = identify_chip_config(params)
-                enum_mapping = extract_enum_mapping(content)
-
-                pkg_name = key.rsplit("/", 1)[-1]
-                doc = {
+        if OPENSEARCH_ENDPOINT:
+            auth = _get_opensearch_auth()
+            url = f"{OPENSEARCH_ENDPOINT}/{OPENSEARCH_INDEX}/_search"
+            search_body = {
+                "size": 200,
+                "query": {
+                    "bool": {
+                        "must": [
+                            {"term": {"pipeline_id": pipeline_id}},
+                            {"term": {"analysis_type": "module_parse"}},
+                            {"wildcard": {"file_path": "*_pkg.sv"}},
+                        ],
+                    },
+                },
+                "_source": ["file_path"],
+            }
+            try:
+                resp = _requests.post(
+                    url, auth=auth, json=search_body,
+                    headers={"Content-Type": "application/json"}, timeout=30,
+                )
+                resp.raise_for_status()
+                hits = resp.json().get("hits", {}).get("hits", [])
+                for hit in hits:
+                    fp = hit.get("_source", {}).get("file_path", "")
+                    if fp and fp.endswith("_pkg.sv"):
+                        if topic_filter:
+                            fname = fp.rsplit("/", 1)[-1].lower()
+                            if not fname.startswith(topic_filter.lower()):
+                                continue
+                        pkg_files.append(fp)
+            except Exception as q_err:
+                logger.warning(json.dumps({
+                    "event": "chip_config_query_error",
                     "pipeline_id": pipeline_id,
-                    "analysis_type": "chip_config",
-                    "package_file": pkg_name,
-                    "file_path": key,
-                    "parameters": chip_config.get("chip_params", {}),
-                    "grid_size": chip_config.get("grid_size", {}),
-                    "enums": enum_mapping,
-                    "all_localparams": params.get("localparams", {}),
-                    "all_parameters": params.get("parameters", {}),
-                }
-                _index_document(doc)
-                files_processed += 1
+                    "error": str(q_err),
+                }))
+
+        logger.info(json.dumps({
+            "event": "chip_config_pkg_files_found",
+            "pipeline_id": pipeline_id,
+            "topic_filter": topic_filter or "all",
+            "pkg_file_count": len(pkg_files),
+        }))
+
+        files_processed = 0
+        for key in pkg_files:
+            try:
+                resp = s3_client.get_object(Bucket=RTL_S3_BUCKET, Key=key)
+                content = resp["Body"].read().decode("utf-8", errors="replace")
+            except Exception as e:
+                logger.warning(json.dumps({
+                    "event": "chip_config_s3_read_error",
+                    "key": key, "error": str(e),
+                }))
+                continue
+
+            params = extract_package_params(content)
+            chip_config = identify_chip_config(params)
+            enum_mapping = extract_enum_mapping(content)
+
+            pkg_name = key.rsplit("/", 1)[-1]
+            doc = {
+                "pipeline_id": pipeline_id,
+                "analysis_type": "chip_config",
+                "package_file": pkg_name,
+                "file_path": key,
+                "parameters": chip_config.get("chip_params", {}),
+                "grid_size": chip_config.get("grid_size", {}),
+                "enums": enum_mapping,
+                "all_localparams": params.get("localparams", {}),
+                "all_parameters": params.get("parameters", {}),
+            }
+            _index_document(doc)
+            files_processed += 1
 
         _update_dynamodb_status(pipeline_id, stage, "completed",
                                extra={"files_processed": files_processed})
@@ -1590,6 +1648,70 @@ def handle_overlay_deep_analysis(event: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Task 5.6: Main Dispatcher
 # ---------------------------------------------------------------------------
+# Task 16.3: SRAM Inventory
+# ---------------------------------------------------------------------------
+
+def handle_sram_inventory(event: dict[str, Any]) -> dict[str, Any]:
+    """SRAM Inventory 추출 핸들러.
+
+    1. OpenSearch에서 hierarchy 문서 조회
+    2. build_sram_inventory() 호출
+    3. S3에 JSON 저장 + OpenSearch 인덱싱
+    4. DynamoDB 상태 업데이트
+    """
+    pipeline_id = event["pipeline_id"]
+    stage = "sram_inventory"
+    _update_dynamodb_status(pipeline_id, stage, "in_progress")
+
+    try:
+        hierarchy_docs = _opensearch_scroll_query(pipeline_id, "hierarchy")
+        if not hierarchy_docs:
+            # hierarchy가 없으면 module_parse에서 직접 추출 시도
+            hierarchy_docs = _opensearch_scroll_query(pipeline_id, "module_parse")
+
+        inventory = build_sram_inventory(hierarchy_docs)
+
+        # S3에 JSON 저장
+        if RTL_S3_BUCKET:
+            s3_key = f"rtl-parsed/sram_inventory/{pipeline_id}/sram_inventory.json"
+            s3_client.put_object(
+                Bucket=RTL_S3_BUCKET, Key=s3_key,
+                Body=json.dumps(inventory, ensure_ascii=False).encode("utf-8"),
+                ContentType="application/json",
+            )
+
+        # OpenSearch 인덱싱
+        doc = {
+            "pipeline_id": pipeline_id,
+            "analysis_type": "sram_inventory",
+            "sram_inventory": inventory.get("memory_instances", []),
+            "sram_summary": inventory.get("summary", {}),
+        }
+        _index_document(doc)
+
+        total = inventory.get("summary", {}).get("total_count", 0)
+        _update_dynamodb_status(pipeline_id, stage, "completed",
+                               extra={"memory_instances_found": total})
+
+        logger.info(json.dumps({
+            "event": "sram_inventory_complete",
+            "pipeline_id": pipeline_id,
+            "memory_instances_found": total,
+        }))
+        return {"status": "completed", "memory_instances_found": total}
+
+    except Exception as e:
+        _update_dynamodb_status(pipeline_id, stage, "failed",
+                               error_message=str(e))
+        logger.error(json.dumps({
+            "event": "sram_inventory_error",
+            "pipeline_id": pipeline_id,
+            "error": str(e),
+        }))
+        raise
+
+
+# ---------------------------------------------------------------------------
 
 # Stage → handler mapping
 _STAGE_HANDLERS = {
@@ -1607,6 +1729,7 @@ _STAGE_HANDLERS = {
     "edc_topology": handle_edc_topology,
     "noc_protocol": handle_noc_protocol,
     "overlay_deep_analysis": handle_overlay_deep_analysis,
+    "sram_inventory": handle_sram_inventory,
 }
 
 

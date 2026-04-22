@@ -79,7 +79,7 @@ def _search_rtl(event):
     from requests_aws4auth import AWS4Auth
 
     query = event.get("query", "")
-    max_results = int(event.get("max_results", 5))
+    max_results = int(event.get("max_results", 20))
 
     # 필터링 파라미터
     pipeline_id = event.get("pipeline_id", "")

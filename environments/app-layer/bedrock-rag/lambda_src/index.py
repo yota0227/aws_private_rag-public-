@@ -1453,7 +1453,7 @@ def search_archive(event):
 
     topic = body.get('topic', '')
     source = body.get('source', '')
-    max_results = int(body.get('max_results', 5))
+    max_results = int(body.get('max_results', 20))
 
     # RTL 인덱스 직접 검색 분기
     if source == 'rtl_parsed':
@@ -1530,7 +1530,7 @@ def search_archive(event):
         return response(500, {'error': str(e)})
 
 
-def _search_rtl_index(query, max_results=5, topic='', pipeline_id=''):
+def _search_rtl_index(query, max_results=20, topic='', pipeline_id=''):
     """RTL OpenSearch 인덱스 직접 검색 (source='rtl_parsed' 분기)
     module_name, parsed_summary, port_list, instance_list, claim_text, hdd_content 필드를 검색
     topic, pipeline_id 필터링 지원
