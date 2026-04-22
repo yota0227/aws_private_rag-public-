@@ -1273,18 +1273,47 @@ def handle_chip_config(event: dict[str, Any]) -> dict[str, Any]:
     _update_dynamodb_status(pipeline_id, stage, "in_progress")
 
     try:
-        # OpenSearch에서 module_parse 문서의 file_path 추출 → *_pkg.sv 필터링
-        parsed_docs = _opensearch_scroll_query(pipeline_id, "module_parse")
+        # OpenSearch에서 *_pkg.sv 파일만 직접 쿼리 (module_parse 전체 조회 대신)
+        import requests as _requests
         pkg_files: list[str] = []
-        for doc in parsed_docs:
-            fp = doc.get("file_path", "")
-            if fp.endswith("_pkg.sv"):
-                # 토픽 필터가 있으면 해당 토픽 접두사만 처리
-                if topic_filter:
-                    fname = fp.rsplit("/", 1)[-1].lower()
-                    if not fname.startswith(topic_filter.lower()):
-                        continue
-                pkg_files.append(fp)
+
+        if OPENSEARCH_ENDPOINT:
+            auth = _get_opensearch_auth()
+            url = f"{OPENSEARCH_ENDPOINT}/{OPENSEARCH_INDEX}/_search"
+            search_body = {
+                "size": 200,
+                "query": {
+                    "bool": {
+                        "must": [
+                            {"term": {"pipeline_id": pipeline_id}},
+                            {"term": {"analysis_type": "module_parse"}},
+                            {"wildcard": {"file_path": "*_pkg.sv"}},
+                        ],
+                    },
+                },
+                "_source": ["file_path"],
+            }
+            try:
+                resp = _requests.post(
+                    url, auth=auth, json=search_body,
+                    headers={"Content-Type": "application/json"}, timeout=30,
+                )
+                resp.raise_for_status()
+                hits = resp.json().get("hits", {}).get("hits", [])
+                for hit in hits:
+                    fp = hit.get("_source", {}).get("file_path", "")
+                    if fp and fp.endswith("_pkg.sv"):
+                        if topic_filter:
+                            fname = fp.rsplit("/", 1)[-1].lower()
+                            if not fname.startswith(topic_filter.lower()):
+                                continue
+                        pkg_files.append(fp)
+            except Exception as q_err:
+                logger.warning(json.dumps({
+                    "event": "chip_config_query_error",
+                    "pipeline_id": pipeline_id,
+                    "error": str(q_err),
+                }))
 
         logger.info(json.dumps({
             "event": "chip_config_pkg_files_found",
