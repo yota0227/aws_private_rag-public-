@@ -109,6 +109,16 @@ def _invoke_claude(prompt: str) -> str:
                 accept="application/json",
             )
             result = json.loads(response["body"].read())
+
+            # 토큰 사용량 로깅
+            usage = result.get("usage", {})
+            logger.info(json.dumps({
+                "event": "claude_claim_token_usage",
+                "model": CLAUDE_MODEL_ID,
+                "input_tokens": usage.get("input_tokens", 0),
+                "output_tokens": usage.get("output_tokens", 0),
+            }))
+
             # Claude response: {"content": [{"type": "text", "text": "..."}]}
             return result["content"][0]["text"]
         except Exception as e:
