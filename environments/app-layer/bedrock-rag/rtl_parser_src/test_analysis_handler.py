@@ -256,7 +256,7 @@ class TestClaimGenerationHandler:
     @patch("analysis_handler.generate_claims")
     def test_generates_and_indexes_claims(self, mock_gen, mock_query,
                                           mock_index, mock_status):
-        mock_query.side_effect = lambda pid, atype: {
+        mock_query.side_effect = lambda pid, atype, **kwargs: {
             "module_parse": [{"module_name": "tt_noc_router", "file_path": "noc/r.sv"}],
             "topic": [{"module_name": "tt_noc_router", "topics": ["NoC"]}],
             "hierarchy": [{"module_name": "top"}],
@@ -295,7 +295,7 @@ class TestHddGenerationHandler:
     @patch("analysis_handler.generate_hdd_section")
     def test_generates_and_stores_hdd(self, mock_gen, mock_query, mock_s3,
                                       mock_index, mock_status):
-        mock_query.side_effect = lambda pid, atype: {
+        mock_query.side_effect = lambda pid, atype, **kwargs: {
             "hierarchy": [{"module_name": "top", "children": []}],
             "clock_domain": [],
             "dataflow": [],
@@ -330,7 +330,7 @@ class TestVariantDeltaHandler:
     @patch.object(ah, "_index_document", return_value=True)
     @patch.object(ah, "_opensearch_scroll_query")
     def test_computes_delta(self, mock_query, mock_index, mock_status):
-        mock_query.side_effect = lambda pid, atype: {
+        mock_query.side_effect = lambda pid, atype, **kwargs: {
             ("tt_20260101", "module_parse"): [
                 {"module_name": "mod_a", "parameter_list": "W=32", "instance_list": ""},
             ],

@@ -60,6 +60,7 @@ def _build_hdd_prompt(
     clock_domains: list[dict[str, Any]],
     dataflow: list[dict[str, Any]],
     claims: list[dict[str, Any]],
+    deep_analysis: dict[str, Any] | None = None,
 ) -> str:
     """Build the LLM prompt for HDD section generation."""
     hierarchy_str = json.dumps(hierarchy, ensure_ascii=False, default=str)[:3000]
@@ -70,9 +71,10 @@ def _build_hdd_prompt(
     section_guide = {
         "chip": (
             "Generate a chip-level HDD with these sections:\n"
-            "1. Overview\n2. Module Hierarchy\n3. Block Diagram (ASCII art)\n"
-            "4. Functional Details\n5. Clock/Reset Structure\n"
-            "6. Key Parameters\n7. Verification Checklist"
+            "1. Overview\n2. Package Constants and Grid\n3. Module Hierarchy\n"
+            "4. Block Diagram (ASCII art)\n5. Functional Details\n"
+            "6. Clock/Reset Structure\n7. Key Parameters\n"
+            "8. SRAM Inventory\n9. Verification Checklist"
         ),
         "subsystem": (
             "Generate a subsystem-level HDD with these sections:\n"
@@ -88,7 +90,7 @@ def _build_hdd_prompt(
         ),
     }
 
-    return (
+    prompt = (
         "You are a semiconductor design documentation expert. "
         "Generate a Hardware Design Document (HDD) section in Markdown format.\n\n"
         f"Pipeline ID: {pipeline_id}\n"
@@ -99,9 +101,43 @@ def _build_hdd_prompt(
         f"Clock Domains:\n{clock_str}\n\n"
         f"Dataflow:\n{dataflow_str}\n\n"
         f"Claims:\n{claims_str}\n\n"
+    )
+
+    # Append deep analysis data based on topic/hdd_type
+    if deep_analysis:
+        topic_lower = topic.lower() if topic else ""
+
+        if hdd_type == "chip" and "chip_config" in deep_analysis:
+            prompt += (
+                "Package Constants (from chip_config analysis):\n"
+                f"{json.dumps(deep_analysis['chip_config'], ensure_ascii=False, default=str)[:2000]}\n\n"
+            )
+        if hdd_type == "chip" and "sram_inventory" in deep_analysis:
+            prompt += (
+                "SRAM Inventory:\n"
+                f"{json.dumps(deep_analysis['sram_inventory'], ensure_ascii=False, default=str)[:2000]}\n\n"
+            )
+        if topic_lower == "edc" and "edc_topology" in deep_analysis:
+            prompt += (
+                "EDC Topology (ring topology, serial bus, harvest bypass, node ID table):\n"
+                f"{json.dumps(deep_analysis['edc_topology'], ensure_ascii=False, default=str)[:2000]}\n\n"
+            )
+        if topic_lower == "noc" and "noc_protocol" in deep_analysis:
+            prompt += (
+                "NoC Protocol (routing algorithms, flit structure, AXI address gasket, security fence):\n"
+                f"{json.dumps(deep_analysis['noc_protocol'], ensure_ascii=False, default=str)[:2000]}\n\n"
+            )
+        if topic_lower == "overlay" and "overlay_deep" in deep_analysis:
+            prompt += (
+                "Overlay Deep Analysis (CPU cluster, L1 cache, APB slaves):\n"
+                f"{json.dumps(deep_analysis['overlay_deep'], ensure_ascii=False, default=str)[:2000]}\n\n"
+            )
+
+    prompt += (
         "Output the HDD section in Markdown. Use ## for section headers. "
         "Include all required sections listed above."
     )
+    return prompt
 
 
 def _invoke_claude(prompt: str) -> str:
@@ -187,6 +223,7 @@ def generate_hdd_section(
     clock_domains: list[dict[str, Any]],
     dataflow: list[dict[str, Any]],
     claims: list[dict[str, Any]],
+    deep_analysis: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Generate an HDD document section using Bedrock Claude.
 
@@ -202,6 +239,9 @@ def generate_hdd_section(
         clock_domains: Clock domain analysis results.
         dataflow: Dataflow tracking results.
         claims: Generated claims for this topic.
+        deep_analysis: Optional dict of deep analysis results keyed by
+            analysis_type (chip_config, edc_topology, noc_protocol,
+            overlay_deep, sram_inventory).
 
     Returns:
         Dict with ``hdd_content`` (Markdown), ``hdd_type``,
@@ -219,6 +259,7 @@ def generate_hdd_section(
     hdd_type = _determine_hdd_type(topic, hierarchy)
     prompt = _build_hdd_prompt(
         pipeline_id, topic, hdd_type, hierarchy, clock_domains, dataflow, claims,
+        deep_analysis=deep_analysis,
     )
 
     hdd_content = _invoke_claude(prompt)
