@@ -785,15 +785,45 @@ def handle_hdd_generation(event: dict[str, Any]) -> dict[str, Any]:
         hierarchy = hierarchy_docs[0] if hierarchy_docs else {}
         sections_generated = 0
 
+        # 토픽별 module_parse 문서 수집 (claim 편중 문제 우회)
+        parsed_docs = _opensearch_scroll_query(pipeline_id, "module_parse")
+        topic_module_map: dict[str, list[dict[str, Any]]] = {}
+        for doc in parsed_docs:
+            name = doc.get("module_name", "")
+            fp = doc.get("file_path", "")
+            if not name:
+                continue
+            doc_topics = classify_topic(fp, name)
+            for t in doc_topics:
+                if t != "unclassified":
+                    topic_module_map.setdefault(t, []).append(doc)
+
         for topic in sorted(topics):
             claim_docs = [
                 d for d in _opensearch_scroll_query(pipeline_id, "claim")
                 if d.get("topic") == topic
             ]
 
+            # 토픽별 module_parse 데이터를 hierarchy에 보강
+            topic_modules = topic_module_map.get(topic, [])
+            topic_hierarchy = dict(hierarchy) if isinstance(hierarchy, dict) else {}
+            if topic_modules:
+                # 토픽 대표 모듈 정보를 hierarchy에 추가
+                topic_hierarchy["topic_modules"] = [
+                    {
+                        "module_name": m.get("module_name", ""),
+                        "port_list": m.get("port_list", "")[:500],
+                        "instance_list": m.get("instance_list", "")[:500],
+                        "parameter_list": m.get("parameter_list", "")[:300],
+                        "file_path": m.get("file_path", ""),
+                    }
+                    for m in topic_modules[:15]  # 토픽당 최대 15개 모듈
+                ]
+                topic_hierarchy["topic_module_count"] = len(topic_modules)
+
             try:
                 result = generate_hdd_section(
-                    pipeline_id, topic, hierarchy,
+                    pipeline_id, topic, topic_hierarchy,
                     clock_docs, dataflow_docs, claim_docs,
                     deep_analysis=deep_analysis if deep_analysis else None,
                 )
