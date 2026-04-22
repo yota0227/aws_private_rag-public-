@@ -52,6 +52,9 @@ secrets/
 test-results/
 coverage/
 
+# RTL test data (large files, local only)
+test_rtl/
+
 # Temporary output files
 out*.json
 
