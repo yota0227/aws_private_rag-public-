@@ -887,11 +887,15 @@ def handle_claim_generation(event: dict[str, Any]) -> dict[str, Any]:
 def handle_hdd_generation(event: dict[str, Any]) -> dict[str, Any]:
     """HDD 섹션 생성 핸들러.
 
+    event에 ``topic`` 파라미터가 있으면 해당 토픽만 처리.
+    없으면 전체 토픽을 처리하되, 300초 타임아웃 내에서 가능한 만큼.
+
     1. 분석 결과 수집 (hierarchy, clock_domains, dataflow, claims)
     2. generate_hdd_section() 호출
     3. S3에 Markdown 저장 + OpenSearch 인덱싱
     """
     pipeline_id = event["pipeline_id"]
+    target_topic = event.get("topic", "")
     stage = "hdd_generation"
     _update_dynamodb_status(pipeline_id, stage, "in_progress")
 
@@ -900,7 +904,9 @@ def handle_hdd_generation(event: dict[str, Any]) -> dict[str, Any]:
         hierarchy_docs = _opensearch_scroll_query(pipeline_id, "hierarchy")
         clock_docs = _opensearch_scroll_query(pipeline_id, "clock_domain")
         dataflow_docs = _opensearch_scroll_query(pipeline_id, "dataflow")
-        topic_docs = _opensearch_scroll_query(pipeline_id, "topic")
+
+        # claim 전체를 한 번만 조회 (루프 밖)
+        all_claim_docs = _opensearch_scroll_query(pipeline_id, "claim")
 
         # 심화 분석 결과 5종 조회 (조회 실패 시 빈 리스트로 폴백)
         deep_analysis: dict[str, Any] = {}
@@ -918,15 +924,19 @@ def handle_hdd_generation(event: dict[str, Any]) -> dict[str, Any]:
                     "error": str(da_err),
                 }))
 
-        # 토픽 목록 추출
-        topics: set[str] = set()
-        for doc in topic_docs:
-            t_list = doc.get("topics", doc.get("topic", []))
-            if isinstance(t_list, str):
-                t_list = [t_list]
-            for t in t_list:
-                if t != "unclassified":
-                    topics.add(t)
+        # 토픽 목록: target_topic 지정 시 해당 토픽만
+        if target_topic:
+            topics_to_generate = {target_topic}
+        else:
+            topic_docs = _opensearch_scroll_query(pipeline_id, "topic")
+            topics_to_generate: set[str] = set()
+            for doc in topic_docs:
+                t_list = doc.get("topics", doc.get("topic", []))
+                if isinstance(t_list, str):
+                    t_list = [t_list]
+                for t in t_list:
+                    if t != "unclassified":
+                        topics_to_generate.add(t)
 
         hierarchy = hierarchy_docs[0] if hierarchy_docs else {}
         sections_generated = 0
@@ -944,11 +954,16 @@ def handle_hdd_generation(event: dict[str, Any]) -> dict[str, Any]:
                 if t != "unclassified":
                     topic_module_map.setdefault(t, []).append(doc)
 
-        for topic in sorted(topics):
-            claim_docs = [
-                d for d in _opensearch_scroll_query(pipeline_id, "claim")
-                if d.get("topic") == topic
-            ]
+        logger.info(json.dumps({
+            "event": "hdd_generation_topics",
+            "pipeline_id": pipeline_id,
+            "target_topic": target_topic or "all",
+            "topics": sorted(topics_to_generate),
+        }))
+
+        for topic in sorted(topics_to_generate):
+            # claim을 토픽별로 필터 (이미 조회한 전체에서)
+            claim_docs = [d for d in all_claim_docs if d.get("topic") == topic]
 
             # 토픽별 module_parse 데이터를 hierarchy에 보강
             topic_modules = topic_module_map.get(topic, [])
