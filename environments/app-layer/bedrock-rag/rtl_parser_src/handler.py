@@ -64,6 +64,20 @@ def handler(event, context):
     for record in event.get("Records", []):
         bucket = record["s3"]["bucket"]["name"]
         key = record["s3"]["object"]["key"]
+
+        # rtl-sources/ 경로만 파싱 대상 — rtl-parsed/ 등 결과 경로는 무시 (재귀 루프 방지)
+        if not key.startswith("rtl-sources/"):
+            logger.info(json.dumps({
+                "event": "rtl_parse_skip_non_source",
+                "bucket": bucket,
+                "key": key,
+            }))
+            continue
+
+        # RTL 파일만 처리 (.v, .sv, .svh)
+        if not key.endswith((".v", ".sv", ".svh")):
+            continue
+
         logger.info(json.dumps({"event": "rtl_parse_start", "bucket": bucket, "key": key}))
         _process_rtl_file(bucket, key)
     return {"statusCode": 200}
