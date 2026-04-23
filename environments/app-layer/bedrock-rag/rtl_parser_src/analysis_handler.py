@@ -576,17 +576,26 @@ def _process_dataflow_batch(
 # Task 5.5: Topic Classification
 # ---------------------------------------------------------------------------
 
-def handle_topic_classification(event: dict[str, Any]) -> dict[str, Any]:
-    """토픽 분류 핸들러.
+def handle_topic_classification(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
+    """토픽 분류 핸들러 (배치 분할 실행 지원).
+
+    8,107건 module_parse 문서를 300초 Lambda 타임아웃 내에서 처리하기 위해:
+    - _update_document() 제거 (AOSS 부분 업데이트 비효율 + claim_generation이 직접 classify_topic 호출)
+    - batch_offset 파라미터로 분할 실행
+    - 남은 시간 < 30초 시 미처리분을 비동기 Lambda 호출로 위임
 
     1. OpenSearch에서 pipeline_id의 모든 module_parse 문서 조회
-    2. classify_topic() 호출
-    3. OpenSearch 문서에 topic 필드 업데이트
-    4. DynamoDB 상태 업데이트
+    2. batch_offset부터 classify_topic() 호출
+    3. analysis_type=topic 문서만 인덱싱 (module_parse 업데이트 제거)
+    4. 타임아웃 임박 시 비동기 분할 실행
+    5. DynamoDB 상태 업데이트
     """
     pipeline_id = event["pipeline_id"]
+    batch_offset = event.get("batch_offset", 0)
     stage = "topic_classification"
-    _update_dynamodb_status(pipeline_id, stage, "in_progress")
+
+    if batch_offset == 0:
+        _update_dynamodb_status(pipeline_id, stage, "in_progress")
 
     try:
         parsed_docs = _opensearch_scroll_query(pipeline_id, "module_parse")
@@ -595,21 +604,51 @@ def handle_topic_classification(event: dict[str, Any]) -> dict[str, Any]:
                                    extra={"modules_processed": 0})
             return {"status": "completed", "modules_processed": 0}
 
+        total_docs = len(parsed_docs)
+        docs_to_process = parsed_docs[batch_offset:]
+
+        logger.info(json.dumps({
+            "event": "topic_classification_start_batch",
+            "pipeline_id": pipeline_id,
+            "batch_offset": batch_offset,
+            "total_docs": total_docs,
+            "remaining": len(docs_to_process),
+        }))
+
         classified_count = 0
         unclassified_count = 0
 
-        for doc in parsed_docs:
+        for i, doc in enumerate(docs_to_process):
+            # 타임아웃 체크: 남은 시간 < 30초이면 미처리분 비동기 위임
+            if context and hasattr(context, "get_remaining_time_in_millis"):
+                remaining_ms = context.get_remaining_time_in_millis()
+                if remaining_ms < 30000:
+                    next_offset = batch_offset + i
+                    logger.info(json.dumps({
+                        "event": "topic_classification_timeout_split",
+                        "pipeline_id": pipeline_id,
+                        "processed_so_far": classified_count,
+                        "next_offset": next_offset,
+                        "remaining_docs": total_docs - next_offset,
+                        "remaining_ms": remaining_ms,
+                    }))
+                    # 비동기 Lambda 호출로 나머지 처리
+                    _invoke_async_continuation(
+                        pipeline_id, stage, next_offset,
+                    )
+                    return {
+                        "status": "split",
+                        "classified": classified_count,
+                        "next_offset": next_offset,
+                        "remaining": total_docs - next_offset,
+                    }
+
             module_name = doc.get("module_name", "")
             file_path = doc.get("file_path", "")
-            doc_id = doc.get("_id", "")
 
             topics = classify_topic(file_path, module_name)
 
-            # OpenSearch 문서에 topic 필드 추가 (기존 문서 업데이트)
-            if doc_id:
-                _update_document(doc_id, {"topic": topics, "topics": topics})
-
-            # 별도 analysis_type=topic 문서도 인덱싱
+            # analysis_type=topic 문서만 인덱싱 (_update_document 제거)
             topic_doc = {
                 "pipeline_id": pipeline_id,
                 "analysis_type": "topic",
@@ -624,17 +663,20 @@ def handle_topic_classification(event: dict[str, Any]) -> dict[str, Any]:
             if topics == ["unclassified"]:
                 unclassified_count += 1
 
+        total_classified = batch_offset + classified_count
         _update_dynamodb_status(pipeline_id, stage, "completed",
-                               extra={"modules_processed": classified_count,
+                               extra={"modules_processed": total_classified,
                                       "unclassified_count": unclassified_count})
 
         logger.info(json.dumps({
             "event": "topic_classification_complete",
             "pipeline_id": pipeline_id,
-            "classified": classified_count,
+            "batch_offset": batch_offset,
+            "classified_this_batch": classified_count,
+            "total_classified": total_classified,
             "unclassified": unclassified_count,
         }))
-        return {"status": "completed", "classified": classified_count,
+        return {"status": "completed", "classified": total_classified,
                 "unclassified": unclassified_count}
 
     except Exception as e:
@@ -646,6 +688,42 @@ def handle_topic_classification(event: dict[str, Any]) -> dict[str, Any]:
             "error": str(e),
         }))
         raise
+
+
+def _invoke_async_continuation(
+    pipeline_id: str, stage: str, batch_offset: int,
+) -> None:
+    """미처리분을 비동기 Lambda 호출로 위임."""
+    try:
+        lambda_client = boto3.client("lambda")
+        function_name = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "")
+        if not function_name:
+            logger.error("AWS_LAMBDA_FUNCTION_NAME not set, cannot split")
+            return
+
+        payload = json.dumps({
+            "stage": stage,
+            "pipeline_id": pipeline_id,
+            "batch_offset": batch_offset,
+        })
+        lambda_client.invoke(
+            FunctionName=function_name,
+            InvocationType="Event",  # 비동기
+            Payload=payload.encode("utf-8"),
+        )
+        logger.info(json.dumps({
+            "event": "async_continuation_invoked",
+            "pipeline_id": pipeline_id,
+            "stage": stage,
+            "batch_offset": batch_offset,
+        }))
+    except Exception as e:
+        logger.error(json.dumps({
+            "event": "async_continuation_error",
+            "pipeline_id": pipeline_id,
+            "stage": stage,
+            "error": str(e),
+        }))
 
 
 # ---------------------------------------------------------------------------
@@ -1815,7 +1893,11 @@ def analysis_handler(event: dict[str, Any], context: Any = None) -> dict[str, An
     }))
 
     try:
-        result = handler_fn(event)
+        # context가 필요한 핸들러에 전달 (타임아웃 기반 분할 실행)
+        if stage in ("topic_classification",):
+            result = handler_fn(event, context=context)
+        else:
+            result = handler_fn(event)
         logger.info(json.dumps({
             "event": "analysis_handler_complete",
             "pipeline_id": pipeline_id,
