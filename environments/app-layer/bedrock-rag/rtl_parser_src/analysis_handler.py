@@ -1135,13 +1135,17 @@ def handle_backfill_pipeline_id(event: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def handle_clear_index(event: dict[str, Any]) -> dict[str, Any]:
-    """OpenSearch 인덱스를 삭제하고 재생성.
+    """OpenSearch 인덱스 정리.
 
-    AOSS는 ``_delete_by_query``를 지원하지 않으므로,
-    인덱스를 삭제(DELETE)한 뒤 동일 매핑으로 재생성(PUT)한다.
+    ``analysis_type`` 파라미터가 지정되면 해당 타입 문서만 개별 삭제.
+    지정되지 않으면 인덱스 전체를 삭제하고 재생성.
+
+    AOSS는 ``_delete_by_query``를 지원하지 않으므로:
+    - 전체 삭제: 인덱스 DELETE → PUT 재생성
+    - 부분 삭제: scroll 조회 → 개별 문서 DELETE
 
     Args:
-        event: ``pipeline_id`` (str) 필수.
+        event: ``pipeline_id`` (str) 필수, ``analysis_type`` (str) 선택.
 
     Returns:
         ``{"status": "completed"}`` 또는 에러 시 raise.
@@ -1149,6 +1153,7 @@ def handle_clear_index(event: dict[str, Any]) -> dict[str, Any]:
     import requests
 
     pipeline_id = event["pipeline_id"]
+    target_analysis_type = event.get("analysis_type", "")
     stage = "clear_index"
     _update_dynamodb_status(pipeline_id, stage, "in_progress")
 
@@ -1160,6 +1165,48 @@ def handle_clear_index(event: dict[str, Any]) -> dict[str, Any]:
             return {"status": "completed", "skipped": True}
 
         auth = _get_opensearch_auth()
+
+        # analysis_type이 지정되면 해당 타입 문서만 개별 삭제
+        if target_analysis_type:
+            docs = _opensearch_scroll_query(
+                pipeline_id, target_analysis_type, max_docs=50000,
+            )
+            deleted = 0
+            for doc in docs:
+                doc_id = doc.get("_id", "")
+                if not doc_id:
+                    continue
+                del_url = (
+                    f"{OPENSEARCH_ENDPOINT}/{OPENSEARCH_INDEX}/_doc/{doc_id}"
+                )
+                try:
+                    resp = requests.delete(
+                        del_url, auth=auth,
+                        headers={"Content-Type": "application/json"},
+                        timeout=30,
+                    )
+                    if resp.status_code in (200, 404):
+                        deleted += 1
+                except Exception as del_err:
+                    logger.warning(json.dumps({
+                        "event": "clear_index_doc_delete_error",
+                        "doc_id": doc_id,
+                        "error": str(del_err),
+                    }))
+
+            logger.info(json.dumps({
+                "event": "clear_index_partial",
+                "pipeline_id": pipeline_id,
+                "analysis_type": target_analysis_type,
+                "docs_found": len(docs),
+                "docs_deleted": deleted,
+            }))
+            _update_dynamodb_status(pipeline_id, stage, "completed",
+                                   extra={"deleted": deleted,
+                                          "analysis_type": target_analysis_type})
+            return {"status": "completed", "deleted": deleted}
+
+        # analysis_type 미지정 → 인덱스 전체 삭제/재생성
         index_url = f"{OPENSEARCH_ENDPOINT}/{OPENSEARCH_INDEX}"
 
         # 1. DELETE /{index}
