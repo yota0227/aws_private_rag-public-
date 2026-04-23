@@ -182,6 +182,58 @@ def _index_document(doc: dict[str, Any]) -> bool:
         return False
 
 
+def _bulk_index_documents(docs: list[dict[str, Any]]) -> int:
+    """여러 문서를 OpenSearch _bulk API로 일괄 인덱싱.
+
+    AOSS는 _bulk API를 지원한다. NDJSON 형식으로 전송.
+    Returns: 성공적으로 인덱싱된 문서 수.
+    """
+    import requests
+
+    if not OPENSEARCH_ENDPOINT or not docs:
+        return 0
+
+    auth = _get_opensearch_auth()
+    url = f"{OPENSEARCH_ENDPOINT}/{OPENSEARCH_INDEX}/_bulk"
+
+    # NDJSON 형식: {"index": {}}\n{doc}\n{"index": {}}\n{doc}\n...
+    lines: list[str] = []
+    for doc in docs:
+        lines.append(json.dumps({"index": {}}))
+        lines.append(json.dumps(doc, ensure_ascii=False, default=str))
+    body = "\n".join(lines) + "\n"
+
+    try:
+        resp = requests.post(
+            url, auth=auth, data=body.encode("utf-8"),
+            headers={"Content-Type": "application/x-ndjson"}, timeout=60,
+        )
+        resp.raise_for_status()
+        result = resp.json()
+        errors = result.get("errors", False)
+        items = result.get("items", [])
+        success_count = sum(
+            1 for item in items
+            if item.get("index", {}).get("status", 0) in (200, 201)
+        )
+        if errors:
+            failed = len(items) - success_count
+            logger.warning(json.dumps({
+                "event": "bulk_index_partial_error",
+                "total": len(docs),
+                "success": success_count,
+                "failed": failed,
+            }))
+        return success_count
+    except Exception as e:
+        logger.error(json.dumps({
+            "event": "bulk_index_error",
+            "doc_count": len(docs),
+            "error": str(e),
+        }))
+        return 0
+
+
 def _update_document(doc_id: str, update_fields: dict[str, Any]) -> bool:
     """OpenSearch 문서의 특정 필드를 업데이트."""
     import requests
@@ -617,12 +669,18 @@ def handle_topic_classification(event: dict[str, Any], context: Any = None) -> d
 
         classified_count = 0
         unclassified_count = 0
+        bulk_buffer: list[dict[str, Any]] = []
+        BULK_SIZE = 200
 
         for i, doc in enumerate(docs_to_process):
             # 타임아웃 체크: 남은 시간 < 30초이면 미처리분 비동기 위임
             if context and hasattr(context, "get_remaining_time_in_millis"):
                 remaining_ms = context.get_remaining_time_in_millis()
                 if remaining_ms < 30000:
+                    # 남은 bulk_buffer 플러시
+                    if bulk_buffer:
+                        _bulk_index_documents(bulk_buffer)
+                        bulk_buffer = []
                     next_offset = batch_offset + i
                     logger.info(json.dumps({
                         "event": "topic_classification_timeout_split",
@@ -648,7 +706,7 @@ def handle_topic_classification(event: dict[str, Any], context: Any = None) -> d
 
             topics = classify_topic(file_path, module_name)
 
-            # analysis_type=topic 문서만 인덱싱 (_update_document 제거)
+            # analysis_type=topic 문서를 bulk 버퍼에 추가
             topic_doc = {
                 "pipeline_id": pipeline_id,
                 "analysis_type": "topic",
@@ -657,11 +715,20 @@ def handle_topic_classification(event: dict[str, Any], context: Any = None) -> d
                 "topic": topics,
                 "topics": topics,
             }
-            _index_document(topic_doc)
+            bulk_buffer.append(topic_doc)
+
+            # bulk 버퍼가 BULK_SIZE에 도달하면 일괄 인덱싱
+            if len(bulk_buffer) >= BULK_SIZE:
+                _bulk_index_documents(bulk_buffer)
+                bulk_buffer = []
 
             classified_count += 1
             if topics == ["unclassified"]:
                 unclassified_count += 1
+
+        # 남은 bulk_buffer 플러시
+        if bulk_buffer:
+            _bulk_index_documents(bulk_buffer)
 
         total_classified = batch_offset + classified_count
         _update_dynamodb_status(pipeline_id, stage, "completed",
