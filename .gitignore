@@ -53,7 +53,7 @@ test-results/
 coverage/
 
 # RTL test data (large files, local only)
-test_rtl/
+test_rtl/Sample
 
 # Temporary output files
 out*.json

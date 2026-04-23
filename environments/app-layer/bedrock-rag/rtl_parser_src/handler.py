@@ -298,15 +298,19 @@ def parse_rtl_to_ast(rtl_content: str) -> dict:
     if module_match:
         result["module_name"] = module_match.group(1)
 
-    # 포트 목록 추출 (input/output/inout 선언)
+    # 포트 목록 추출 (input/output/inout 선언 + 비트폭 캡처)
     port_pattern = re.compile(
-        r"\b(input|output|inout)\s+(?:wire|reg|logic)?\s*(?:\[[\w\s:\-]+\])?\s*(\w+)", re.MULTILINE
+        r"\b(input|output|inout)\s+(?:wire|reg|logic)?\s*((?:\[[^\]]+\]\s*)*)(\w+)", re.MULTILINE
     )
     ports = []
     for m in port_pattern.finditer(content):
         direction = m.group(1)
-        name = m.group(2)
-        ports.append(f"{direction} {name}")
+        bit_width = m.group(2).strip()
+        name = m.group(3)
+        if bit_width:
+            ports.append(f"{direction} {bit_width} {name}")
+        else:
+            ports.append(f"{direction} {name}")
     result["port_list"] = list(dict.fromkeys(ports))  # 중복 제거
 
     # 파라미터 목록 추출

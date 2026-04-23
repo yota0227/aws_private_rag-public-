@@ -31,6 +31,48 @@ TITAN_MODEL_ID = "amazon.titan-embed-text-v2:0"
 _INVOKE_TIMEOUT = 60
 _MAX_RETRIES = 1
 
+# Patterns for register wrapper modules (lower priority for claim generation)
+REGISTER_WRAPPER_PATTERNS = ["_reg_inner", "_wrap", "_reg_top"]
+
+
+def _filter_claim_targets(
+    modules: list[dict[str, Any]], topic: str,
+) -> list[dict[str, Any]]:
+    """Filter claim target modules: prioritize datapath over register wrappers."""
+    datapath = []
+    register = []
+    for m in modules:
+        name = m.get("module_name", "").lower()
+        if any(pat in name for pat in REGISTER_WRAPPER_PATTERNS):
+            register.append(m)
+        else:
+            datapath.append(m)
+    # If fewer than 3 datapath modules, include register modules too
+    if len(datapath) < 3:
+        datapath.extend(register)
+    return datapath
+
+
+def _validate_claim_diversity(claims: list[dict[str, Any]], topic: str) -> bool:
+    """Check claim diversity: False if single module has 80%+ of all claims."""
+    if len(claims) < 2:
+        return True
+    counts: dict[str, int] = {}
+    for c in claims:
+        mn = c.get("module_name", "")
+        counts[mn] = counts.get(mn, 0) + 1
+    max_count = max(counts.values())
+    is_diverse = max_count / len(claims) < 0.8
+    if not is_diverse:
+        dominant = max(counts, key=counts.get)  # type: ignore[arg-type]
+        logger.warning(json.dumps({
+            "event": "claim_diversity_warning",
+            "topic": topic,
+            "dominant_module": dominant,
+            "dominant_ratio": max_count / len(claims),
+        }))
+    return is_diverse
+
 
 def _build_claim_prompt(
     pipeline_id: str,
@@ -195,7 +237,12 @@ def generate_claims(
     if not modules:
         return []
 
-    chunks = split_module_groups(modules)
+    # Filter claim targets: prioritize datapath modules over register wrappers
+    filtered_modules = _filter_claim_targets(modules, topic)
+    if not filtered_modules:
+        filtered_modules = modules  # fallback to original if filter removes all
+
+    chunks = split_module_groups(filtered_modules)
     all_claims: list[dict[str, Any]] = []
     seq = 0
 
