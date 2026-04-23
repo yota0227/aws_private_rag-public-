@@ -855,6 +855,7 @@ def handle_claim_generation(event: dict[str, Any]) -> dict[str, Any]:
             claims = generate_claims(pipeline_id, topic, modules_subset, analysis_results)
 
             for claim in claims:
+                claim["analysis_type"] = "claim"
                 _index_document(claim)
                 total_claims += 1
 
