@@ -2,26 +2,29 @@
 
 ## 버전 정의
 
-| RAG 버전 | 날짜 | RAG 파이프라인 상태 | 프롬프트 | 저장 위치 |
-|----------|------|-------------------|---------|----------|
-| RAG v1 | 4/17 | 기본 파싱(module_parse) + claim + hdd_section | 프롬프트 1번 (칩 전체) | `v1/` |
-| RAG v2 | 4/20 | v1과 동일 | 프롬프트 1~6번 (토픽별 분할) | `v2/` |
-| RAG v2.5 | 4/22 | chip_config + edc_topology + noc_protocol + overlay_deep + sram_inventory 추가 | 프롬프트 1번 (Grounding 없음) → v3a, 프롬프트 9번 (Grounding 있음) → v3b | `v3/` |
+| RAG 버전 | 날짜 | RAG 파이프라인 변경 사항 | 저장 위치 |
+|----------|------|------------------------|----------|
+| RAG v1 | 4/17 | 기본 파싱(module_parse) + claim + hdd_section | `v1/` |
+| RAG v2 | 4/20 | v1과 동일 (프롬프트 토픽별 분할) | `v2/` |
+| RAG v2.5 | 4/22 | chip_config + edc_topology + noc_protocol + overlay_deep + sram_inventory 추가 | `v3/` |
+| RAG v3 | 4/24 | 포트 비트폭 추출, 토픽 확장(NIU/Power/Memory), Claim 귀속 정확성 개선(레지스터 래퍼 필터링 + 다양성 검증), bulk 인덱싱, MCP Bridge max_results 20 | `v4/` |
 
-### 아침에 돌릴 것
+## 버전별 산출물 규칙
 
-| 순서 | 프롬프트 | 파일명 | 목적 |
-|------|---------|--------|------|
-| 1 | 1번 (칩 전체, Grounding 없음) | `v3/v3a_chip_no_grounding.md` | RAG 데이터 개선 효과 측정 (v2 → v2.5) |
-| 2 | 9번 (통합, Grounding 있음) | `v3/v3b_chip_grounded.md` | 프롬프트 개선 효과 측정 (v3a → v3b) |
-| 3 | 2번 (EDC) | `v3/v3_edc.md` | EDC 토폴로지 반영 확인 |
-| 4 | 4번 (NoC) | `v3/v3_noc.md` | NoC 프로토콜 반영 확인 |
-| 5 | 3번 (Overlay) | `v3/v3_overlay.md` | Overlay 심화 반영 확인 |
+매 RAG 버전 업데이트 시 아래 프롬프트 세트를 동일하게 실행하여 품질 변화를 추적한다.
+
+| 순서 | 프롬프트 | 파일명 패턴 | 목적 |
+|------|---------|------------|------|
+| 1 | 1번 (칩 전체, Grounding 없음) | `v{N}/v{N}a_chip_no_grounding.md` | RAG 데이터 개선 효과 측정 |
+| 2 | 9번 (통합, Grounding 있음) | `v{N}/v{N}b_chip_grounded.md` | 프롬프트 개선 효과 측정 |
+| 3 | 2번 (EDC) | `v{N}/v{N}_edc.md` | EDC 토폴로지 반영 확인 |
+| 4 | 4번 (NoC) | `v{N}/v{N}_noc.md` | NoC 프로토콜 반영 확인 |
+| 5 | 3번 (Overlay) | `v{N}/v{N}_overlay.md` | Overlay 심화 반영 확인 |
 
 비교 기준:
-- v3a vs v2 1번 결과 → RAG 데이터 개선 효과 (같은 프롬프트, 다른 RAG)
-- v3b vs v3a → 프롬프트 개선 효과 (같은 RAG, 다른 프롬프트)
-- v3 EDC/NoC/Overlay vs v2 → 심화 분석 반영 효과
+- v{N}a vs v{N-1}a → RAG 데이터 개선 효과 (같은 프롬프트, 다른 RAG)
+- v{N}b vs v{N}a → 프롬프트 개선 효과 (같은 RAG, 다른 프롬프트)
+- v{N} 토픽별 vs v{N-1} 토픽별 → 심화 분석 반영 효과
 
 ---
 
