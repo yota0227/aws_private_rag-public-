@@ -8,6 +8,7 @@
 | RAG v2 | 4/20 | v1과 동일 (프롬프트 토픽별 분할) | `v2/` |
 | RAG v2.5 | 4/22 | chip_config + edc_topology + noc_protocol + overlay_deep + sram_inventory 추가 | `v3/` |
 | RAG v3 | 4/24 | 포트 비트폭 추출, 토픽 확장(NIU/Power/Memory), Claim 귀속 정확성 개선(레지스터 래퍼 필터링 + 다양성 검증), bulk 인덱싱, MCP Bridge max_results 20 | `v4/` |
+| RAG v3.1 | 4/24 | Claim 필터 개선: _wrap 패턴 제거, 기능 블록 화이트리스트, fallback 임계값 3→10. Claim 85→99건, Overlay HDD 0→1건 | `v4.1/` |
 
 ## 버전별 산출물 규칙
 
