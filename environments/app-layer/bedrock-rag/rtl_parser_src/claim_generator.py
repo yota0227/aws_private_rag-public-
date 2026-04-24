@@ -31,6 +31,65 @@ TITAN_MODEL_ID = "amazon.titan-embed-text-v2:0"
 _INVOKE_TIMEOUT = 60
 _MAX_RETRIES = 1
 
+# Patterns for pure register wrapper modules (lower priority for claim generation)
+# _wrap 제거: tt_edc1_biu_soc_apb4_wrap 같은 BIU bridge가 필터됨
+# _reg_inner를 더 구체적으로: 끝이 _reg_inner인 경우만 (중간에 포함은 허용)
+REGISTER_WRAPPER_PATTERNS = ["_reg_inner", "_reg_top"]
+
+# 기능 블록 화이트리스트: 이름에 _reg_inner/_reg_top이 있어도 보존
+FUNCTIONAL_BLOCK_PREFIXES = [
+    "tt_edc1_biu_", "tt_cluster_ctrl_", "tt_fds_",
+    "tt_dispatch_", "tt_overlay_reg_xbar_",
+]
+
+
+def _filter_claim_targets(
+    modules: list[dict[str, Any]], topic: str,
+) -> list[dict[str, Any]]:
+    """Filter claim target modules: prioritize datapath over register wrappers.
+
+    - 화이트리스트 모듈은 패턴 매칭과 무관하게 항상 포함
+    - _wrap 패턴 제거 (BIU bridge 등 기능 블록 오분류 방지)
+    - fallback 임계값: datapath < 10이면 register 모듈도 포함
+    """
+    datapath = []
+    register = []
+    for m in modules:
+        name = m.get("module_name", "").lower()
+        # 화이트리스트 체크: 기능 블록은 항상 datapath
+        if any(name.startswith(prefix) for prefix in FUNCTIONAL_BLOCK_PREFIXES):
+            datapath.append(m)
+            continue
+        if any(pat in name for pat in REGISTER_WRAPPER_PATTERNS):
+            register.append(m)
+        else:
+            datapath.append(m)
+    # fallback: datapath가 10개 미만이면 register 모듈도 포함
+    if len(datapath) < 10:
+        datapath.extend(register)
+    return datapath
+
+
+def _validate_claim_diversity(claims: list[dict[str, Any]], topic: str) -> bool:
+    """Check claim diversity: False if single module has 80%+ of all claims."""
+    if len(claims) < 2:
+        return True
+    counts: dict[str, int] = {}
+    for c in claims:
+        mn = c.get("module_name", "")
+        counts[mn] = counts.get(mn, 0) + 1
+    max_count = max(counts.values())
+    is_diverse = max_count / len(claims) < 0.8
+    if not is_diverse:
+        dominant = max(counts, key=counts.get)  # type: ignore[arg-type]
+        logger.warning(json.dumps({
+            "event": "claim_diversity_warning",
+            "topic": topic,
+            "dominant_module": dominant,
+            "dominant_ratio": max_count / len(claims),
+        }))
+    return is_diverse
+
 
 def _build_claim_prompt(
     pipeline_id: str,
@@ -195,7 +254,12 @@ def generate_claims(
     if not modules:
         return []
 
-    chunks = split_module_groups(modules)
+    # Filter claim targets: prioritize datapath modules over register wrappers
+    filtered_modules = _filter_claim_targets(modules, topic)
+    if not filtered_modules:
+        filtered_modules = modules  # fallback to original if filter removes all
+
+    chunks = split_module_groups(filtered_modules)
     all_claims: list[dict[str, Any]] = []
     seq = 0
 

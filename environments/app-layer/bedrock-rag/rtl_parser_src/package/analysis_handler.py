@@ -182,6 +182,58 @@ def _index_document(doc: dict[str, Any]) -> bool:
         return False
 
 
+def _bulk_index_documents(docs: list[dict[str, Any]]) -> int:
+    """여러 문서를 OpenSearch _bulk API로 일괄 인덱싱.
+
+    AOSS는 _bulk API를 지원한다. NDJSON 형식으로 전송.
+    Returns: 성공적으로 인덱싱된 문서 수.
+    """
+    import requests
+
+    if not OPENSEARCH_ENDPOINT or not docs:
+        return 0
+
+    auth = _get_opensearch_auth()
+    url = f"{OPENSEARCH_ENDPOINT}/{OPENSEARCH_INDEX}/_bulk"
+
+    # NDJSON 형식: {"index": {}}\n{doc}\n{"index": {}}\n{doc}\n...
+    lines: list[str] = []
+    for doc in docs:
+        lines.append(json.dumps({"index": {}}))
+        lines.append(json.dumps(doc, ensure_ascii=False, default=str))
+    body = "\n".join(lines) + "\n"
+
+    try:
+        resp = requests.post(
+            url, auth=auth, data=body.encode("utf-8"),
+            headers={"Content-Type": "application/x-ndjson"}, timeout=60,
+        )
+        resp.raise_for_status()
+        result = resp.json()
+        errors = result.get("errors", False)
+        items = result.get("items", [])
+        success_count = sum(
+            1 for item in items
+            if item.get("index", {}).get("status", 0) in (200, 201)
+        )
+        if errors:
+            failed = len(items) - success_count
+            logger.warning(json.dumps({
+                "event": "bulk_index_partial_error",
+                "total": len(docs),
+                "success": success_count,
+                "failed": failed,
+            }))
+        return success_count
+    except Exception as e:
+        logger.error(json.dumps({
+            "event": "bulk_index_error",
+            "doc_count": len(docs),
+            "error": str(e),
+        }))
+        return 0
+
+
 def _update_document(doc_id: str, update_fields: dict[str, Any]) -> bool:
     """OpenSearch 문서의 특정 필드를 업데이트."""
     import requests
@@ -576,17 +628,26 @@ def _process_dataflow_batch(
 # Task 5.5: Topic Classification
 # ---------------------------------------------------------------------------
 
-def handle_topic_classification(event: dict[str, Any]) -> dict[str, Any]:
-    """토픽 분류 핸들러.
+def handle_topic_classification(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
+    """토픽 분류 핸들러 (배치 분할 실행 지원).
+
+    8,107건 module_parse 문서를 300초 Lambda 타임아웃 내에서 처리하기 위해:
+    - _update_document() 제거 (AOSS 부분 업데이트 비효율 + claim_generation이 직접 classify_topic 호출)
+    - batch_offset 파라미터로 분할 실행
+    - 남은 시간 < 30초 시 미처리분을 비동기 Lambda 호출로 위임
 
     1. OpenSearch에서 pipeline_id의 모든 module_parse 문서 조회
-    2. classify_topic() 호출
-    3. OpenSearch 문서에 topic 필드 업데이트
-    4. DynamoDB 상태 업데이트
+    2. batch_offset부터 classify_topic() 호출
+    3. analysis_type=topic 문서만 인덱싱 (module_parse 업데이트 제거)
+    4. 타임아웃 임박 시 비동기 분할 실행
+    5. DynamoDB 상태 업데이트
     """
     pipeline_id = event["pipeline_id"]
+    batch_offset = event.get("batch_offset", 0)
     stage = "topic_classification"
-    _update_dynamodb_status(pipeline_id, stage, "in_progress")
+
+    if batch_offset == 0:
+        _update_dynamodb_status(pipeline_id, stage, "in_progress")
 
     try:
         parsed_docs = _opensearch_scroll_query(pipeline_id, "module_parse")
@@ -595,21 +656,57 @@ def handle_topic_classification(event: dict[str, Any]) -> dict[str, Any]:
                                    extra={"modules_processed": 0})
             return {"status": "completed", "modules_processed": 0}
 
+        total_docs = len(parsed_docs)
+        docs_to_process = parsed_docs[batch_offset:]
+
+        logger.info(json.dumps({
+            "event": "topic_classification_start_batch",
+            "pipeline_id": pipeline_id,
+            "batch_offset": batch_offset,
+            "total_docs": total_docs,
+            "remaining": len(docs_to_process),
+        }))
+
         classified_count = 0
         unclassified_count = 0
+        bulk_buffer: list[dict[str, Any]] = []
+        BULK_SIZE = 200
 
-        for doc in parsed_docs:
+        for i, doc in enumerate(docs_to_process):
+            # 타임아웃 체크: 남은 시간 < 30초이면 미처리분 비동기 위임
+            if context and hasattr(context, "get_remaining_time_in_millis"):
+                remaining_ms = context.get_remaining_time_in_millis()
+                if remaining_ms < 30000:
+                    # 남은 bulk_buffer 플러시
+                    if bulk_buffer:
+                        _bulk_index_documents(bulk_buffer)
+                        bulk_buffer = []
+                    next_offset = batch_offset + i
+                    logger.info(json.dumps({
+                        "event": "topic_classification_timeout_split",
+                        "pipeline_id": pipeline_id,
+                        "processed_so_far": classified_count,
+                        "next_offset": next_offset,
+                        "remaining_docs": total_docs - next_offset,
+                        "remaining_ms": remaining_ms,
+                    }))
+                    # 비동기 Lambda 호출로 나머지 처리
+                    _invoke_async_continuation(
+                        pipeline_id, stage, next_offset,
+                    )
+                    return {
+                        "status": "split",
+                        "classified": classified_count,
+                        "next_offset": next_offset,
+                        "remaining": total_docs - next_offset,
+                    }
+
             module_name = doc.get("module_name", "")
             file_path = doc.get("file_path", "")
-            doc_id = doc.get("_id", "")
 
             topics = classify_topic(file_path, module_name)
 
-            # OpenSearch 문서에 topic 필드 추가 (기존 문서 업데이트)
-            if doc_id:
-                _update_document(doc_id, {"topic": topics, "topics": topics})
-
-            # 별도 analysis_type=topic 문서도 인덱싱
+            # analysis_type=topic 문서를 bulk 버퍼에 추가
             topic_doc = {
                 "pipeline_id": pipeline_id,
                 "analysis_type": "topic",
@@ -618,23 +715,35 @@ def handle_topic_classification(event: dict[str, Any]) -> dict[str, Any]:
                 "topic": topics,
                 "topics": topics,
             }
-            _index_document(topic_doc)
+            bulk_buffer.append(topic_doc)
+
+            # bulk 버퍼가 BULK_SIZE에 도달하면 일괄 인덱싱
+            if len(bulk_buffer) >= BULK_SIZE:
+                _bulk_index_documents(bulk_buffer)
+                bulk_buffer = []
 
             classified_count += 1
             if topics == ["unclassified"]:
                 unclassified_count += 1
 
+        # 남은 bulk_buffer 플러시
+        if bulk_buffer:
+            _bulk_index_documents(bulk_buffer)
+
+        total_classified = batch_offset + classified_count
         _update_dynamodb_status(pipeline_id, stage, "completed",
-                               extra={"modules_processed": classified_count,
+                               extra={"modules_processed": total_classified,
                                       "unclassified_count": unclassified_count})
 
         logger.info(json.dumps({
             "event": "topic_classification_complete",
             "pipeline_id": pipeline_id,
-            "classified": classified_count,
+            "batch_offset": batch_offset,
+            "classified_this_batch": classified_count,
+            "total_classified": total_classified,
             "unclassified": unclassified_count,
         }))
-        return {"status": "completed", "classified": classified_count,
+        return {"status": "completed", "classified": total_classified,
                 "unclassified": unclassified_count}
 
     except Exception as e:
@@ -646,6 +755,42 @@ def handle_topic_classification(event: dict[str, Any]) -> dict[str, Any]:
             "error": str(e),
         }))
         raise
+
+
+def _invoke_async_continuation(
+    pipeline_id: str, stage: str, batch_offset: int,
+) -> None:
+    """미처리분을 비동기 Lambda 호출로 위임."""
+    try:
+        lambda_client = boto3.client("lambda")
+        function_name = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "")
+        if not function_name:
+            logger.error("AWS_LAMBDA_FUNCTION_NAME not set, cannot split")
+            return
+
+        payload = json.dumps({
+            "stage": stage,
+            "pipeline_id": pipeline_id,
+            "batch_offset": batch_offset,
+        })
+        lambda_client.invoke(
+            FunctionName=function_name,
+            InvocationType="Event",  # 비동기
+            Payload=payload.encode("utf-8"),
+        )
+        logger.info(json.dumps({
+            "event": "async_continuation_invoked",
+            "pipeline_id": pipeline_id,
+            "stage": stage,
+            "batch_offset": batch_offset,
+        }))
+    except Exception as e:
+        logger.error(json.dumps({
+            "event": "async_continuation_error",
+            "pipeline_id": pipeline_id,
+            "stage": stage,
+            "error": str(e),
+        }))
 
 
 # ---------------------------------------------------------------------------
@@ -710,6 +855,7 @@ def handle_claim_generation(event: dict[str, Any]) -> dict[str, Any]:
             claims = generate_claims(pipeline_id, topic, modules_subset, analysis_results)
 
             for claim in claims:
+                claim["analysis_type"] = "claim"
                 _index_document(claim)
                 total_claims += 1
 
@@ -741,11 +887,15 @@ def handle_claim_generation(event: dict[str, Any]) -> dict[str, Any]:
 def handle_hdd_generation(event: dict[str, Any]) -> dict[str, Any]:
     """HDD 섹션 생성 핸들러.
 
+    event에 ``topic`` 파라미터가 있으면 해당 토픽만 처리.
+    없으면 전체 토픽을 처리하되, 300초 타임아웃 내에서 가능한 만큼.
+
     1. 분석 결과 수집 (hierarchy, clock_domains, dataflow, claims)
     2. generate_hdd_section() 호출
     3. S3에 Markdown 저장 + OpenSearch 인덱싱
     """
     pipeline_id = event["pipeline_id"]
+    target_topic = event.get("topic", "")
     stage = "hdd_generation"
     _update_dynamodb_status(pipeline_id, stage, "in_progress")
 
@@ -754,7 +904,9 @@ def handle_hdd_generation(event: dict[str, Any]) -> dict[str, Any]:
         hierarchy_docs = _opensearch_scroll_query(pipeline_id, "hierarchy")
         clock_docs = _opensearch_scroll_query(pipeline_id, "clock_domain")
         dataflow_docs = _opensearch_scroll_query(pipeline_id, "dataflow")
-        topic_docs = _opensearch_scroll_query(pipeline_id, "topic")
+
+        # claim 전체를 한 번만 조회 (루프 밖)
+        all_claim_docs = _opensearch_scroll_query(pipeline_id, "claim")
 
         # 심화 분석 결과 5종 조회 (조회 실패 시 빈 리스트로 폴백)
         deep_analysis: dict[str, Any] = {}
@@ -772,15 +924,19 @@ def handle_hdd_generation(event: dict[str, Any]) -> dict[str, Any]:
                     "error": str(da_err),
                 }))
 
-        # 토픽 목록 추출
-        topics: set[str] = set()
-        for doc in topic_docs:
-            t_list = doc.get("topics", doc.get("topic", []))
-            if isinstance(t_list, str):
-                t_list = [t_list]
-            for t in t_list:
-                if t != "unclassified":
-                    topics.add(t)
+        # 토픽 목록: target_topic 지정 시 해당 토픽만
+        if target_topic:
+            topics_to_generate = {target_topic}
+        else:
+            topic_docs = _opensearch_scroll_query(pipeline_id, "topic")
+            topics_to_generate: set[str] = set()
+            for doc in topic_docs:
+                t_list = doc.get("topics", doc.get("topic", []))
+                if isinstance(t_list, str):
+                    t_list = [t_list]
+                for t in t_list:
+                    if t != "unclassified":
+                        topics_to_generate.add(t)
 
         hierarchy = hierarchy_docs[0] if hierarchy_docs else {}
         sections_generated = 0
@@ -798,11 +954,16 @@ def handle_hdd_generation(event: dict[str, Any]) -> dict[str, Any]:
                 if t != "unclassified":
                     topic_module_map.setdefault(t, []).append(doc)
 
-        for topic in sorted(topics):
-            claim_docs = [
-                d for d in _opensearch_scroll_query(pipeline_id, "claim")
-                if d.get("topic") == topic
-            ]
+        logger.info(json.dumps({
+            "event": "hdd_generation_topics",
+            "pipeline_id": pipeline_id,
+            "target_topic": target_topic or "all",
+            "topics": sorted(topics_to_generate),
+        }))
+
+        for topic in sorted(topics_to_generate):
+            # claim을 토픽별로 필터 (이미 조회한 전체에서)
+            claim_docs = [d for d in all_claim_docs if d.get("topic") == topic]
 
             # 토픽별 module_parse 데이터를 hierarchy에 보강
             topic_modules = topic_module_map.get(topic, [])
@@ -1057,13 +1218,17 @@ def handle_backfill_pipeline_id(event: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def handle_clear_index(event: dict[str, Any]) -> dict[str, Any]:
-    """OpenSearch 인덱스를 삭제하고 재생성.
+    """OpenSearch 인덱스 정리.
 
-    AOSS는 ``_delete_by_query``를 지원하지 않으므로,
-    인덱스를 삭제(DELETE)한 뒤 동일 매핑으로 재생성(PUT)한다.
+    ``analysis_type`` 파라미터가 지정되면 해당 타입 문서만 개별 삭제.
+    지정되지 않으면 인덱스 전체를 삭제하고 재생성.
+
+    AOSS는 ``_delete_by_query``를 지원하지 않으므로:
+    - 전체 삭제: 인덱스 DELETE → PUT 재생성
+    - 부분 삭제: scroll 조회 → 개별 문서 DELETE
 
     Args:
-        event: ``pipeline_id`` (str) 필수.
+        event: ``pipeline_id`` (str) 필수, ``analysis_type`` (str) 선택.
 
     Returns:
         ``{"status": "completed"}`` 또는 에러 시 raise.
@@ -1071,6 +1236,7 @@ def handle_clear_index(event: dict[str, Any]) -> dict[str, Any]:
     import requests
 
     pipeline_id = event["pipeline_id"]
+    target_analysis_type = event.get("analysis_type", "")
     stage = "clear_index"
     _update_dynamodb_status(pipeline_id, stage, "in_progress")
 
@@ -1082,6 +1248,48 @@ def handle_clear_index(event: dict[str, Any]) -> dict[str, Any]:
             return {"status": "completed", "skipped": True}
 
         auth = _get_opensearch_auth()
+
+        # analysis_type이 지정되면 해당 타입 문서만 개별 삭제
+        if target_analysis_type:
+            docs = _opensearch_scroll_query(
+                pipeline_id, target_analysis_type, max_docs=50000,
+            )
+            deleted = 0
+            for doc in docs:
+                doc_id = doc.get("_id", "")
+                if not doc_id:
+                    continue
+                del_url = (
+                    f"{OPENSEARCH_ENDPOINT}/{OPENSEARCH_INDEX}/_doc/{doc_id}"
+                )
+                try:
+                    resp = requests.delete(
+                        del_url, auth=auth,
+                        headers={"Content-Type": "application/json"},
+                        timeout=30,
+                    )
+                    if resp.status_code in (200, 404):
+                        deleted += 1
+                except Exception as del_err:
+                    logger.warning(json.dumps({
+                        "event": "clear_index_doc_delete_error",
+                        "doc_id": doc_id,
+                        "error": str(del_err),
+                    }))
+
+            logger.info(json.dumps({
+                "event": "clear_index_partial",
+                "pipeline_id": pipeline_id,
+                "analysis_type": target_analysis_type,
+                "docs_found": len(docs),
+                "docs_deleted": deleted,
+            }))
+            _update_dynamodb_status(pipeline_id, stage, "completed",
+                                   extra={"deleted": deleted,
+                                          "analysis_type": target_analysis_type})
+            return {"status": "completed", "deleted": deleted}
+
+        # analysis_type 미지정 → 인덱스 전체 삭제/재생성
         index_url = f"{OPENSEARCH_ENDPOINT}/{OPENSEARCH_INDEX}"
 
         # 1. DELETE /{index}
@@ -1815,7 +2023,11 @@ def analysis_handler(event: dict[str, Any], context: Any = None) -> dict[str, An
     }))
 
     try:
-        result = handler_fn(event)
+        # context가 필요한 핸들러에 전달 (타임아웃 기반 분할 실행)
+        if stage in ("topic_classification",):
+            result = handler_fn(event, context=context)
+        else:
+            result = handler_fn(event)
         logger.info(json.dumps({
             "event": "analysis_handler_complete",
             "pipeline_id": pipeline_id,
