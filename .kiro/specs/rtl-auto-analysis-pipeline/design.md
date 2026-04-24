@@ -1218,6 +1218,60 @@ Claim DB 아이템 (확장):
 ### 에러 전파 정책
 
 - 개별 파일 파싱 실패는 전체 파이프라인을 중단하지 않음
+
+---
+
+## v5: 검색 정밀도 개선 설계 (Grounding 46% → 65%)
+
+### 18. API Gateway Lambda 검색 경로 파라미터 패스스루
+
+현재 MCP Bridge → API Gateway → `search_archive()` → `_search_rtl_index()` → RTL Lambda `_search_rtl()` 경로에서 `analysis_type` 파라미터가 중간에 끊기는 문제를 수정한다.
+
+**현재 문제:**
+```
+MCP Bridge (analysis_type 전달) 
+  → API Gateway Lambda search_archive() (analysis_type 읽지 않음) ← 여기서 끊김
+    → _search_rtl_index(query, max_results, topic, pipeline_id) (analysis_type 파라미터 없음)
+      → RTL Lambda _search_rtl() (analysis_type 지원하지만 받지 못함)
+```
+
+**수정 후:**
+```
+MCP Bridge (analysis_type 전달)
+  → API Gateway Lambda search_archive() (analysis_type 읽음)
+    → _search_rtl_index(query, max_results, topic, pipeline_id, analysis_type)
+      → RTL Lambda _search_rtl() (analysis_type 필터 적용)
+```
+
+**수정 파일:** `environments/app-layer/bedrock-rag/lambda_src/index.py`
+
+1. `search_archive()`: `body.get('analysis_type', '')` 추가, `_search_rtl_index()` 호출 시 전달
+2. `_search_rtl_index()`: 시그니처에 `analysis_type=''` 추가, `invoke_payload`에 조건부 포함
+3. `_search_rtl_index()` 응답: analysis_type, topic, claim_text, claim_type, hdd_content, hdd_section_title 필드 추가
+
+### 19. 검색 가중치 최적화
+
+RTL Lambda `handler.py`의 `_search_rtl()` 함수에서 analysis_type별 boost 가중치를 조정하여 claim/hdd_section이 module_parse보다 우선 반환되도록 한다.
+
+**현재 문제:** analysis_type 미지정 시 module_parse 10,000건이 claim 99건/hdd 12건을 밀어냄
+
+**수정 파일:** `environments/app-layer/bedrock-rag/rtl_parser_src/handler.py`
+
+- claim_text, hdd_content 필드에 boost 2.0
+- analysis_type=claim boost 3.0, analysis_type=hdd_section boost 2.0
+- module_name wildcard boost 0.3
+
+### Property 29: 검색 경로 파라미터 패스스루
+
+*For any* MCP Bridge search_rtl 호출에서 analysis_type 파라미터가 지정된 경우, API Gateway Lambda의 `search_archive()` → `_search_rtl_index()` → RTL Lambda `_search_rtl()` 전체 경로에서 해당 파라미터가 보존되어야 하며, 최종 검색 결과에는 지정된 analysis_type의 문서만 포함되어야 한다.
+
+**Validates: Requirements 22.1, 22.2, 22.4**
+
+### Property 30: 검색 가중치 우선순위
+
+*For any* analysis_type 미지정 일반 검색에서, 동일 query에 대해 claim 또는 hdd_section 문서의 검색 score가 module_parse 문서의 score보다 높아야 한다.
+
+**Validates: Requirements 23.1, 23.2, 23.3**
 - 개별 분석 단계 실패는 후속 단계 실행을 차단하지 않음 (건너뛰기)
 - LLM 호출 실패는 해당 모듈 그룹만 건너뛰고 나머지 그룹은 계속 처리
 - 모든 에러는 DynamoDB `rag-extraction-tasks` 테이블과 CloudWatch Logs에 기록
