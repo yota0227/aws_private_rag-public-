@@ -61,6 +61,26 @@ class TestClassifyTopic:
     def test_niu_by_prefix(self):
         assert "NIU" in classify_topic("", "tt_niu_bridge")
 
+    def test_niu_noc2axi_prefix(self):
+        assert "NIU" in classify_topic("", "tt_noc2axi_router_ne_opt")
+
+    def test_power_by_prefix(self):
+        assert "Power" in classify_topic("", "tt_prtn_chain")
+
+    def test_memory_by_prefix(self):
+        assert "Memory" in classify_topic("", "sfr_register_block")
+
+    def test_14_topics_supported(self):
+        from topic_classifier import TOPIC_RULES
+        assert len(TOPIC_RULES) >= 14
+
+    def test_existing_topics_not_broken(self):
+        assert "NoC" in classify_topic("", "tt_noc_router")
+        assert "FPU" in classify_topic("", "tt_fpu_v2")
+        assert "EDC" in classify_topic("", "tt_edc1_ring")
+        assert "Overlay" in classify_topic("", "tt_overlay_wrapper")
+        assert "Dispatch" in classify_topic("", "tt_dispatch_top")
+
 
 # ---------------------------------------------------------------------------
 # suggest_inherited_topic

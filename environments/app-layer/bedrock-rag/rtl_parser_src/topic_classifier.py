@@ -38,9 +38,13 @@ TOPIC_RULES: dict[str, dict[str, list[str]]] = {
     "DFX":         {"path": [r"[/\\]dfx[/\\]"],
                     "prefix": ["tt_dfx_", "dfx_"]},
     "NIU":         {"path": [r"[/\\]niu[/\\]"],
-                    "prefix": ["tt_niu_", "niu_"]},
+                    "prefix": ["tt_niu_", "niu_", "tt_noc2axi_"]},
     "SMN":         {"path": [r"[/\\]smn[/\\]"],
                     "prefix": ["tt_smn_", "smn_"]},
+    "Power":       {"path": [r"[/\\]power[/\\]", r"[/\\]prtn[/\\]"],
+                    "prefix": ["tt_prtn_", "prtn_", "iso_en_"]},
+    "Memory":      {"path": [r"[/\\]memory[/\\]", r"[/\\]sram[/\\]"],
+                    "prefix": ["sfr_", "tt_mem_", "mem_"]},
 }
 
 

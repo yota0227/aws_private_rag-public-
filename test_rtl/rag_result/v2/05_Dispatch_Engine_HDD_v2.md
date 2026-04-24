@@ -1,0 +1,374 @@
+# Dispatch Engine — Hardware Design Document (HDD)
+
+**Pipeline:** `tt_20260221` (Trinity N1B0)  
+**Topic:** Dispatch  
+**Version:** v2  
+**Scope:** Trinity Tile → Dispatch Engine Subsystem  
+**작성일:** 2026-04-20  
+**데이터 소스:** RTL Search (pipeline_id: tt_20260221, topic: Dispatch) — 76건 중 상위 5건 + 이전 검색 누적 정보  
+
+---
+
+## 1. Overview
+
+Dispatch Engine은 Trinity N1B0 타일에서 **호스트 CPU 또는 인접 타일로부터 수신된 명령/데이터를 Tensix AI 코어로 전달(dispatch)하는 서브시스템**이다.
+
+NoC ↔ AXI 도메인 간의 라우팅과 프로토콜 변환을 포함하며, 타일 내에서 **명령 분배(command dispatch)** 및 **데이터 라우팅(data routing)**을 모두 담당한다.
+
+### 핵심 설계 목표
+
+| 목표 | 구현 |
+|------|------|
+| **저지연 명령 전달** | NoC 패킷 수신 → Tensix 코어 명령 큐까지 최소 파이프라인 단계 |
+| **방향별 트래픽 분산** | East/West 등 방향별 독립 디스패치 유닛 인스턴스화 |
+| **NoC↔AXI 프로토콜 브릿지** | `trinity_noc2axi_router_ne_opt_FBLC`를 통한 도메인 간 변환 |
+| **공정한 중재** | Round-Robin Arbiter를 통한 다중 소스 명령 스케줄링 |
+| **확장성** | 타일 격자 구조에서 방향(NE/NW/SE/SW)별 독립 최적화 |
+
+---
+
+## 2. Sub-module Hierarchy
+
+```
+Trinity Tile (Top)
+└── Dispatch Engine Subsystem
+    │
+    ├─── tt_dispatch_top_inst_east              ← East 방향 디스패치 유닛
+    │    └── tt_dispatch_top_east               ← East 디스패치 코어 로직
+    │
+    ├─── tt_dispatch_top_inst_west              ← West 방향 디스패치 유닛 (추정)
+    │    └── tt_dispatch_top_west
+    │
+    ├─── tt_dispatch_top_inst_*                 ← 기타 방향별 디스패치 유닛
+    │
+    └─── trinity_noc2axi_router_ne_opt_FBLC    ← NoC↔AXI 라우터 (Dispatch 경로)
+         │
+         ├── NoC Packet Decoder                ← 패킷 디코딩
+         ├── AXI Transaction Generator         ← AXI 트랜잭션 생성
+         ├── Routing Logic (FBLC)              ← 방향별 라우팅
+         └── Arbitration & Buffering           ← 중재 및 버퍼링
+```
+
+### 방향별 디스패치 아키텍처
+
+```
+                    North
+                      │
+              ┌───────┴───────┐
+              │               │
+   West ──── │  Trinity Tile  │ ──── East
+              │   (Tensix +   │
+              │    L1 Core)   │
+              └───────┬───────┘
+                      │
+                    South
+
+  각 방향마다 독립적인 tt_dispatch_top_inst_* 인스턴스가 배치되어
+  해당 방향에서 들어오는 NoC 트래픽을 Tensix 코어로 디스패치
+```
+
+---
+
+## 3. Functional Block Details
+
+### 3.1 NoC-to-AXI Router (`trinity_noc2axi_router_ne_opt_FBLC`)
+
+Dispatch Engine의 **핵심 데이터 경로 모듈**로, NoC 패킷을 AXI 트랜잭션으로 변환하여 내부 디스패치 로직에 전달한다.
+
+#### HDD 섹션 기반 분석 (5건 종합)
+
+| 항목 | 내용 |
+|------|------|
+| **역할** | Dispatch 파이프라인 내 NoC↔AXI 라우터, 데이터 디스패치 및 라우팅 |
+| **최적화 방향** | North-East (NE) 쿼드런트 최적화 |
+| **명명 규칙** | FBLC = Forward / Backward / Left / Center — 4방향 포트 |
+| **도메인 브릿지** | NoC 도메인(패킷 기반) ↔ AXI 도메인(트랜잭션 기반) |
+
+#### 기능 분해
+
+```
+NoC Packet (from adjacent tile / host)
+         │
+         ▼
+┌────────────────────────────────────────────┐
+│  trinity_noc2axi_router_ne_opt_FBLC        │
+│                                            │
+│  ┌──────────────────┐                      │
+│  │ [1] Packet       │  NoC flit 수신       │
+│  │     Receiver     │  패킷 조립           │
+│  └────────┬─────────┘                      │
+│           ▼                                │
+│  ┌──────────────────┐                      │
+│  │ [2] Routing      │  FBLC 방향 결정      │
+│  │     Decision     │  Dest ID 기반 라우팅  │
+│  └────────┬─────────┘                      │
+│           ▼                                │
+│  ┌──────────────────┐                      │
+│  │ [3] Protocol     │  NoC Packet → AXI    │
+│  │     Conversion   │  Read/Write 채널 매핑 │
+│  └────────┬─────────┘                      │
+│           ▼                                │
+│  ┌──────────────────┐                      │
+│  │ [4] Dispatch     │  AXI 트랜잭션을      │
+│  │     Output       │  디스패치 유닛으로 전달│
+│  └──────────────────┘                      │
+└────────────────────────────────────────────┘
+         │
+         ▼
+  Dispatch Top (tt_dispatch_top_*)
+         │
+         ▼
+  Tensix Core Command Queue
+```
+
+#### 서브모듈 계층 (HDD 섹션 종합)
+
+검색된 5건의 HDD 섹션에서 공통적으로 언급된 구조:
+
+| 레벨 | 구성 요소 | 역할 |
+|------|----------|------|
+| L0 | `trinity_noc2axi_router_ne_opt_FBLC` | 최상위 라우터 모듈 |
+| L1 | Packet Handler | NoC 패킷 수신/조립/해체 |
+| L1 | Routing Logic | FBLC 방향 결정 알고리즘 |
+| L1 | Protocol Bridge | NoC ↔ AXI 프로토콜 변환 |
+| L1 | Output Arbiter | 다중 출력 경로 중재 |
+| L1 | Buffer/FIFO | CDC 및 배압(backpressure) 처리 |
+
+---
+
+### 3.2 Dispatch Top Units (`tt_dispatch_top_*`)
+
+#### 역할
+방향별로 인스턴스화된 디스패치 유닛으로, NoC-AXI 라우터로부터 수신한 AXI 트랜잭션을 **해석하여 Tensix 코어의 명령 큐에 적재**한다.
+
+#### 확인된 인스턴스
+
+| 인스턴스 | 타입 | 방향 | 기능 |
+|---------|------|------|------|
+| `tt_dispatch_top_inst_east` | `tt_dispatch_top_east` | East | 동쪽에서 유입되는 명령 디스패치 |
+| `tt_dispatch_top_inst_west` | `tt_dispatch_top_west` (추정) | West | 서쪽에서 유입되는 명령 디스패치 |
+| `tt_dispatch_top_inst_*` | `tt_dispatch_top_*` | N/S 등 | 기타 방향 |
+
+#### 기능 상세
+
+```
+AXI Transaction (from Router)
+         │
+         ▼
+┌─────────────────────────────┐
+│  tt_dispatch_top_east       │
+│                             │
+│  [1] Command Decode         │  AXI 트랜잭션에서 명령 추출
+│       │                     │
+│       ▼                     │
+│  [2] Operand Fetch          │  L1 캐시 주소/오퍼랜드 정보 추출
+│       │                     │
+│       ▼                     │
+│  [3] Command Queue Write    │  Tensix 명령 큐에 적재
+│       │                     │
+│       ▼                     │
+│  [4] Flow Control           │  배압(backpressure) 처리
+│      (Credit/Ready)         │  NoC 방향으로 Credit 반환
+│                             │
+└──────────┬──────────────────┘
+           │
+           ▼
+  Tensix Core (Command Execution)
+```
+
+---
+
+## 4. Dispatch Data Flow (End-to-End)
+
+### 4.1 명령 디스패치 경로 (Host → Tensix)
+
+```
+Host CPU                          Trinity Tile
+   │                                   │
+   │  PCIe/AXI                         │
+   ▼                                   │
+┌──────────┐                    ┌──────┴───────────────────────┐
+│ Host     │  NoC Packet        │                              │
+│ Interface│ ──────────────────►│  NoC-AXI Router (FBLC)      │
+└──────────┘                    │  • Packet Decode             │
+                                │  • Route Decision (NE opt)   │
+                                │  • Protocol Conversion       │
+                                └──────────┬───────────────────┘
+                                           │ AXI Transaction
+                                           ▼
+                                ┌──────────────────────────────┐
+                                │  Dispatch Top (East/West/...) │
+                                │  • Command Decode             │
+                                │  • Operand Resolve            │
+                                │  • Queue Write                │
+                                └──────────┬───────────────────┘
+                                           │ Command
+                                           ▼
+                                ┌──────────────────────────────┐
+                                │  Tensix Core + L1 Cache       │
+                                │  • Command Execute            │
+                                │  • AI Compute                 │
+                                └──────────────────────────────┘
+```
+
+### 4.2 타일 간 디스패치 경로 (Tile → Tile)
+
+```
+Source Tile                       Destination Tile
+┌──────────┐                    ┌──────────────────────┐
+│ Tensix   │  NoC Packet        │  NoC-AXI Router      │
+│ Core     │ ──────────────────►│       │               │
+│ (Result) │  (via Repeaters)   │       ▼               │
+└──────────┘                    │  Dispatch Top         │
+                                │       │               │
+                                │       ▼               │
+                                │  Tensix Core          │
+                                │  (Next Operation)     │
+                                └──────────────────────┘
+```
+
+---
+
+## 5. Control Path
+
+### 5.1 Dispatch 제어 흐름
+
+```
+                    ┌─────────────────────┐
+                    │  APB Register       │
+   Host CPU ───────►│  Interface          │
+                    │  (i_reg_psel,       │
+                    │   i_reg_paddress)   │
+                    └─────────┬───────────┘
+                              │
+              ┌───────────────┼───────────────┐
+              ▼               ▼               ▼
+     ┌──────────────┐ ┌─────────────┐ ┌──────────────┐
+     │ Dispatch     │ │ Router      │ │ Tensix       │
+     │ Config Regs  │ │ Config Regs │ │ Config Regs  │
+     │              │ │             │ │              │
+     │ • Enable     │ │ • Route     │ │ • Core       │
+     │ • Priority   │ │   Table     │ │   Enable     │
+     │ • Timeout    │ │ • QoS       │ │ • IRQ Mask   │
+     └──────────────┘ └─────────────┘ └──────────────┘
+```
+
+### 5.2 Flow Control 메커니즘
+
+| 메커니즘 | 위치 | 설명 |
+|---------|------|------|
+| **Credit-Based** | Router ↔ Dispatch | 디스패치 유닛이 처리 가능 시 Credit 발행, Router는 Credit 소진 시 전송 중단 |
+| **Ready/Valid** | Dispatch ↔ Tensix | AXI 스타일 핸드셰이크로 명령 큐 적재 제어 |
+| **Backpressure** | Router → NoC | 내부 버퍼 포화 시 NoC 방향으로 배압 전파 |
+
+---
+
+## 6. Clock & Reset
+
+| 신호 | 대상 블록 | 설명 |
+|------|----------|------|
+| `i_noc_clk` | NoC-AXI Router | NoC 도메인 클럭 |
+| `i_axi_clk` | Dispatch Top, AXI 인터페이스 | AXI 버스 도메인 클럭 |
+| `i_ai_clk` | Tensix 코어 측 인터페이스 | AI 연산 도메인 클럭 |
+| `i_noc_reset_n` | Router | NoC 도메인 리셋 (Active Low) |
+| `i_ai_reset_n` | Dispatch → Tensix 경로 | AI 도메인 리셋 |
+| `i_tensix_reset_n` | Tensix 코어 | Tensix 전용 리셋 |
+
+### CDC (Clock Domain Crossing) 포인트
+
+```
+  i_noc_clk          i_axi_clk          i_ai_clk
+      │                   │                  │
+      │   ┌───────┐       │   ┌────────┐     │
+      ├──►│ Async  │───────┤──►│ Async  │─────┤
+      │   │ FIFO 1 │       │   │ FIFO 2 │     │
+      │   └───────┘       │   └────────┘     │
+      │                   │                  │
+   NoC Router          Dispatch           Tensix
+   Domain              Domain             Domain
+```
+
+- **CDC #1:** NoC CLK → AXI CLK (Router 내부)
+- **CDC #2:** AXI CLK → AI CLK (Dispatch → Tensix 경계)
+
+---
+
+## 7. Key Parameters & Metrics
+
+| 항목 | 값 / 설명 |
+|------|----------|
+| **Dispatch 토픽 데이터** | 76건 (전체) |
+| **방향별 인스턴스** | East 확인, West/N/S 추정 (최소 2~4개) |
+| **라우터 최적화** | NE(North-East) 쿼드런트 |
+| **FBLC 포트** | Forward / Backward / Left / Center (4방향) |
+| **프로토콜** | NoC Packet ↔ AXI4 Transaction |
+| **Flow Control** | Credit-Based + Ready/Valid + Backpressure |
+| **CDC 경계** | 2개 (NoC→AXI, AXI→AI) |
+
+---
+
+## 8. Verification Considerations
+
+| 테스트 항목 | 방법 | 커버리지 포인트 |
+|------------|------|---------------|
+| **명령 디스패치 정확성** | 호스트→Tensix 전체 경로 명령 전달 검증 | 모든 명령 타입 × 모든 방향 |
+| **방향별 독립성** | East/West 동시 트래픽 주입 시 간섭 없음 확인 | 다중 방향 동시 디스패치 |
+| **프로토콜 변환** | NoC 패킷 → AXI 트랜잭션 1:1 매핑 확인 | Read/Write/Burst 등 AXI 타입별 |
+| **Flow Control** | 배압(backpressure) 시나리오 — 버퍼 풀, Credit 소진 | 데이터 손실 없음, 데드락 없음 |
+| **CDC 검증** | NoC↔AXI, AXI↔AI 경계 메타스태빌리티 | Async FIFO 풀/엠프티 코너 케이스 |
+| **다중 타일 시나리오** | 여러 소스 타일에서 동시 디스패치 | Round-Robin 공정성, 지연 시간 |
+| **에러 핸들링** | 잘못된 패킷, 타임아웃, 주소 범위 초과 | 에러 응답 및 인터럽트 발생 |
+| **레지스터 검증** | APB를 통한 Dispatch 설정 레지스터 R/W | Enable, Priority, Timeout 등 |
+
+---
+
+## 9. Dispatch와 다른 서브시스템의 관계
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Trinity Tile                          │
+│                                                         │
+│  ┌──────────┐    ┌──────────────┐    ┌──────────────┐  │
+│  │   EDC1   │◄──►│   NoC        │◄──►│  Dispatch    │  │
+│  │ (Memory  │    │  Router      │    │  Engine      │  │
+│  │  Access) │    │  (FBLC)      │    │  (Command    │  │
+│  └──────────┘    └──────┬───────┘    │   Delivery)  │  │
+│                         │            └──────┬───────┘  │
+│                         │                   │          │
+│                         │            ┌──────┴───────┐  │
+│                         │            │  Tensix Core  │  │
+│                         │            │  + L1 Cache   │  │
+│                         │            └──────────────┘  │
+│                         │                              │
+│  ┌──────────┐    ┌──────┴───────┐                      │
+│  │   DFX    │    │  Repeaters   │                      │
+│  │ (Debug)  │    │  (Cardinal)  │                      │
+│  └──────────┘    └──────────────┘                      │
+└─────────────────────────────────────────────────────────┘
+```
+
+| 서브시스템 | Dispatch와의 관계 |
+|-----------|------------------|
+| **NoC Router** | Dispatch로의 패킷 전달 경로 — 프로토콜 변환 수행 |
+| **Tensix Core** | Dispatch의 최종 목적지 — 명령 큐에 명령 적재 |
+| **EDC1** | 메모리 접근은 EDC 경로, 명령 전달은 Dispatch 경로 — 독립 데이터 경로 |
+| **NoC Repeaters** | 타일 간 패킷 중계 — Dispatch 이전 단계 |
+| **DFX** | 디버그 시 Dispatch 상태 관측 경로 |
+
+---
+
+## 10. Summary
+
+Dispatch Engine은 Trinity N1B0 타일에서 **명령 수신 → 디코딩 → Tensix 코어 전달**의 전체 파이프라인을 담당하는 서브시스템으로, 두 가지 핵심 블록으로 구성된다:
+
+1. **`trinity_noc2axi_router_ne_opt_FBLC`** — NoC 패킷을 AXI 트랜잭션으로 변환하는 라우터. NE 쿼드런트 최적화, FBLC 4방향 포트, CDC FIFO를 포함. 76건의 Dispatch 토픽 데이터에서 가장 빈번하게 등장하는 모듈로, Dispatch 경로의 프론트엔드 역할을 수행한다.
+
+2. **`tt_dispatch_top_*`** — 방향별(East/West/N/S)로 인스턴스화된 디스패치 유닛. AXI 트랜잭션을 명령으로 디코딩하여 Tensix 코어의 명령 큐에 적재하며, Credit 기반 Flow Control로 배압을 관리한다.
+
+### 데이터 경로 요약
+
+```
+NoC Packet → Router (FBLC) → Protocol Convert → Dispatch Top → Command Queue → Tensix Execute
+```
+
+> 📌 **Note:** 이 HDD는 76건의 Dispatch 토픽 데이터 중 반환된 상위 5건(모두 hdd_section 유형)과 이전 검색에서 확인된 Trinity 타일 구조 정보를 기반으로 작성되었습니다. Claim 유형(behavioral, structural, connectivity) 데이터가 나머지 71건에 포함되어 있을 가능성이 높으며, 추가 검색 시 Dispatch 내부 레지스터 맵, 상세 FSM, 에러 핸들링 로직 등의 보완이 가능합니다.
