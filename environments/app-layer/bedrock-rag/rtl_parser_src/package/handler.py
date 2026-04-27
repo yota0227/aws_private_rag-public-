@@ -139,16 +139,22 @@ def _search_rtl(event):
         filter_clauses = [c for c in filter_clauses if "match_all" not in c]
 
     if query:
-        # 텍스트 검색 + 필터
+        # 텍스트 검색 + 필터 — claim/hdd 우선 검색 (v5 가중치 최적화)
         should_clauses = [
-            {"wildcard": {"module_name": f"*{query}*"}},
-            {"wildcard": {"module_name": f"*{query.lower()}*"}},
+            {"wildcard": {"module_name": {"value": f"*{query}*", "boost": 0.3}}},
+            {"wildcard": {"module_name": {"value": f"*{query.lower()}*", "boost": 0.3}}},
             {"match": {"parsed_summary": query}},
             {"match": {"port_list": query}},
             {"match": {"instance_list": query}},
-            {"match": {"claim_text": query}},
-            {"match": {"hdd_content": query}},
+            {"match": {"claim_text": {"query": query, "boost": 2.0}}},
+            {"match": {"hdd_content": {"query": query, "boost": 2.0}}},
         ]
+        # analysis_type 미지정 시 claim/hdd_section 우선 boost
+        if not analysis_type:
+            should_clauses.extend([
+                {"term": {"analysis_type": {"value": "claim", "boost": 3.0}}},
+                {"term": {"analysis_type": {"value": "hdd_section", "boost": 2.0}}},
+            ])
         bool_query: dict = {
             "should": should_clauses,
             "minimum_should_match": 1,

@@ -1458,7 +1458,9 @@ def search_archive(event):
     # RTL 인덱스 직접 검색 분기
     if source == 'rtl_parsed':
         pipeline_id = body.get('pipeline_id', '')
-        return _search_rtl_index(query, max_results, topic=topic, pipeline_id=pipeline_id)
+        analysis_type = body.get('analysis_type', '')
+        return _search_rtl_index(query, max_results, topic=topic,
+                                 pipeline_id=pipeline_id, analysis_type=analysis_type)
 
     if not BEDROCK_KB_ID:
         return response(200, {
@@ -1530,10 +1532,11 @@ def search_archive(event):
         return response(500, {'error': str(e)})
 
 
-def _search_rtl_index(query, max_results=20, topic='', pipeline_id=''):
+def _search_rtl_index(query, max_results=20, topic='', pipeline_id='', analysis_type=''):
     """RTL OpenSearch 인덱스 직접 검색 (source='rtl_parsed' 분기)
     module_name, parsed_summary, port_list, instance_list, claim_text, hdd_content 필드를 검색
-    topic, pipeline_id 필터링 지원
+    topic, pipeline_id, analysis_type 필터링 지원
+    Requirements: 22.1, 22.2, 22.3, 22.4, 22.5
     """
     if not RTL_OPENSEARCH_ENDPOINT:
         return response(200, {
@@ -1556,6 +1559,8 @@ def _search_rtl_index(query, max_results=20, topic='', pipeline_id=''):
             invoke_payload['topic'] = topic
         if pipeline_id:
             invoke_payload['pipeline_id'] = pipeline_id
+        if analysis_type:
+            invoke_payload['analysis_type'] = analysis_type
 
         invoke_resp = lambda_client.invoke(
             FunctionName=rtl_lambda_name,
@@ -1567,16 +1572,32 @@ def _search_rtl_index(query, max_results=20, topic='', pipeline_id=''):
         results = data.get('results', [])
         total_hits = data.get('total_hits', 0)
 
-        # 결과 텍스트 생성
+        # 결과 텍스트 생성 — analysis_type별 포맷 분기
         if results:
             answer_parts = [f"RTL 인덱스에서 {total_hits}건 검색됨 (상위 {len(results)}건 표시):"]
             for i, r in enumerate(results, 1):
-                answer_parts.append(
-                    f"\n[{i}] {r['module_name'] or '(unnamed)'}"
-                    f"\n    File: {r['file_path']}"
-                    f"\n    Ports: {r['port_list'][:150]}{'...' if len(r['port_list']) > 150 else ''}"
-                    f"\n    Instances: {r['instance_list'][:150]}{'...' if len(r['instance_list']) > 150 else ''}"
-                )
+                atype = r.get('analysis_type', '')
+                name = r.get('module_name') or '(unnamed)'
+
+                if atype == 'claim':
+                    answer_parts.append(
+                        f"\n[{i}] [CLAIM] {name} | topic: {r.get('topic', '')}"
+                        f"\n    Type: {r.get('claim_type', '')}"
+                        f"\n    Text: {r.get('claim_text', '')[:300]}"
+                    )
+                elif atype == 'hdd_section':
+                    hdd = r.get('hdd_content', '')
+                    answer_parts.append(
+                        f"\n[{i}] [HDD] {name} | topic: {r.get('topic', '')}"
+                        f"\n    {hdd[:500]}{'...' if len(hdd) > 500 else ''}"
+                    )
+                else:
+                    answer_parts.append(
+                        f"\n[{i}] [{atype or 'module'}] {name}"
+                        f"\n    File: {r.get('file_path', '')}"
+                        f"\n    Ports: {r.get('port_list', '')[:150]}{'...' if len(r.get('port_list', '')) > 150 else ''}"
+                        f"\n    Instances: {r.get('instance_list', '')[:150]}{'...' if len(r.get('instance_list', '')) > 150 else ''}"
+                    )
             answer = '\n'.join(answer_parts)
         else:
             answer = f"RTL 인덱스에서 '{query}'에 대한 결과를 찾을 수 없습니다."

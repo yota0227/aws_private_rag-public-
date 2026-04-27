@@ -671,38 +671,38 @@ v4.1에서 커버리지 87%를 달성했으나 KB Grounding은 46%에 불과. LL
 | 검색 결과에 module_parse 편중 | analysis_type 필터 없이 전체 검색 → module_parse 10,000건이 claim 99건/hdd 12건을 밀어냄 | HDD/Claim 데이터가 검색 결과에 안 나옴 |
 | 검색 응답에 analysis_type 미포함 | `_search_rtl_index()` 응답에 analysis_type, claim_text, hdd_content 필드 미포함 | Obot이 데이터 유형을 구분 못 함 |
 
-- [ ] 25. v5 검색 경로 수정 — analysis_type 파라미터 패스스루
-  - [ ] 25.1 lambda_src/index.py의 search_archive()에서 analysis_type 파라미터 읽기
+- [x] 25. v5 검색 경로 수정 — analysis_type 파라미터 패스스루
+  - [x] 25.1 lambda_src/index.py의 search_archive()에서 analysis_type 파라미터 읽기
     - `body.get('analysis_type', '')` 추가
     - `_search_rtl_index()` 호출 시 `analysis_type` 전달
     - _목표: MCP Bridge → API Gateway → search_archive → _search_rtl_index → RTL Lambda 전체 경로에서 analysis_type 전달_
 
-  - [ ] 25.2 lambda_src/index.py의 _search_rtl_index() 시그니처에 analysis_type 추가
+  - [x] 25.2 lambda_src/index.py의 _search_rtl_index() 시그니처에 analysis_type 추가
     - `def _search_rtl_index(query, max_results=20, topic='', pipeline_id='', analysis_type='')` 로 변경
     - `invoke_payload`에 `analysis_type` 조건부 포함
     - RTL Lambda의 `_search_rtl()`이 이미 analysis_type 필터를 지원하므로 전달만 하면 됨
 
-  - [ ] 25.3 _search_rtl_index() 응답에 analysis_type, claim_text, hdd_content 필드 포함
+  - [x] 25.3 _search_rtl_index() 응답에 analysis_type, claim_text, hdd_content 필드 포함
     - 현재 응답: module_name, port_list, instance_list, file_path만 포함
     - 추가: analysis_type, topic, claim_text, claim_type, hdd_content, hdd_section_title
     - answer 텍스트 생성 시 analysis_type별 포맷 분기 (claim → claim_text 표시, hdd → hdd_content 표시)
 
-  - [ ] 25.4 Lambda 배포 (API Gateway Lambda)
+  - [x] 25.4 Lambda 배포 (API Gateway Lambda)
     - `lambda_src/` 디렉토리의 수정된 index.py를 배포 패키지에 포함
     - API Gateway Lambda 함수에 배포
 
-- [ ] 26. v5 검색 품질 개선 — 가중치 조정 + 다중 검색 전략
-  - [ ] 26.1 handler.py의 _search_rtl()에서 analysis_type별 검색 가중치 조정
+- [x] 26. v5 검색 품질 개선 — 가중치 조정 + 다중 검색 전략
+  - [x] 26.1 handler.py의 _search_rtl()에서 analysis_type별 검색 가중치 조정
     - claim_text, hdd_content 필드에 boost 가중치 추가 (기본 1.0 → 2.0)
     - module_name wildcard 검색의 boost를 낮춤 (기본 1.0 → 0.5)
     - analysis_type 필터가 있을 때 해당 타입 문서만 반환 (현재도 지원하지만 검증 필요)
 
-  - [ ] 26.2 handler.py의 _search_rtl()에 analysis_type 미지정 시 다중 타입 검색 전략
+  - [x] 26.2 handler.py의 _search_rtl()에 analysis_type 미지정 시 다중 타입 검색 전략
     - analysis_type 미지정 시: claim + hdd_section을 우선 검색, module_parse는 보조
     - 구현: bool query에 should 절로 analysis_type=claim (boost 3.0) + analysis_type=hdd_section (boost 2.0) 추가
     - module_parse는 boost 0.3으로 낮춤
 
-  - [ ] 26.3 RTL Parser Lambda 배포
+  - [x] 26.3 RTL Parser Lambda 배포
     - handler.py 수정 반영
     - Lambda 배포 패키지 빌드 및 업로드
 
