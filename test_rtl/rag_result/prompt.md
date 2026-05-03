@@ -1,14 +1,31 @@
-# Obot HDD 생성 프롬프트 모음
+# HDD 생성 테스트 프롬프트 모음
 
-## 버전 정의
+| 버전 | 날짜 | 변경 내용 |
+|------|------|----------|
+| v1.0 | 2026-04-17 | 초판. 칩 전체 / EDC / Overlay / NoC / NIU / Dispatch 프롬프트 6종 |
+| v1.1 | 2026-04-22 | 통합 HDD 생성 절차 추가 (v2.5 심화 분석 반영) |
+| v1.2 | 2026-04-27 | Hybrid 그라운딩 정책 도입 (v4.1+). 비교 검증(7번), v2 생성(8번) 프롬프트 추가 |
+| v1.3 | 2026-04-29 | RAG v7 반영 (max_results 50). 버전 정의 테이블 v7까지 업데이트 |
 
-| RAG 버전 | 날짜 | RAG 파이프라인 변경 사항 | 저장 위치 |
-|----------|------|------------------------|----------|
-| RAG v1 | 4/17 | 기본 파싱(module_parse) + claim + hdd_section | `v1/` |
-| RAG v2 | 4/20 | v1과 동일 (프롬프트 토픽별 분할) | `v2/` |
-| RAG v2.5 | 4/22 | chip_config + edc_topology + noc_protocol + overlay_deep + sram_inventory 추가 | `v3/` |
-| RAG v3 | 4/24 | 포트 비트폭 추출, 토픽 확장(NIU/Power/Memory), Claim 귀속 정확성 개선(레지스터 래퍼 필터링 + 다양성 검증), bulk 인덱싱, MCP Bridge max_results 20 | `v4/` |
-| RAG v3.1 | 4/24 | Claim 필터 개선: _wrap 패턴 제거, 기능 블록 화이트리스트, fallback 임계값 3→10. Claim 85→99건, Overlay HDD 0→1건 | `v4.1/` |
+---
+
+## RAG 파이프라인 버전 정의
+
+| RAG 버전 | 날짜 | 파이프라인 변경 사항 | 저장 위치 |
+|----------|------|---------------------|----------|
+| v1 | 4/17 | 기본 파싱(module_parse) + claim + hdd_section | `v1/` |
+| v2 | 4/20 | v1과 동일 (프롬프트 토픽별 분할) | `v2/` |
+| v2.5 | 4/22 | chip_config + edc_topology + noc_protocol + overlay_deep + sram_inventory 추가 | `v3/` |
+| v3 | 4/24 | 포트 비트폭 추출, 토픽 확장(NIU/Power/Memory), Claim 귀속 정확성 개선, bulk 인덱싱, MCP Bridge max_results 20 | `v4/` |
+| v3.1 | 4/24 | Claim 필터 개선: `_wrap` 패턴 제거, 기능 블록 화이트리스트, fallback 임계값 3→10. Claim 85→99건 | `v4.1/` |
+| v4 | 4/27 | 검색 정밀도 개선: analysis_type 패스스루, claim/hdd boost 가중치 (claim 3.0, hdd 2.0, module_parse 0.3) | `v5/` |
+| v4.1 | 4/27 | 가중치 리밸런싱: module_parse 0.3→1.5. Hybrid 그라운딩 정책 도입 | `v5.1/` |
+| v5 | 4/28 | Package parser 추가 (localparam/enum/struct 추출). tile_t enum 8종 확인 | `v6/` |
+| v5.1 | 4/28 | Package parser 정규식 수정: `localparam int` 지원. 13개 상수 전부 추출 | `v6c/` |
+| v6 | 4/28 | MCP bridge 응답 확대 (200→800자). Port classifier 추가. trinity.sv 포트 전체 노출 | `v7/` |
+| v7 | 4/29 | search_rtl max_results 20→50. 파서 변경 없이 PRTN(14), AXI(39), SFR(17), EDC IRQ(5) 전부 노출 | `v8/` |
+
+---
 
 ## 버전별 산출물 규칙
 
@@ -16,27 +33,41 @@
 
 | 순서 | 프롬프트 | 파일명 패턴 | 목적 |
 |------|---------|------------|------|
-| 1 | 1번 (칩 전체, Grounding 없음) | `v{N}/v{N}a_chip_no_grounding.md` | RAG 데이터 개선 효과 측정 |
-| 2 | 9번 (통합, Grounding 있음) | `v{N}/v{N}b_chip_grounded.md` | 프롬프트 개선 효과 측정 |
+| 1 | 1번 (칩 전체, Grounding 없음) | `v{N}/v{N}_chip_no_grounding.md` | RAG 데이터 개선 효과 측정 |
+| 2 | 9번 (통합, Grounding 있음) | `v{N}/v{N}_chip_grounded.md` | 프롬프트 개선 효과 측정 |
 | 3 | 2번 (EDC) | `v{N}/v{N}_edc.md` | EDC 토폴로지 반영 확인 |
 | 4 | 4번 (NoC) | `v{N}/v{N}_noc.md` | NoC 프로토콜 반영 확인 |
 | 5 | 3번 (Overlay) | `v{N}/v{N}_overlay.md` | Overlay 심화 반영 확인 |
+| **6** | **통합 HDD** | **`v{N}/v{N}_N1B0_HDD.md`** | **정답지 대응 — 1~5번 산출물을 머지하여 단일 HDD 생성** |
+
+### 통합 HDD 생성 절차
+
+1. 순서 1~5번 산출물을 **각각 별도 파일로 생성** (토픽별 검색 1회씩)
+2. 5개 파일이 모두 생성된 후, 이를 **머지하여 정답지와 동일한 구조의 단일 HDD** 생성
+3. 통합 파일명: `v{N}/v{N}_N1B0_HDD.md`
+4. 통합 시 중복 제거, 섹션 순서는 정답지(`N1B0_NPU_HDD_v0.1.md`) 기준
+5. 각 섹션의 출처(어떤 토픽 검색에서 왔는지)를 Appendix에 기록
+
+> **중요:** 중간 산출물(1~5번)을 삭제하지 않는다. 추적성과 재현성을 위해 보존.
 
 비교 기준:
-- v{N}a vs v{N-1}a → RAG 데이터 개선 효과 (같은 프롬프트, 다른 RAG)
-- v{N}b vs v{N}a → 프롬프트 개선 효과 (같은 RAG, 다른 프롬프트)
+- v{N}\_chip\_no\_grounding vs v{N-1}\_chip\_no\_grounding → RAG 데이터 개선 효과
+- v{N}\_chip\_grounded vs v{N}\_chip\_no\_grounding → 프롬프트 개선 효과
 - v{N} 토픽별 vs v{N-1} 토픽별 → 심화 분석 반영 효과
+- **v{N}\_N1B0\_HDD vs 정답지 → 최종 품질 평가**
 
 ---
 
-## 사용법
-- Obot 채팅창에 아래 프롬프트를 **하나씩** 입력
+## 테스트 환경 사용법
+
+- MCP 도구가 연결된 AI 채팅 환경에서 아래 프롬프트를 **하나씩** 입력
 - **중요: search_rtl 도구는 한 번에 하나만 호출하도록 유도** (병렬 호출 시 JSON 파싱 에러 발생)
 - 에러 발생 시: 프롬프트를 더 짧게 줄이거나, "도구를 한 번만 호출해" 추가
 
-## ⚠️ Obot JSON 에러 대응
+### ⚠️ JSON 에러 대응
+
 `failed to unmarshal input: invalid character '{' after top-level value` 에러가 나면:
-- Obot이 search_rtl을 여러 번 동시 호출하려다 JSON을 깨뜨린 것
+- AI가 search_rtl을 여러 번 동시 호출하려다 JSON을 깨뜨린 것
 - 프롬프트에 **"search_rtl 도구를 딱 한 번만 호출해"** 를 추가
 - 또는 검색 없이 **"이미 알고 있는 정보로 작성해"** 로 변경
 
@@ -315,7 +346,6 @@ pipeline_id는 tt_20260221이야.
 | 누락 | Sample에 있는데 RAG에 없는 내용 |
 | RAG 우위 | RAG에만 있는 추가 정보 (UCIe, 보안 블록 등) |
 
-
 ---
 
 ## 9. v2.5 통합 HDD 확인 (심화 분석 반영 후)
@@ -337,6 +367,39 @@ search_rtl 도구를 딱 한 번만 호출해서 pipeline_id "tt_20260221", quer
 - NoC 프로토콜이 있으면 라우팅 알고리즘 3종 비교, flit 구조 포함
 - Overlay 심화가 있으면 CPU 클러스터, L1 캐시, APB 슬레이브 포함
 - SRAM Inventory가 있으면 메모리 타입별 수량 테이블 포함
+
+pipeline_id는 tt_20260221이야.
+```
+
+---
+
+## 10. Hybrid 그라운딩 정책 (v4.1+ 적용)
+
+> v5 리뷰에서 도출된 개선. KB 데이터 우선 + LLM 보완으로 문서 완전성과 투명성을 동시 확보.
+
+### 그라운딩 태그 규칙
+
+| 태그 | 의미 | 사용 조건 |
+|------|------|----------|
+| (태그 없음) | KB에서 직접 확인된 사실 | 검색 결과에 모듈명, 포트, claim이 있을 때 |
+| `[FROM LLM]` | LLM 도메인 지식으로 보완 | KB에 없지만 아키텍처 이해에 필수적인 내용 |
+| `[NOT IN KB]` | KB에 없고 LLM으로도 보완 불가 | 구체적 수치, 파라미터 등 추측 불가한 항목 |
+| `[TBC]` | 확인 필요 | KB/LLM 모두 불확실한 수치 |
+
+### 적용 프롬프트 (통합 HDD용)
+
+```
+search_rtl 도구를 딱 한 번만 호출해서 pipeline_id "tt_20260221", query "HDD", max_results 30으로 검색하고,
+검색된 결과를 바탕으로 통합 N1B0 HDD 문서를 정리해줘.
+도구 호출은 반드시 1회만 해.
+
+Hybrid 그라운딩 규칙:
+- KB에서 확인된 내용은 태그 없이 작성 (모듈명, 포트, claim 등)
+- KB에 없지만 아키텍처 이해에 필수적인 내용은 [FROM LLM] 태그를 붙여서 보완
+- 구체적 수치(비트폭, 엔트리 수 등)가 KB에 없으면 [TBC]로 표기
+- RTL 신호명, 모듈명은 원문 그대로 유지
+- trinity_router는 N1B0에서 인스턴스화되지 않음 (EMPTY by design). 계층에 넣지 마.
+- 문서 끝에 KB Coverage Matrix를 포함해서 어떤 섹션이 KB/LLM/미확인인지 추적
 
 pipeline_id는 tt_20260221이야.
 ```
