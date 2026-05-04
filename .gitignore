@@ -60,7 +60,8 @@ test_rtl/Sample/
 
 # Temporary output files
 out*.json
-resp_*.json
+resp*.json
+response.json
 
 # Terraform plan files
 *.tfplan
