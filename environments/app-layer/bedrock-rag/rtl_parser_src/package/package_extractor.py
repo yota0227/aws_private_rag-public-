@@ -1,212 +1,172 @@
+"""Package-level parser for SystemVerilog package files.
+
+Extracts localparam, typedef enum, and typedef struct definitions
+from *_pkg.sv files and converts them to structured claims for
+RAG indexing.
+
+v6 addition — addresses the gap where module_parse only captures
+module declarations but misses package constants like SizeX, SizeY,
+tile_t enum, etc.
 """
-Package parameter extraction for RTL auto-analysis pipeline.
 
-Extracts localparam, parameter, and typedef enum declarations from
-SystemVerilog package files (*_pkg.sv). Identifies chip configuration
-parameters (SizeX, SizeY, NumTensix, etc.) and builds tile-type
-enum-to-module mappings.
-
-Requirements validated: 12.1, 12.3
-"""
-
-import logging
 import re
-from typing import Any
+import hashlib
+import logging
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Regex patterns
-# ---------------------------------------------------------------------------
 
-_LOCALPARAM_RE = re.compile(
-    r"localparam\s+(?:logic\s*(?:\[.*?\])?\s+)?(\w+)\s*=\s*([^;]+);",
-    re.IGNORECASE,
-)
-
-_PARAMETER_RE = re.compile(
-    r"parameter\s+(?:integer|real|string|logic\s*(?:\[.*?\])?)?\s*(\w+)\s*=\s*([^;,\)]+)",
-    re.IGNORECASE,
-)
-
-_TYPEDEF_ENUM_RE = re.compile(
-    r"typedef\s+enum\s*(?:logic\s*\[.*?\])?\s*\{([^}]+)\}\s*(\w+)\s*;",
-    re.IGNORECASE | re.DOTALL,
-)
-
-# Chip configuration keywords (case-insensitive match)
-_CHIP_CONFIG_KEYWORDS = [
-    "sizex", "sizey", "numtensix", "numnoc2axi", "numdispatch",
-    "numniu", "numedc", "numoverlay", "numfpu", "numsfpu",
-    "gridwidth", "gridheight", "numrows", "numcols",
-    "numendpoints", "numtiles",
-]
+def is_package_file(file_path: str) -> bool:
+    """Check if a file is a SystemVerilog package file."""
+    return file_path.endswith("_pkg.sv") or file_path.endswith("_pkg.v")
 
 
-def extract_package_params(rtl_content: str) -> dict[str, Any]:
-    """Extract localparam, parameter, and typedef enum from *_pkg.sv content.
+def extract_package_constants(rtl_content: str, file_path: str = "",
+                               pipeline_id: str = "") -> list:
+    """Extract localparam, typedef enum, and typedef struct from package content.
 
-    Scans *rtl_content* for ``localparam``, ``parameter``, and
-    ``typedef enum`` declarations and returns a structured dict.
-
-    Args:
-        rtl_content: Raw SystemVerilog package source text.
-
-    Returns:
-        A dict with keys:
-            - ``localparams``: dict mapping name -> value (str)
-            - ``parameters``: dict mapping name -> value (str)
-            - ``enums``: dict mapping enum type name -> list of enum values
+    Returns a list of claim-format dicts ready for OpenSearch indexing.
     """
-    if not rtl_content or not isinstance(rtl_content, str):
-        logger.warning("extract_package_params: empty or invalid input")
-        return {"localparams": {}, "parameters": {}, "enums": {}}
+    content = re.sub(r"//[^\n]*", "", rtl_content)
+    content = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
 
-    localparams: dict[str, str] = {}
-    parameters: dict[str, str] = {}
-    enums: dict[str, list[str]] = {}
+    claims = []
+    pkg_match = re.search(r"\bpackage\s+(\w+)\s*;", content)
+    pkg_name = pkg_match.group(1) if pkg_match else ""
 
-    # Extract localparams
-    for match in _LOCALPARAM_RE.finditer(rtl_content):
-        name = match.group(1)
-        value = match.group(2).strip()
-        localparams[name] = value
+    claims.extend(_extract_localparams(content, pkg_name, file_path, pipeline_id))
+    claims.extend(_extract_enums(content, pkg_name, file_path, pipeline_id))
+    claims.extend(_extract_structs(content, pkg_name, file_path, pipeline_id))
+    claims.extend(_extract_parameters(content, pkg_name, file_path, pipeline_id))
 
-    # Extract parameters
-    for match in _PARAMETER_RE.finditer(rtl_content):
-        name = match.group(1)
-        value = match.group(2).strip()
-        parameters[name] = value
+    return claims
 
-    # Extract typedef enums
-    for match in _TYPEDEF_ENUM_RE.finditer(rtl_content):
-        body = match.group(1)
-        enum_name = match.group(2)
-        values = _parse_enum_body(body)
-        enums[enum_name] = values
 
-    logger.info(
-        "Extracted %d localparams, %d parameters, %d enums",
-        len(localparams), len(parameters), len(enums),
+def _extract_localparams(content, pkg_name, file_path, pipeline_id):
+    """Extract localparam declarations."""
+    claims = []
+    # Match: localparam [type] [packed_dim] NAME = VALUE;
+    # Types: int, integer, logic, bit, string, shortint, longint, byte, or omitted
+    pattern = re.compile(
+        r"\blocalparam\s+(?:int\b|integer\b|logic\b|bit\b|string\b|shortint\b|longint\b|byte\b)?\s*"
+        r"(?:unsigned\s+)?"
+        r"(?:\[[^\]]*\]\s*)?"
+        r"(\w+)\s*=\s*([^;]+);",
+        re.MULTILINE
     )
-    return {"localparams": localparams, "parameters": parameters, "enums": enums}
+    params = {}
+    for m in pattern.finditer(content):
+        params[m.group(1)] = m.group(2).strip()
+
+    if params:
+        param_lines = [f"{k} = {v}" for k, v in params.items()]
+        claim_text = (
+            f"Package '{pkg_name}' defines {len(params)} localparam constants: "
+            + ", ".join(param_lines[:30])
+        )
+        if len(params) > 30:
+            claim_text += f" ... and {len(params) - 30} more"
+        claims.append(_make_claim(claim_text, "structural", pkg_name,
+                                   "PackageConfig", file_path, pipeline_id))
+
+        # Create individual claims for ALL localparams (not just pure numeric)
+        for name, value in params.items():
+            claims.append(_make_claim(
+                f"Package '{pkg_name}' defines localparam {name} = {value}",
+                "structural", pkg_name, "PackageConfig", file_path, pipeline_id,
+            ))
+    return claims
 
 
-def _parse_enum_body(body: str) -> list[str]:
-    """Parse enum body text into a list of enum value names."""
-    values: list[str] = []
-    for item in body.split(","):
-        item = item.strip()
-        if not item:
-            continue
-        # Remove assignment (e.g., "TENSIX = 0")
-        name = item.split("=")[0].strip()
-        # Remove inline comments
-        name = re.sub(r"//.*", "", name).strip()
-        name = re.sub(r"/\*.*?\*/", "", name).strip()
-        if name and re.match(r"^\w+$", name):
-            values.append(name)
-    return values
-
-
-def identify_chip_config(params: dict[str, Any]) -> dict[str, Any]:
-    """Identify chip configuration parameters from extracted params.
-
-    Searches localparams and parameters for known chip configuration
-    keywords (SizeX, SizeY, NumTensix, etc.) and returns a filtered dict.
-
-    Args:
-        params: Output of ``extract_package_params()``.
-
-    Returns:
-        A dict with keys:
-            - ``chip_params``: dict mapping param name -> {value, type}
-            - ``grid_size``: dict with x/y if found
-    """
-    if not params or not isinstance(params, dict):
-        logger.warning("identify_chip_config: empty or invalid input")
-        return {"chip_params": {}, "grid_size": {}}
-
-    chip_params: dict[str, dict[str, str]] = {}
-    grid_size: dict[str, str] = {}
-
-    all_params: list[tuple[str, str, str]] = []
-    for name, value in params.get("localparams", {}).items():
-        all_params.append((name, value, "localparam"))
-    for name, value in params.get("parameters", {}).items():
-        all_params.append((name, value, "parameter"))
-
-    for name, value, param_type in all_params:
-        lower_name = name.lower()
-        for keyword in _CHIP_CONFIG_KEYWORDS:
-            if keyword in lower_name:
-                chip_params[name] = {"value": value, "type": param_type}
-                break
-
-        # Identify grid size
-        if lower_name in ("sizex", "gridwidth", "numcols"):
-            grid_size["x"] = value
-        elif lower_name in ("sizey", "gridheight", "numrows"):
-            grid_size["y"] = value
-
-    logger.info("Identified %d chip config params", len(chip_params))
-    return {"chip_params": chip_params, "grid_size": grid_size}
-
-
-def extract_enum_mapping(rtl_content: str) -> dict[str, Any]:
-    """Extract tile type -> value mapping from typedef enum declarations.
-
-    Parses typedef enum declarations and builds a mapping of enum value
-    names to their assigned integer values (if present).
-
-    Args:
-        rtl_content: Raw SystemVerilog package source text.
-
-    Returns:
-        A dict mapping enum type name -> dict of {value_name: assigned_value}.
-        If no explicit assignment, the value is the positional index.
-    """
-    if not rtl_content or not isinstance(rtl_content, str):
-        logger.warning("extract_enum_mapping: empty or invalid input")
-        return {}
-
-    result: dict[str, dict[str, Any]] = {}
-
-    for match in _TYPEDEF_ENUM_RE.finditer(rtl_content):
-        body = match.group(1)
-        enum_name = match.group(2)
-        mapping: dict[str, Any] = {}
-        index = 0
-
-        for item in body.split(","):
-            item = item.strip()
-            if not item:
+def _extract_enums(content, pkg_name, file_path, pipeline_id):
+    """Extract typedef enum declarations."""
+    claims = []
+    pattern = re.compile(
+        r"typedef\s+enum\s+(?:logic|bit|int)?\s*(?:\[[^\]]*\]\s*)?"
+        r"\{([^}]+)\}\s*(\w+)\s*;",
+        re.DOTALL
+    )
+    for m in pattern.finditer(content):
+        body = m.group(1)
+        enum_name = m.group(2)
+        members = []
+        for line in body.split(","):
+            line = line.strip()
+            if not line:
                 continue
-            # Remove inline comments
-            item = re.sub(r"//.*", "", item).strip()
-            item = re.sub(r"/\*.*?\*/", "", item).strip()
-            if not item:
-                continue
+            member_match = re.match(r"(\w+)\s*(?:=\s*([^,\s]+))?", line)
+            if member_match:
+                mname = member_match.group(1)
+                mval = member_match.group(2)
+                members.append(f"{mname}={mval}" if mval else mname)
 
-            if "=" in item:
-                parts = item.split("=", 1)
-                name = parts[0].strip()
-                val = parts[1].strip()
-                if name and re.match(r"^\w+$", name):
-                    mapping[name] = val
-                    # Try to parse as int for next index
-                    try:
-                        index = int(val, 0) + 1
-                    except (ValueError, TypeError):
-                        index += 1
-            else:
-                name = item.strip()
-                if name and re.match(r"^\w+$", name):
-                    mapping[name] = index
-                    index += 1
+        if members:
+            claims.append(_make_claim(
+                f"Package '{pkg_name}' defines typedef enum '{enum_name}' "
+                f"with {len(members)} members: {', '.join(members)}",
+                "structural", pkg_name, "PackageConfig", file_path, pipeline_id,
+            ))
+    return claims
 
-        if mapping:
-            result[enum_name] = mapping
 
-    logger.info("Extracted enum mappings for %d types", len(result))
-    return result
+def _extract_structs(content, pkg_name, file_path, pipeline_id):
+    """Extract typedef struct declarations."""
+    claims = []
+    pattern = re.compile(
+        r"typedef\s+struct\s+(?:packed\s*)?\{([^}]+)\}\s*(\w+)\s*;",
+        re.DOTALL
+    )
+    for m in pattern.finditer(content):
+        body = m.group(1)
+        struct_name = m.group(2)
+        fields = []
+        field_pattern = re.compile(
+            r"(?:logic|bit|int|integer|wire|reg)\s*(?:\[[^\]]*\]\s*)?(\w+)\s*;",
+        )
+        for fm in field_pattern.finditer(body):
+            fields.append(fm.group(1))
+
+        if fields:
+            claims.append(_make_claim(
+                f"Package '{pkg_name}' defines typedef struct '{struct_name}' "
+                f"with {len(fields)} fields: {', '.join(fields)}",
+                "structural", pkg_name, "PackageConfig", file_path, pipeline_id,
+            ))
+    return claims
+
+
+def _extract_parameters(content, pkg_name, file_path, pipeline_id):
+    """Extract top-level parameter declarations in package."""
+    claims = []
+    pattern = re.compile(
+        r"\bparameter\s+(?:int|integer|logic|bit|string)?\s*"
+        r"(?:\[[^\]]*\]\s*)?"
+        r"(\w+)\s*=\s*([^;]+);",
+        re.MULTILINE
+    )
+    for m in pattern.finditer(content):
+        claims.append(_make_claim(
+            f"Package '{pkg_name}' defines parameter {m.group(1)} = {m.group(2).strip()}",
+            "structural", pkg_name, "PackageConfig", file_path, pipeline_id,
+        ))
+    return claims
+
+
+def _make_claim(claim_text, claim_type, module_name, topic,
+                file_path, pipeline_id):
+    """Create a claim dict in the standard format for OpenSearch indexing."""
+    claim_id = hashlib.sha256(
+        f"{pipeline_id}:{file_path}:{claim_text[:100]}".encode()
+    ).hexdigest()[:16]
+    return {
+        "analysis_type": "claim",
+        "claim_id": claim_id,
+        "claim_type": claim_type,
+        "claim_text": claim_text,
+        "module_name": module_name,
+        "topic": topic,
+        "pipeline_id": pipeline_id,
+        "file_path": file_path,
+        "confidence_score": 1.0,
+        "source_files": [file_path],
+    }

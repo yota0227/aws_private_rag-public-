@@ -2,7 +2,7 @@
 
 ## Overview
 
-BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시스템으로 확장한다. 5개 Phase로 나누어 점진적으로 구현하며, 각 Phase는 이전 Phase의 결과물에 의존한다. Terraform IaC로 AWS 리소스를 관리하고, Python 3.12 Lambda 함수, Node.js MCP Bridge, Go 1.21 + gopter 속성 기반 테스트를 사용한다.
+BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시스템으로 확장한다. 7개 Phase로 나누어 점진적으로 구현하며, 각 Phase는 이전 Phase의 결과물에 의존한다. Terraform IaC로 AWS 리소스를 관리하고, Python 3.12 Lambda 함수, Node.js MCP Bridge, Go 1.21 + gopter 속성 기반 테스트를 사용한다. Phase 7은 v9 RTL Parser Pipeline Enhancement로, Supply Side 파서 6종 확장, Consumption Side 검색 개선, Generation Side Hybrid Grounding, Quality Infrastructure 파서 기여도 측정을 포함한다.
 
 ## Tasks
 
@@ -392,6 +392,225 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
   - `cd environments/app-layer/knowledge-graph && terraform validate`
   - `cd tests && go test -v ./properties/ -run TestEnhancedRagOptimization -count=1`
 
+
+- [x] 14. Phase 7: Supply Side 파서 확장 — Package Function Extractor + Flit Struct + 중첩 Struct
+  - [x] 14.1 Package Function/Task Extractor 구현 (`environments/app-layer/bedrock-rag/rtl_parser_src/package_extractor.py` 수정)
+    - `_extract_functions()` 함수 추가: `function` 선언에서 함수명, 반환 타입, 인자 목록(이름 + 타입), automatic/static 한정자 파싱
+    - `_extract_tasks()` 함수 추가: `task` 선언에서 태스크명, 인자 목록(이름 + 방향 + 타입) 파싱
+    - 본문 20줄 이하인 경우 1줄 요약(주요 로직 패턴)을 claim_text에 추가
+    - claim_text 형식: `"Package '{pkg_name}' defines function '{func_name}({args}) → {return_type}'"`
+    - 모든 claim에 `parser_source='package_function_extractor'` 설정
+    - `extract_package_constants()` 함수 내에서 `_extract_functions()`, `_extract_tasks()` 호출 통합
+    - _Requirements: 17.1, 17.2, 17.3, 17.4, 17.5, 17.6, 17.7_
+
+  - [ ]* 14.2 Property 26 테스트 작성: Function/Task 추출 라운드트립
+    - **Property 26: Function/Task 추출 라운드트립**
+    - **Validates: Requirements 17.1, 17.2, 17.3, 17.6**
+    - 유효한 SystemVerilog function/task 선언에 대해 추출 후 claim_text 파싱으로 원본 시그니처 복원 검증
+
+  - [x] 14.3 Flit Struct 필드 레벨 파싱 구현 (`environments/app-layer/bedrock-rag/rtl_parser_src/package_extractor.py` 수정)
+    - `_extract_structs()` 함수 확장: 필드별 비트폭(`logic [N:0]`), 인라인 주석(`// comment`), 타입 참조(`tile_t dest_tile`) 추출
+    - claim_text 형식: `"Package '{pkg_name}' defines struct '{struct_name}' field '{field_name}' with width {bit_width}"`
+    - flit 관련 타입(`*_flit_t`, `*_header_t`, `*_payload_t`)에 대해 비트 위치 순서 정렬 레이아웃 claim 추가 생성
+    - 모든 claim에 `parser_source='package_struct_parser'` 설정
+    - _Requirements: 20.1, 20.2, 20.3, 20.4, 20.5_
+
+  - [ ]* 14.4 Property 30 테스트 작성: Struct 필드 비트폭 추출
+    - **Property 30: Struct 필드 비트폭 추출**
+    - **Validates: Requirements 20.1, 20.2, 20.4, 20.5**
+    - typedef struct 정의에서 필드 비트폭, 인라인 주석, 타입 참조가 claim에 포함되는지 검증
+
+  - [x] 14.5 중첩 Struct 지원 구현 (`environments/app-layer/bedrock-rag/rtl_parser_src/package_extractor.py` 수정)
+    - `_extract_structs()` 함수 확장: struct 내부에 다른 struct 타입 필드 인식 + 계층적 claim 생성
+    - claim_text 형식: `"Package '{pkg_name}' struct '{parent_struct}' contains nested struct field '{field_name}' of type '{child_struct}'"`
+    - 최대 3단계 깊이까지 추적, 초과 시 `"nested depth exceeds 3, truncated"` 경고 포함
+    - 부모/자식 struct 모두에 대해 claim 생성
+    - _Requirements: 21.1, 21.2, 21.3, 21.4_
+
+  - [ ]* 14.6 Property 31 테스트 작성: 중첩 Struct 완전성
+    - **Property 31: 중첩 Struct 완전성**
+    - **Validates: Requirements 21.1, 21.2, 21.3, 21.4**
+    - 부모/자식 struct claim 모두 생성, 관계 추적 가능, 3단계 초과 시 truncation 경고 검증
+
+- [ ] 15. Phase 7: Supply Side 파서 확장 — Generate Block Parser + Always Block Parser
+  - [ ] 15.1 Generate Block Parser 구현 (`environments/app-layer/bedrock-rag/rtl_parser_src/generate_block_parser.py` — 신규)
+    - `extract_generate_blocks(rtl_content, module_name, file_path, pipeline_id)` 함수 구현
+    - `generate for`/`generate if` 블록 범위(begin~end) 정규식 식별
+    - 4가지 토폴로지 패턴 인식: daisy-chain, ring, feedthrough, 2D array
+    - 조건부 bypass 패턴 감지 및 claim 포함
+    - genvar 범위에서 반복 차원/크기 추출, 파라미터 참조 문자열 보존
+    - 중첩 generate(2중 for) → `"2D {outer_dim}×{inner_dim}"` 형식 기록
+    - claim_text 형식: `"Module '{module_name}' has generate block '{label}' with {pattern_type} topology connecting {signal_name} across {dimension} ({size} elements)"`
+    - 모든 claim에 `parser_source='generate_block_parser'` 설정
+    - _Requirements: 18.1, 18.2, 18.3, 18.4, 18.5, 18.6, 18.7_
+
+  - [ ]* 15.2 Property 27 테스트 작성: Generate 블록 토폴로지 패턴 인식
+    - **Property 27: Generate 블록 토폴로지 패턴 인식**
+    - **Validates: Requirements 18.1, 18.2, 18.4, 18.6**
+    - generate for/if 블록에서 올바른 토폴로지 유형 식별, claim_text에 패턴/신호/차원/크기 포함, 파라미터 참조 보존 검증
+
+  - [ ] 15.3 Always Block Parser 구현 (`environments/app-layer/bedrock-rag/rtl_parser_src/always_block_parser.py` — 신규)
+    - `extract_clock_domains(rtl_content, module_name, file_path, pipeline_id)` 함수 구현
+    - `always_ff` 블록 sensitivity list(`@(posedge <clk>)`, `@(negedge <clk>)`) 정규식 추출
+    - `always_comb` 블록 제외
+    - 클럭 신호명 → 도메인 매핑: `i_ai_clk` → AI, `i_noc_clk` → NoC, `i_dm_clk` → DM, 기타 `*_clk` → 신호명 기반
+    - 모듈당 클럭 도메인 요약 claim 생성: `"Module '{module_name}' operates in {N} clock domains: {domain_list}"`
+    - 2개 이상 도메인 감지 시 CDC 경고 claim 추가: `"Module '{module_name}' has potential clock domain crossing between {domain_A} and {domain_B}"`
+    - 리셋 신호(`posedge reset`, `negedge reset_n`) claim 포함
+    - 모든 claim에 `parser_source='always_block_parser'` 설정
+    - _Requirements: 19.1, 19.2, 19.3, 19.4, 19.5, 19.6, 19.7_
+
+  - [ ]* 15.4 Property 28 테스트 작성: 클럭 도메인 추출 및 집계
+    - **Property 28: 클럭 도메인 추출 및 집계**
+    - **Validates: Requirements 19.1, 19.2, 19.3, 19.6**
+    - always_ff에서만 클럭 도메인 추출(always_comb 제외), 모듈당 집계, 도메인 매핑 정확성 검증
+
+  - [ ]* 15.5 Property 29 테스트 작성: 클럭 도메인 크로싱 감지
+    - **Property 29: 클럭 도메인 크로싱 감지**
+    - **Validates: Requirements 19.4**
+    - 2개 이상 도메인 시 CDC claim 생성, 1개 이하 시 CDC claim 미생성 검증
+
+- [ ] 16. Phase 7 Checkpoint — Supply Side 파서 기본 검증
+  - Ensure all tests pass, ask the user if questions arise.
+  - `package_extractor.py` 함수/태스크 추출 + flit 구조 + 중첩 struct 동작 확인
+  - `generate_block_parser.py` 토폴로지 패턴 인식 동작 확인
+  - `always_block_parser.py` 클럭 도메인 추출 동작 확인
+
+
+- [ ] 17. Phase 7: Supply Side 파서 확장 — Bitwidth Evaluator
+  - [ ] 17.1 Bitwidth Evaluator 구현 (`environments/app-layer/bedrock-rag/rtl_parser_src/bitwidth_evaluator.py` — 신규)
+    - `SafeIntEvaluator` 클래스 구현: `ast.NodeVisitor` 기반 안전한 정수 산술 파서
+    - 지원 연산: `+`, `-`, `*`, `/`, `$clog2()`
+    - `evaluate_bitwidth(expr, param_context)` 함수: 비트폭 표현식을 정수로 평가
+    - 파라미터 해석 순서: 로컬 파라미터 → 패키지 파라미터
+    - 해석 불가능한 파라미터 포함 시 원본 표현식 유지 + DEBUG 로그
+    - 악의적 입력(함수 호출, import, exec 등) 거부 → ValueError 발생
+    - Python `eval()` 사용 금지 (코드 인젝션 방지)
+    - _Requirements: 22.1, 22.2, 22.3, 22.4, 22.5, 22.6_
+
+  - [ ]* 17.2 Property 32 테스트 작성: 비트폭 표현식 평가
+    - **Property 32: 비트폭 표현식 평가**
+    - **Validates: Requirements 22.1, 22.2, 22.3, 22.4**
+    - 순수 정수 산술식 + 해석 가능 파라미터 → 수학적 올바른 결과, 미해석 파라미터 → 원본 유지 검증
+
+  - [ ]* 17.3 Property 33 테스트 작성: 안전한 비트폭 평가 (코드 인젝션 방지)
+    - **Property 33: 안전한 비트폭 평가**
+    - **Validates: Requirements 22.6**
+    - 정수 리터럴/지원 연산자/파라미터 참조 외 구문 거부, 악의적 입력 시 ValueError 검증
+
+
+- [ ] 18. Phase 7: Consumption Side — 대형 모듈 청킹 + 질의 유형별 동적 Boost
+  - [ ] 18.1 대형 모듈 청킹 구현 (`environments/app-layer/bedrock-rag/rtl_parser_src/handler.py` 수정)
+    - `_process_rtl_file()` 함수 확장: 포트 50개 이상 모듈 감지 시 Sub_Record 분할
+    - 3가지 Sub_Record 유형 생성: `port_summary`(Port_Classifier 카테고리별), `instance_hierarchy`(인스턴스 목록 + 모듈 타입), `parameter_config`(파라미터 목록 + 값)
+    - 각 Sub_Record에 `parent_module_name`, `sub_record_type`, `analysis_type='module_parse_chunk'` 필드 포함
+    - 기존 전체 모듈 레코드(`analysis_type: module_parse`) 유지 (하위 호환)
+    - 각 Sub_Record를 개별 임베딩 + OpenSearch 인덱싱
+    - _Requirements: 23.1, 23.2, 23.3, 23.4, 23.5_
+
+  - [ ]* 18.2 Property 34 테스트 작성: 대형 모듈 청킹 불변식
+    - **Property 34: 대형 모듈 청킹 불변식**
+    - **Validates: Requirements 23.1, 23.2, 23.3**
+    - 50+ 포트 → 3가지 Sub_Record 생성 + 필드 포함 + 기존 레코드 유지, 50 미만 → Sub_Record 미생성 검증
+
+  - [ ] 18.3 질의 유형별 동적 Boost 구현 (`environments/app-layer/bedrock-rag/rtl_parser_src/handler.py` 수정)
+    - `classify_query_type(query)` 함수 추가: 키워드 패턴 매칭으로 5가지 유형 분류
+    - `get_dynamic_boosts(query_type)` 함수 추가: 유형별 boost 가중치 반환
+    - 질의 유형: port_query(claim 4.0, module_parse 0.5), hierarchy_query(claim 1.5, module_parse 3.0), config_query(claim 4.0, module_parse 1.0), connectivity_query(claim 4.0, module_parse 1.0), general_query(claim 3.0, module_parse 1.0)
+    - `_search_rtl()` 함수 수정: 동적 boost 적용
+    - 미매칭 시 `general_query` 폴백 (기존 고정 가중치)
+    - 응답 `metadata.query_type`에 분류 결과 포함
+    - _Requirements: 24.1, 24.2, 24.3, 24.4, 24.5, 24.6, 24.7, 24.8_
+
+  - [ ]* 18.4 Property 35 테스트 작성: 질의 유형별 동적 Boost 매핑
+    - **Property 35: 질의 유형별 동적 Boost 매핑**
+    - **Validates: Requirements 24.1, 24.2, 24.3, 24.4, 24.5, 24.6, 24.8**
+    - classify_query_type 5가지 유형 분류, get_dynamic_boosts 가중치 정확성, 미매칭 시 general_query 폴백 검증
+
+
+- [ ] 19. Phase 7: Generation Side — Hybrid Grounding
+  - [ ] 19.1 Hybrid Grounding 구현 (`environments/app-layer/bedrock-rag/lambda_src/index.py` 수정)
+    - `generate_hdd_section()` 함수 확장: `grounding_mode` 파라미터 수용 (strict/hybrid/free, 기본값 hybrid)
+    - Foundation_Model 프롬프트에 Hybrid_Grounding 지시 포함
+    - `[GROUNDED from claim:{claim_id}]` 태그 + claim_id 각주 첨부
+    - `[INFERRED]` 태그 + `"※ Spec 확인 필요"` 경고 자동 추가
+    - 응답에 `grounded_ratio`, `inferred_ratio` 포함 (합계 1.0)
+    - `inferred_ratio > 0.5` 시 KB 커버리지 경고 메시지 추가
+    - `strict` 모드: GROUNDED만, KB 부족 시 `[NOT IN KB]` 메시지
+    - `free` 모드: 태그 없이 자유 서술
+    - `rag_query` API에서도 `grounding_mode` 수용
+    - _Requirements: 25.1, 25.2, 25.3, 25.4, 25.5, 25.6, 25.7, 25.8_
+
+  - [ ]* 19.2 Property 36 테스트 작성: Hybrid Grounding 태그 일관성
+    - **Property 36: Hybrid Grounding 태그 일관성**
+    - **Validates: Requirements 25.2, 25.3, 25.4, 25.5**
+    - GROUNDED 태그에 claim_id 각주, INFERRED 태그에 경고, grounded_ratio + inferred_ratio = 1.0, inferred > 0.5 시 경고 검증
+
+  - [ ]* 19.3 Property 37 테스트 작성: Grounding 모드 동작
+    - **Property 37: Grounding 모드 동작**
+    - **Validates: Requirements 25.6, 25.8**
+    - strict 모드 GROUNDED만 + KB 부족 시 NOT IN KB, hybrid 모드 양쪽 태그, free 모드 태그 없음 검증
+
+
+- [ ] 20. Phase 7: Quality Infrastructure — 파서별 기여도 측정
+  - [ ] 20.1 파서 Feature Flag 및 parser_source 필드 구현 (`environments/app-layer/bedrock-rag/rtl_parser_src/handler.py` 수정)
+    - 환경 변수 feature flag 추가: `PARSER_PACKAGE_ENABLED`, `PARSER_PORT_CLASSIFIER_ENABLED`, `PARSER_GENERATE_BLOCK_ENABLED`, `PARSER_ALWAYS_BLOCK_ENABLED`, `PARSER_FUNCTION_EXTRACTOR_ENABLED` (기본값 모두 `true`)
+    - 비활성화된 파서 건너뛰기 + 로그 기록 (INFO)
+    - 각 파서 실행 결과를 CloudWatch 구조화 로그에 기록: parser_name, claims_generated, execution_time_ms, files_processed
+    - 기존 `_make_claim()` 및 각 파서의 claim 생성에 `parser_source` 필드 추가
+    - _Requirements: 26.1, 26.2, 26.3, 26.6_
+
+  - [ ]* 20.2 Property 38 테스트 작성: 파서 Feature Flag 제어
+    - **Property 38: 파서 Feature Flag 제어**
+    - **Validates: Requirements 26.1, 26.2**
+    - feature flag false → 파서 미실행 + claim 미인덱싱, true → 정상 실행 검증
+
+  - [ ]* 20.3 Property 39 테스트 작성: 파서 출처 귀속
+    - **Property 39: 파서 출처 귀속**
+    - **Validates: Requirements 26.6**
+    - 모든 파서 생성 claim에 parser_source 필드 존재 + 빈 문자열 아님 검증
+
+  - [ ] 20.4 파서 기여도 측정 API 구현 (`environments/app-layer/bedrock-rag/rtl_parser_src/handler.py` + `environments/app-layer/bedrock-rag/lambda_src/index.py` 수정)
+    - `handler.py`: CloudWatch `BOS-AI/RTLParser` 네임스페이스에 `ParserClaimCount`, `ParserExecutionTime`, `ParserHitRatio` 메트릭 발행
+    - `index.py`: `parser_contribution` 액션 추가 — pipeline_id(필수) 입력, 파서별 claims_total, claims_hit_in_search, hit_ratio, avg_search_score 집계 반환
+    - `handler()` 라우팅에 `action == 'parser_contribution'` 분기 추가
+    - _Requirements: 26.4, 26.5, 26.8_
+
+
+- [ ] 21. Phase 7: OpenSearch 인덱스 필드 확장 + Handler 통합 배선
+  - [ ] 21.1 OpenSearch 인덱스 스크립트 업데이트 (`scripts/create-opensearch-index.py` 수정)
+    - `parent_module_name`(keyword) 필드 매핑 추가
+    - `sub_record_type`(keyword) 필드 매핑 추가
+    - `parser_source`(keyword) 필드 매핑 추가
+    - _Requirements: 23.6, 26.7_
+
+  - [ ] 21.2 Handler 통합 배선 (`environments/app-layer/bedrock-rag/rtl_parser_src/handler.py` 수정)
+    - `_process_rtl_file()` 함수에 Phase 7 파서 호출 통합:
+      - `from generate_block_parser import extract_generate_blocks`
+      - `from always_block_parser import extract_clock_domains`
+      - `from bitwidth_evaluator import evaluate_bitwidth`
+    - 파서 호출 순서: 기본 모듈 파싱 → Package 함수/태스크 추출 → Generate 블록 파싱 → Always 블록 파싱 → 비트폭 평가 → 대형 모듈 청킹
+    - 각 파서 호출을 feature flag로 게이팅
+    - 각 파서 생성 claim을 개별 임베딩 + OpenSearch 인덱싱
+    - 파서 실행 시간 CloudWatch 구조화 로그 기록
+    - _Requirements: 17.5, 18.5, 19.5, 22.5, 23.1, 26.1, 26.3_
+
+
+- [ ] 22. Phase 7 Final Checkpoint — 전체 Phase 7 통합 테스트
+  - Ensure all tests pass, ask the user if questions arise.
+  - Supply Side: package_extractor.py (함수/태스크 + flit + 중첩 struct), generate_block_parser.py, always_block_parser.py, bitwidth_evaluator.py 동작 확인
+  - Consumption Side: 대형 모듈 청킹 + 질의 유형별 동적 Boost 동작 확인
+  - Generation Side: Hybrid Grounding 3모드 동작 확인
+  - Quality Infrastructure: 파서 feature flag + parser_source + 기여도 메트릭 동작 확인
+  - `cd tests && go test -v ./properties/ -run TestEnhancedRagOptimization -count=1` (Phase 7 Property 26~39 포함)
+
+
+- [ ] 23. Final Checkpoint - 전체 7 Phase 통합 테스트
+  - 전체 시스템 통합 동작 확인 (Phase 1~7)
+  - `cd environments/app-layer/bedrock-rag && terraform validate`
+  - `cd environments/app-layer/knowledge-graph && terraform validate`
+  - `cd tests && go test -v ./properties/ -run TestEnhancedRagOptimization -count=1`
+
 ## Notes
 
 - `*` 표시된 태스크는 선택적이며 빠른 MVP를 위해 건너뛸 수 있음
@@ -404,6 +623,12 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
 - OpenSearch 인덱스 생성은 `scripts/create-opensearch-index.py` 별도 실행 (Terraform local-exec 미사용)
 - DynamoDB 모든 쓰기 작업에 optimistic locking 적용
 - IAM Explicit Deny로 Source of Truth 버킷 보호
+- Phase 7 신규 파일 3개: `generate_block_parser.py`, `always_block_parser.py`, `bitwidth_evaluator.py`
+- Phase 7 수정 파일: `package_extractor.py`, `handler.py`, `index.py`, `create-opensearch-index.py`
+- Phase 7 Property 테스트 14개 추가 (Property 26~39)
+- 파서별 feature flag로 A/B 테스트 가능 (환경 변수 `PARSER_*_ENABLED`)
+- 비트폭 평가에 Python `eval()` 사용 금지 — `ast.NodeVisitor` 기반 안전한 파서 사용
+- 품질 목표: v8 68% → v9 75~78% Content Fidelity (RTL 단독 천장)
 - Confluence/Jira는 Cloud 환경이므로 별도 연동 방식 검토 (이 스펙 범위 외)
 - Codebeamer 연동은 Spec 6 (codebeamer-aspice-rag-integration)에서 처리
 

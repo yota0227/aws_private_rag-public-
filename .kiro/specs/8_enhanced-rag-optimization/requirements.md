@@ -1,4 +1,4 @@
-# 요구사항 문서: Enhanced RAG Optimization (v0.3)
+# 요구사항 문서: Enhanced RAG Optimization (v0.4)
 
 ## 소개
 
@@ -19,6 +19,16 @@ v0.2 변경 사항 (아키텍트 리뷰 반영):
 - IAM Explicit Deny로 Source of Truth 버킷 보호
 - Object Lock 범위 명확화, RTL Parser Lambda 명칭 수정, Claim_DB 용어집 수정
 - Claim-level variant 지원 추가
+
+v0.4 변경 사항 (v9 RTL Parser Pipeline Enhancement):
+- v9 RTL 파서 파이프라인 개선 요구사항 추가 (요구사항 17~26, Spec RAG 제외 순수 RTL 측 개선)
+- Supply Side: Package Parser 함수/태스크 추출(17), Generate 블록 연결 토폴로지 파서(18), Always 블록 클럭 도메인 추출(19), noc_pkg.sv flit 구조 파서 확장(20), 중첩 struct 지원(21), 비트폭 표현식 평가(22)
+- Consumption Side: 대형 모듈 청킹 전략(23), 질의 유형별 동적 boost(24)
+- Generation Side: Hybrid Grounding `[GROUNDED]`/`[INFERRED]` 태그(25)
+- Quality Infrastructure: 파서별 기여도 측정(26)
+- 용어집에 Generate_Block_Parser, Always_Block_Parser, Hybrid_Grounding, Content_Fidelity 추가
+- 핵심 변경 영역 11~14 추가
+- 품질 기준선: v8 68% Content Fidelity → v9 목표 75~78% (RTL 단독 천장)
 
 v0.3 변경 사항 (Phase 1~5 테스트 결과 반영):
 - RTL S3 버킷 이름 변경: `bos-ai-rtl-codes-<account_id>` → `bos-ai-rtl-src-<account_id>` (원래 버킷에 VPC Endpoint 전용 Deny 정책이 적용되어 루트 계정 포함 모든 접근 차단됨. Terraform state에서 제거 후 새 버킷으로 대체)
@@ -41,8 +51,12 @@ v0.3 변경 사항 (Phase 1~5 테스트 결과 반영):
 8. Cross-check 파이프라인 (1차 LLM claim 생성 → 2차 검증 → 3차 rule-based checker) (제안서 B)
 9. Human Review Gate (critical topic 출판 전 승인 게이트) (v0.2 신규)
 10. Operational KPI Metrics (CloudWatch 커스텀 메트릭 발행) (v0.2 신규)
+11. v9 Supply Side 파서 확장: Package 함수/태스크, Generate 블록 토폴로지, Always 블록 클럭 도메인, flit 구조, 중첩 struct, 비트폭 평가 (v0.4 신규)
+12. v9 Consumption Side 검색 개선: 대형 모듈 청킹, 질의 유형별 동적 boost (v0.4 신규)
+13. v9 Generation Side: Hybrid Grounding `[GROUNDED]`/`[INFERRED]` 태그 (v0.4 신규)
+14. v9 Quality Infrastructure: 파서별 기여도 측정 프레임워크 (v0.4 신규)
 
-단계적 도입: Phase 1(문서 ingestion 분리 + RTL 파이프라인) → Phase 2(Claim DB 구축) → Phase 3(MCP Tool 오픈) → Phase 4(문서 생성 + Human Review) → Phase 5(conflict detector + cross-check + KPI 모니터링) → Phase 6(Neptune Graph DB + 관계 추출 파이프라인 + 3저장소 통합 질의)
+단계적 도입: Phase 1(문서 ingestion 분리 + RTL 파이프라인) → Phase 2(Claim DB 구축) → Phase 3(MCP Tool 오픈) → Phase 4(문서 생성 + Human Review) → Phase 5(conflict detector + cross-check + KPI 모니터링) → Phase 6(Neptune Graph DB + 관계 추출 파이프라인 + 3저장소 통합 질의) → Phase 7(v9 RTL Parser Pipeline Enhancement: Supply 파서 확장 + Consumption 검색 개선 + Hybrid Grounding + 파서 기여도 측정)
 
 보류 항목: Aurora PostgreSQL(DynamoDB 대체), Step Functions(Lambda 내부 오케스트레이션), ECS/Fargate MCP 서버(온프렘 Node.js 유지)
 
@@ -70,6 +84,13 @@ v0.3 변경 사항 (Phase 1~5 테스트 결과 반영):
 - **Contradiction_Score**: 동일 topic 내 두 claim 간의 모순 정도를 0.0~1.0 범위로 수치화한 값. 0.7 이상이면 모순으로 판정하여 기존 claim의 status를 `conflicted`로 변경. 요구사항 5.5의 claim 간 비교에 사용
 - **Topic**: Claim을 분류하는 주제 식별자로, 계층적 구조를 지원 (예: `ucie/phy/ltssm`, `ahb/signal/haddr`)
 - **Foundation_Model**: Bedrock에서 응답 생성에 사용하는 Claude 3 Haiku 모델(anthropic.claude-3-haiku-20240307-v1:0). Lambda 환경변수는 `INVOKE_MODEL_ID`(InvokeModel API용 inference profile ID 또는 모델 ID)와 `FOUNDATION_MODEL_ARN`(RetrieveAndGenerate API용 정식 모델 ARN)으로 분리하여 관리한다
+- **Package_Function_Extractor**: `package_extractor.py`의 확장 모듈로, `*_pkg.sv` 파일에서 `function`/`task` 선언의 시그니처(이름, 인자, 반환 타입)와 선택적 본문 요약을 추출하는 파서 컴포넌트
+- **Generate_Block_Parser**: `generate for`/`generate if` 블록에서 반복 구조, 조건부 인스턴스화, 배선 토폴로지(ring, daisy-chain, feedthrough, 2D array)를 추출하는 신규 파서 컴포넌트
+- **Always_Block_Parser**: `always_ff`/`always_comb` 블록의 sensitivity list에서 클럭 도메인 정보(`@(posedge i_ai_clk)` → AI 도메인)를 추출하는 신규 파서 컴포넌트
+- **Hybrid_Grounding**: RAG 답변 생성 시 KB 근거 사실에는 `[GROUNDED]` 태그를, LLM 추론에는 `[INFERRED]` 태그를 부여하여 환각 방지와 문서 완결성을 양립하는 생성 전략
+- **Content_Fidelity**: 정답지(엔지니어 수동 작성 HDD) 대비 자동 생성물의 섹션별 가중 일치도. 14개 HDD 섹션을 기능별 중요도로 가중 평균한 메인 품질 지표. v8 기준 68%
+- **Sub_Record**: 대형 모듈(포트 50개 이상)을 port/instance/logic 등 기능 단위로 분할한 OpenSearch 레코드. 1 모듈 = 1 레코드 한계를 극복하여 검색 정밀도를 향상시킨다
+- **Query_Type_Boost**: 사용자 질의의 유형(포트 질의, 계층 질의, 설정 질의 등)을 분류하고, 유형에 따라 `analysis_type`별 boost 가중치를 동적으로 조정하는 검색 전략
 
 ## 요구사항
 
@@ -316,3 +337,150 @@ v0.3 변경 사항 (Phase 1~5 테스트 결과 반영):
 13. THE RTL Parser Lambda SHALL Phase 6b에서 PyVerilog AST 파서로 교체되어, `always_ff`/`always_comb` 블록 분석을 통한 클럭 도메인 식별과 `assign` 문 분석을 통한 신호 구동 관계 추출을 지원한다.
 14. THE Terraform 구성 SHALL Neptune Cluster에 필수 태그(Project: BOS-AI, Environment: prod, ManagedBy: terraform, Layer: app)를 적용한다.
 15. THE Terraform 구성 SHALL 모든 Neptune 접근이 VPC Endpoint를 통해서만 이루어지도록 네트워크 격리를 유지한다.
+
+
+---
+
+## v9 RTL Parser Pipeline Enhancement (Phase 7)
+
+> **품질 기준선:** v8 Content Fidelity 68% → v9 목표 75~78% (RTL 단독 천장, Spec RAG 제외)
+>
+> **남은 32% 분석:** Spec-only 정보 ~50% | 깊은 RTL 구조 ~30% (v9 대상) | Hybrid 서술/추론 ~20% (v9 대상)
+>
+> **참조 문서:** `docs/8_enhanced-rag-optimization/rtl-rag-pipeline-architecture-ai-engineer.md`, `docs/8_enhanced-rag-optimization/rtl-rag-pipeline-architecture-soc-engineer.md`, `docs/common/RAG_Farm_Strategy_v1.4.md`
+
+### 요구사항 17: Package Parser 함수/태스크 추출 (Supply Side)
+
+**사용자 스토리:** 반도체 설계 엔지니어로서, `*_pkg.sv` 파일에 정의된 `function`과 `task`(예: `getTensixIndex`, `getNoc2AxiIndex`)의 시그니처와 용도가 KB에 포함되어, "Tensix 인덱스는 어떻게 계산하는가?"와 같은 질의에 정확한 답변을 받고 싶다.
+
+#### 인수 조건
+
+1. THE Package_Function_Extractor SHALL `*_pkg.sv` 파일에서 `function` 선언을 정규식으로 추출하며, 각 함수에 대해 함수명, 반환 타입, 인자 목록(이름 + 타입)을 파싱한다.
+2. THE Package_Function_Extractor SHALL `*_pkg.sv` 파일에서 `task` 선언을 정규식으로 추출하며, 각 태스크에 대해 태스크명과 인자 목록(이름 + 방향 + 타입)을 파싱한다.
+3. THE Package_Function_Extractor SHALL 추출된 각 함수/태스크에 대해 claim 레코드를 생성한다. claim_text 형식: `"Package '{pkg_name}' defines function '{func_name}({args}) → {return_type}'"`.
+4. WHEN 함수 본문이 20줄 이하이면, THE Package_Function_Extractor SHALL 본문의 1줄 요약(주요 로직 패턴: 루프 카운트, 조건 분기, 인덱스 계산 등)을 claim_text에 추가한다.
+5. THE Package_Function_Extractor SHALL 기존 `package_extractor.py`의 `extract_package_constants` 함수 내에서 호출되며, 반환되는 claim 배열에 함수/태스크 claim을 추가한다.
+6. FOR ALL 유효한 SystemVerilog function 선언에 대해, Package_Function_Extractor로 추출한 후 claim_text를 파싱하면 원본 함수 시그니처와 동일한 함수명, 인자 목록, 반환 타입을 복원할 수 있어야 한다 (라운드트립 속성).
+7. IF 함수 선언이 `automatic` 또는 `static` 한정자를 포함하면, THEN THE Package_Function_Extractor SHALL 해당 한정자를 claim_text에 포함한다.
+
+### 요구사항 18: Generate 블록 연결 토폴로지 파서 (Supply Side)
+
+**사용자 스토리:** 반도체 설계 엔지니어로서, `generate for`/`generate if` 블록에서 추출된 배선 토폴로지(EDC U-shape ring, dispatch feedthrough, clock routing 2D array)가 KB에 포함되어, "EDC는 어떤 토폴로지로 연결되는가?"와 같은 질의에 정확한 답변을 받고 싶다.
+
+#### 인수 조건
+
+1. THE Generate_Block_Parser SHALL RTL 파일에서 `generate for`/`generate if` 블록의 범위(begin~end)를 정규식으로 식별하고, 블록 내부의 인스턴스화 패턴과 `assign` 문을 추출한다.
+2. THE Generate_Block_Parser SHALL 추출된 generate 블록에서 다음 연결 패턴을 인식한다: daisy-chain(`signal[i+1] = signal[i]`), ring(`signal[N-1]` → `signal[0]` 순환), feedthrough(`signal[y] = (y==0) ? source : signal[y-1]`), 2D array(`signal[x][y]` 이중 루프).
+3. WHEN generate 블록 내에 조건부 bypass 패턴(`if (condition) begin ... end else begin assign bypass; end`)이 존재하면, THE Generate_Block_Parser SHALL bypass 조건과 bypass 대상 신호를 claim에 포함한다.
+4. THE Generate_Block_Parser SHALL 각 generate 블록에 대해 claim 레코드를 생성한다. claim_text 형식: `"Module '{module_name}' has generate block '{label}' with {pattern_type} topology connecting {signal_name} across {dimension} ({size} elements)"`.
+5. THE Generate_Block_Parser SHALL `handler.py`의 `_process_rtl_file` 함수에서 기본 모듈 파싱 후 호출되며, 생성된 claim을 OpenSearch에 인덱싱한다.
+6. THE Generate_Block_Parser SHALL generate 블록의 genvar 범위(`genvar x = 0; x < SizeX`)에서 반복 차원과 크기를 추출하며, 파라미터 참조(`SizeX`, `SizeY`)는 문자열 그대로 보존한다.
+7. IF generate 블록이 중첩된 경우(2중 for 루프), THEN THE Generate_Block_Parser SHALL 외부 루프와 내부 루프의 차원을 구분하여 `"2D {outer_dim}×{inner_dim}"` 형식으로 기록한다.
+
+### 요구사항 19: Always 블록 클럭 도메인 추출 (Supply Side)
+
+**사용자 스토리:** 반도체 설계 엔지니어로서, 각 모듈이 어떤 클럭 도메인에서 동작하는지 자동으로 추출되어, "이 모듈은 AI 도메인인가 NoC 도메인인가?"와 같은 질의에 정확한 답변을 받고 싶다.
+
+#### 인수 조건
+
+1. THE Always_Block_Parser SHALL RTL 파일에서 `always_ff` 블록의 sensitivity list(`@(posedge <clock_signal>)` 또는 `@(negedge <clock_signal>)`)를 정규식으로 추출한다.
+2. THE Always_Block_Parser SHALL 추출된 클럭 신호명에서 클럭 도메인을 유추한다. 매핑 규칙: `i_ai_clk` → `AI`, `i_noc_clk` → `NoC`, `i_dm_clk` → `DM`, 기타 `*_clk` → 신호명 기반 도메인명.
+3. THE Always_Block_Parser SHALL 모듈 내 모든 `always_ff` 블록에서 추출된 클럭 도메인을 집계하여, 모듈당 하나의 클럭 도메인 요약 claim을 생성한다. claim_text 형식: `"Module '{module_name}' operates in {N} clock domains: {domain_list}"`.
+4. WHEN 모듈 내에 2개 이상의 서로 다른 클럭 도메인이 감지되면, THE Always_Block_Parser SHALL 추가 claim을 생성하여 클럭 도메인 크로싱 가능성을 표시한다. claim_text: `"Module '{module_name}' has potential clock domain crossing between {domain_A} and {domain_B}"`.
+5. THE Always_Block_Parser SHALL `handler.py`의 `_process_rtl_file` 함수에서 기본 모듈 파싱 후 호출되며, 생성된 claim을 OpenSearch에 인덱싱한다.
+6. THE Always_Block_Parser SHALL `always_comb` 블록은 클럭 도메인 추출 대상에서 제외하며, 조합 로직으로 분류한다.
+7. IF `always_ff` 블록의 sensitivity list에 리셋 신호(`posedge reset` 또는 `negedge reset_n`)가 포함되면, THEN THE Always_Block_Parser SHALL 리셋 신호명을 claim에 포함한다.
+
+### 요구사항 20: noc_pkg.sv Flit 구조 파서 확장 (Supply Side)
+
+**사용자 스토리:** 반도체 설계 엔지니어로서, NoC 패킷(flit)의 내부 구조(x_dest, y_dest, endpoint_id 등 필드별 비트 위치와 의미)가 KB에 포함되어, "flit의 목적지 좌표는 어떤 필드에 있는가?"와 같은 질의에 정확한 답변을 받고 싶다.
+
+#### 인수 조건
+
+1. THE Package_Function_Extractor SHALL `typedef struct` 추출 시 각 필드의 비트폭 정보(`logic [N:0]`, `bit [M:0]`)를 함께 추출하여 claim_text에 포함한다. 기존 필드명만 추출하는 동작을 확장한다.
+2. THE Package_Function_Extractor SHALL struct 필드의 claim_text를 다음 형식으로 생성한다: `"Package '{pkg_name}' defines struct '{struct_name}' field '{field_name}' with width {bit_width}"`.
+3. WHEN struct가 flit 관련 타입(`*_flit_t`, `*_header_t`, `*_payload_t`)인 경우, THE Package_Function_Extractor SHALL 전체 필드 목록을 비트 위치 순서대로 정렬한 요약 claim을 추가로 생성한다. claim_text: `"Flit structure '{struct_name}' layout: {field1}[{msb}:{lsb}], {field2}[{msb}:{lsb}], ..."`.
+4. THE Package_Function_Extractor SHALL struct 내부의 주석(`// destination X coordinate` 등)을 파싱하여, 주석이 존재하는 필드에 대해 주석 내용을 claim_text에 추가한다.
+5. IF struct 필드의 타입이 다른 typedef를 참조하는 경우(예: `tile_t dest_tile`), THEN THE Package_Function_Extractor SHALL 참조 타입명을 claim에 포함하여 타입 간 관계를 기록한다.
+
+### 요구사항 21: 중첩 Struct 지원 (Supply Side)
+
+**사용자 스토리:** 반도체 설계 엔지니어로서, 중첩된 struct 정의(struct 내부에 다른 struct 타입 필드가 있는 경우)가 정확히 파싱되어, 복합 데이터 구조의 전체 계층을 KB에서 조회할 수 있기를 원한다.
+
+#### 인수 조건
+
+1. THE Package_Function_Extractor SHALL `typedef struct` 내부에 다른 `typedef struct` 타입의 필드가 존재하는 경우, 해당 필드의 타입명을 인식하고 claim에 중첩 관계를 기록한다.
+2. THE Package_Function_Extractor SHALL 중첩 struct에 대해 계층적 claim을 생성한다. claim_text 형식: `"Package '{pkg_name}' struct '{parent_struct}' contains nested struct field '{field_name}' of type '{child_struct}'"`.
+3. THE Package_Function_Extractor SHALL 최대 3단계 깊이까지 중첩 struct를 추적하며, 3단계를 초과하는 경우 `"nested depth exceeds 3, truncated"` 경고를 claim에 포함한다.
+4. FOR ALL 중첩 struct 정의에 대해, 부모 struct claim과 자식 struct claim이 모두 생성되어야 하며, 두 claim 간의 관계가 `claim_text`에서 추적 가능해야 한다.
+
+### 요구사항 22: 비트폭 표현식 평가 (Supply Side)
+
+**사용자 스토리:** 반도체 설계 엔지니어로서, 포트와 신호의 비트폭이 `[SizeX-1:0]` 같은 파라미터 표현식이 아닌 실제 숫자(`[3:0]`)로 평가되어, "이 포트는 몇 비트인가?"라는 질의에 즉시 답변을 받고 싶다.
+
+#### 인수 조건
+
+1. THE RTL_Parser_Lambda SHALL 포트 비트폭 표현식에 포함된 파라미터 참조(`SizeX`, `SizeY` 등)를 동일 파일 또는 동일 패키지의 `localparam`/`parameter` 값으로 치환하여 정수로 평가한다.
+2. THE RTL_Parser_Lambda SHALL 비트폭 평가 시 다음 연산을 지원한다: 덧셈(`+`), 뺄셈(`-`), 곱셈(`*`), 나눗셈(`/`), `$clog2()` 함수.
+3. WHEN 비트폭 표현식의 모든 파라미터가 해석 가능한 경우, THE RTL_Parser_Lambda SHALL 평가된 숫자 비트폭을 `port_list`와 claim_text에 포함한다. 형식: `"input [3:0] i_ai_clk (evaluated from [SizeX-1:0], SizeX=4)"`.
+4. IF 비트폭 표현식에 해석 불가능한 파라미터가 포함된 경우, THEN THE RTL_Parser_Lambda SHALL 원본 표현식을 그대로 유지하고, 평가 실패를 CloudWatch DEBUG 로그에 기록한다.
+5. THE RTL_Parser_Lambda SHALL 비트폭 평가를 위해 동일 파이프라인 내 `*_pkg.sv` 파일에서 추출된 localparam 값을 참조하며, 파라미터 해석 순서는 로컬 파라미터 → 패키지 파라미터 순이다.
+6. FOR ALL 비트폭 표현식 `[expr:0]`에 대해, `expr`이 순수 정수 산술식이고 모든 파라미터가 해석 가능하면, 평가 결과는 Python `eval()` 대신 안전한 정수 산술 파서를 사용하여 계산한다 (코드 인젝션 방지).
+
+### 요구사항 23: 대형 모듈 청킹 전략 (Consumption Side)
+
+**사용자 스토리:** 반도체 설계 엔지니어로서, 포트가 100개 이상인 대형 모듈(예: `trinity.sv`)의 정보가 하나의 거대한 레코드가 아닌 기능별 하위 레코드로 분할되어, 특정 기능에 대한 질의 시 관련 정보만 정확히 검색되기를 원한다.
+
+#### 인수 조건
+
+1. WHEN 모듈의 포트 수가 50개 이상이면, THE RTL_Parser_Lambda SHALL 해당 모듈을 다음 Sub_Record 유형으로 분할하여 OpenSearch에 인덱싱한다: `port_summary`(포트 카테고리별 요약), `instance_hierarchy`(인스턴스 목록 + 모듈 타입), `parameter_config`(파라미터 목록 + 값).
+2. THE RTL_Parser_Lambda SHALL 각 Sub_Record에 `parent_module_name`(원본 모듈명), `sub_record_type`(port_summary/instance_hierarchy/parameter_config), `analysis_type`(`module_parse_chunk`) 필드를 포함한다.
+3. THE RTL_Parser_Lambda SHALL 기존 전체 모듈 레코드(`analysis_type: module_parse`)도 유지하여, 전체 모듈 검색과 하위 레코드 검색이 모두 가능하도록 한다.
+4. THE RTL_Parser_Lambda SHALL `port_summary` Sub_Record를 Port_Classifier의 카테고리별로 생성하며, 각 Sub_Record에는 해당 카테고리의 포트 목록만 포함한다.
+5. WHEN 검색 결과에 Sub_Record가 포함되면, THE Lambda_Handler SHALL 응답에 `parent_module_name`을 포함하여 사용자가 원본 모듈을 식별할 수 있도록 한다.
+6. THE RTL_OpenSearch_Index SHALL `parent_module_name`(keyword)과 `sub_record_type`(keyword) 필드 매핑을 추가한다.
+
+### 요구사항 24: 질의 유형별 동적 Boost (Consumption Side)
+
+**사용자 스토리:** 반도체 설계 엔지니어로서, "Power 관련 포트가 뭐야?"라는 질의에는 포트 claim이, "모듈 계층 구조를 보여줘"라는 질의에는 인스턴스 정보가 우선 검색되어, 질의 의도에 맞는 정확한 결과를 받고 싶다.
+
+#### 인수 조건
+
+1. THE Lambda_Handler SHALL RTL 검색 요청 시 사용자 질의를 다음 유형 중 하나로 분류한다: `port_query`(포트/인터페이스 관련), `hierarchy_query`(모듈 계층/인스턴스 관련), `config_query`(파라미터/설정 관련), `connectivity_query`(연결/토폴로지 관련), `general_query`(기타).
+2. THE Lambda_Handler SHALL 질의 유형 분류를 키워드 패턴 매칭으로 수행한다: `port_query`(포트, port, input, output, 인터페이스, AXI, APB, clock, reset), `hierarchy_query`(인스턴스, 계층, hierarchy, instantiate, 모듈 트리), `config_query`(파라미터, parameter, localparam, 설정, 크기, size), `connectivity_query`(연결, topology, ring, chain, routing, generate).
+3. WHEN 질의 유형이 `port_query`이면, THE Lambda_Handler SHALL `claim` analysis_type의 boost를 4.0으로, `module_parse`의 boost를 0.5로 조정한다 (기본값: claim 3.0, module_parse 1.0).
+4. WHEN 질의 유형이 `hierarchy_query`이면, THE Lambda_Handler SHALL `module_parse` analysis_type의 boost를 3.0으로, `claim`의 boost를 1.5로 조정한다.
+5. WHEN 질의 유형이 `config_query`이면, THE Lambda_Handler SHALL `claim` analysis_type 중 topic이 `PackageConfig`인 레코드의 boost를 4.0으로 조정한다.
+6. WHEN 질의 유형이 `connectivity_query`이면, THE Lambda_Handler SHALL Generate_Block_Parser가 생성한 claim의 boost를 4.0으로 조정한다.
+7. THE Lambda_Handler SHALL 질의 유형 분류 결과를 검색 응답의 `metadata.query_type` 필드에 포함한다.
+8. THE Lambda_Handler SHALL 질의 유형 분류에 실패하면(키워드 미매칭) `general_query`로 분류하고, 기존 고정 boost 가중치(claim 3.0, hdd_section 2.0, module_parse 1.0)를 적용한다.
+
+### 요구사항 25: Hybrid Grounding (Generation Side)
+
+**사용자 스토리:** 반도체 설계 엔지니어로서, RAG 답변에서 KB 근거 사실과 LLM 추론이 명확히 구분되어, 신뢰할 수 있는 부분과 검증이 필요한 부분을 즉시 식별할 수 있기를 원한다.
+
+#### 인수 조건
+
+1. THE Lambda_Handler SHALL HDD 섹션 생성 시 Foundation_Model에 전달하는 프롬프트에 Hybrid_Grounding 지시를 포함한다: KB에서 직접 근거를 찾은 내용에는 `[GROUNDED]` 태그를, LLM의 일반 지식으로 추론한 내용에는 `[INFERRED]` 태그를 부여하라.
+2. THE Lambda_Handler SHALL `[GROUNDED]` 태그가 붙은 문장에 대해 근거 claim_id를 각주로 첨부한다. 형식: `"[GROUNDED from claim:{claim_id}] {statement}"`.
+3. THE Lambda_Handler SHALL `[INFERRED]` 태그가 붙은 문장에 대해 `"※ Spec 확인 필요"` 경고를 자동 추가한다. 형식: `"[INFERRED] {statement} ※ Spec 확인 필요"`.
+4. THE Lambda_Handler SHALL 생성된 HDD 섹션의 `[GROUNDED]` 비율과 `[INFERRED]` 비율을 응답 메타데이터에 포함한다: `grounded_ratio`(0.0~1.0), `inferred_ratio`(0.0~1.0).
+5. WHEN `[INFERRED]` 비율이 0.5를 초과하면, THE Lambda_Handler SHALL 응답에 `"KB 커버리지가 낮습니다. 추가 RTL 파싱 또는 Spec 문서 업로드를 권장합니다."` 경고 메시지를 포함한다.
+6. THE Lambda_Handler SHALL Hybrid_Grounding 모드를 `grounding_mode` 파라미터로 제어한다: `"strict"`(GROUNDED만 포함, 기존 동작), `"hybrid"`(GROUNDED + INFERRED, 기본값), `"free"`(태그 없이 자유 서술).
+7. THE Lambda_Handler SHALL `grounding_mode` 파라미터를 `generate_hdd_section` API와 `rag_query` API 모두에서 수용한다.
+8. IF `grounding_mode`가 `"strict"`이고 KB에 관련 claim이 부족하면, THEN THE Lambda_Handler SHALL 빈 섹션 대신 `"[NOT IN KB] 이 섹션에 대한 KB 근거가 부족합니다."` 메시지를 반환한다.
+
+### 요구사항 26: 파서별 기여도 측정 (Quality Infrastructure)
+
+**사용자 스토리:** RAG 엔지니어로서, 각 파서(기본 모듈 파서, Package Parser, Port Classifier, Generate Block Parser, Always Block Parser)의 Content Fidelity 기여도를 독립적으로 측정하여, 다음 투자 우선순위를 데이터 기반으로 결정하고 싶다.
+
+#### 인수 조건
+
+1. THE RTL_Parser_Lambda SHALL 각 파서의 활성화 상태를 환경 변수로 제어한다: `PARSER_PACKAGE_ENABLED`(기본값 `true`), `PARSER_PORT_CLASSIFIER_ENABLED`(기본값 `true`), `PARSER_GENERATE_BLOCK_ENABLED`(기본값 `true`), `PARSER_ALWAYS_BLOCK_ENABLED`(기본값 `true`), `PARSER_FUNCTION_EXTRACTOR_ENABLED`(기본값 `true`).
+2. WHEN 특정 파서가 비활성화(`false`)되면, THE RTL_Parser_Lambda SHALL 해당 파서를 건너뛰고 나머지 파서만 실행하며, 비활성화된 파서의 claim은 OpenSearch에 인덱싱하지 않는다.
+3. THE RTL_Parser_Lambda SHALL 각 파서의 실행 결과를 CloudWatch 구조화 로그에 기록한다: `parser_name`(파서명), `claims_generated`(생성된 claim 수), `execution_time_ms`(실행 시간), `files_processed`(처리된 파일 수).
+4. THE Lambda_Handler SHALL `parser_contribution` 액션을 제공하며, 입력으로 `pipeline_id`(필수)를 수용하고, 해당 파이프라인에서 각 파서가 생성한 claim 수와 검색 시 hit된 claim 수를 집계하여 반환한다.
+5. THE Lambda_Handler SHALL `parser_contribution` 응답에 다음을 포함한다: 파서별 `claims_total`(총 claim 수), `claims_hit_in_search`(검색에서 사용된 claim 수), `hit_ratio`(검색 활용률), `avg_search_score`(평균 검색 점수).
+6. THE RTL_Parser_Lambda SHALL 각 claim 레코드에 `parser_source`(생성 파서명) 필드를 추가하여, 검색 결과에서 어떤 파서가 해당 claim을 생성했는지 추적 가능하도록 한다.
+7. THE RTL_OpenSearch_Index SHALL `parser_source`(keyword) 필드 매핑을 추가한다.
+8. THE Lambda_Handler SHALL CloudWatch 커스텀 네임스페이스 `BOS-AI/RTLParser`에 다음 메트릭을 발행한다: `ParserClaimCount`(파서별 claim 생성 수, dimension: parser_name), `ParserExecutionTime`(파서별 실행 시간, dimension: parser_name), `ParserHitRatio`(파서별 검색 활용률, dimension: parser_name).
