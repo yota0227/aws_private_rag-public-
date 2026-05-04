@@ -432,8 +432,8 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - **Validates: Requirements 21.1, 21.2, 21.3, 21.4**
     - 부모/자식 struct claim 모두 생성, 관계 추적 가능, 3단계 초과 시 truncation 경고 검증
 
-- [ ] 15. Phase 7: Supply Side 파서 확장 — Generate Block Parser + Always Block Parser
-  - [ ] 15.1 Generate Block Parser 구현 (`environments/app-layer/bedrock-rag/rtl_parser_src/generate_block_parser.py` — 신규)
+- [x] 15. Phase 7: Supply Side 파서 확장 — Generate Block Parser + Always Block Parser
+  - [x] 15.1 Generate Block Parser 구현 (`environments/app-layer/bedrock-rag/rtl_parser_src/generate_block_parser.py` — 신규)
     - `extract_generate_blocks(rtl_content, module_name, file_path, pipeline_id)` 함수 구현
     - `generate for`/`generate if` 블록 범위(begin~end) 정규식 식별
     - 4가지 토폴로지 패턴 인식: daisy-chain, ring, feedthrough, 2D array
@@ -449,7 +449,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - **Validates: Requirements 18.1, 18.2, 18.4, 18.6**
     - generate for/if 블록에서 올바른 토폴로지 유형 식별, claim_text에 패턴/신호/차원/크기 포함, 파라미터 참조 보존 검증
 
-  - [ ] 15.3 Always Block Parser 구현 (`environments/app-layer/bedrock-rag/rtl_parser_src/always_block_parser.py` — 신규)
+  - [x] 15.3 Always Block Parser 구현 (`environments/app-layer/bedrock-rag/rtl_parser_src/always_block_parser.py` — 신규)
     - `extract_clock_domains(rtl_content, module_name, file_path, pipeline_id)` 함수 구현
     - `always_ff` 블록 sensitivity list(`@(posedge <clk>)`, `@(negedge <clk>)`) 정규식 추출
     - `always_comb` 블록 제외
@@ -477,8 +477,8 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
   - `always_block_parser.py` 클럭 도메인 추출 동작 확인
 
 
-- [ ] 17. Phase 7: Supply Side 파서 확장 — Bitwidth Evaluator
-  - [ ] 17.1 Bitwidth Evaluator 구현 (`environments/app-layer/bedrock-rag/rtl_parser_src/bitwidth_evaluator.py` — 신규)
+- [x] 17. Phase 7: Supply Side 파서 확장 — Bitwidth Evaluator
+  - [x] 17.1 Bitwidth Evaluator 구현 (`environments/app-layer/bedrock-rag/rtl_parser_src/bitwidth_evaluator.py` — 신규)
     - `SafeIntEvaluator` 클래스 구현: `ast.NodeVisitor` 기반 안전한 정수 산술 파서
     - 지원 연산: `+`, `-`, `*`, `/`, `$clog2()`
     - `evaluate_bitwidth(expr, param_context)` 함수: 비트폭 표현식을 정수로 평가
