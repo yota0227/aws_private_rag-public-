@@ -236,6 +236,9 @@ def _search_rtl(event):
         # Remove match_all if present
         filter_clauses = [c for c in filter_clauses if "match_all" not in c]
 
+    # Over-fetch to compensate for dedup loss (fetch 3x, dedup, then trim)
+    fetch_size = min(max_results * 3, 200)
+
     if query:
         # 텍스트 검색 + 필터 — v9 동적 boost 적용
         should_clauses = [
@@ -261,7 +264,7 @@ def _search_rtl(event):
         if filter_clauses:
             bool_query["filter"] = filter_clauses
         search_body = {
-            "size": max_results,
+            "size": fetch_size,
             "query": {"bool": bool_query},
             "_source": [
                 "module_name", "port_list", "parameter_list",
@@ -275,7 +278,7 @@ def _search_rtl(event):
     else:
         # 필터 전용 검색
         search_body = {
-            "size": max_results,
+            "size": fetch_size,
             "query": {"bool": {"must": filter_clauses}} if filter_clauses else {"match_all": {}},
             "_source": [
                 "module_name", "port_list", "parameter_list",
@@ -317,6 +320,10 @@ def _search_rtl(event):
             })
 
         total_hits = data.get("hits", {}).get("total", {}).get("value", 0)
+
+        # v9: Dedup — 동일 claim_text/hdd_content/module_parse는 첫 번째(최고 score)만 유지
+        results = _dedup_search_results(results, max_results)
+
         return {
             "results": results,
             "total_hits": total_hits,
@@ -327,6 +334,75 @@ def _search_rtl(event):
     except Exception as e:
         logger.error(json.dumps({"event": "rtl_search_error", "error": str(e)}))
         return {"results": [], "total_hits": 0, "query": query, "error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# 검색 결과 중복 제거 (v9 dedup)
+# ---------------------------------------------------------------------------
+
+def _dedup_search_results(results, max_results):
+    """Remove duplicate search results based on content fingerprint.
+
+    Dedup strategy (ordered by priority):
+    - claim: deduplicate by claim_text (same claim indexed from multiple file paths)
+    - hdd_section: deduplicate by hdd_section_title + topic
+    - module_parse / module_parse_chunk: deduplicate by module_name + analysis_type + sub_record_type
+    - other: deduplicate by module_name + file_path basename
+
+    Results are already sorted by score (descending). First occurrence wins.
+    Returns at most max_results unique items.
+    """
+    seen = set()
+    deduped = []
+
+    for r in results:
+        analysis_type = r.get("analysis_type", "")
+        fingerprint = _get_result_fingerprint(r, analysis_type)
+
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        deduped.append(r)
+
+        if len(deduped) >= max_results:
+            break
+
+    if len(deduped) < len(results):
+        logger.info(json.dumps({
+            "event": "search_dedup",
+            "before": len(results),
+            "after": len(deduped),
+            "removed": len(results) - len(deduped),
+        }))
+
+    return deduped
+
+
+def _get_result_fingerprint(result, analysis_type):
+    """Generate a dedup fingerprint for a search result."""
+    if analysis_type == "claim":
+        # Claims: same claim_text = duplicate regardless of file_path
+        claim_text = result.get("claim_text", "")
+        return f"claim:{claim_text[:200]}"
+
+    elif analysis_type == "hdd_section":
+        # HDD sections: same title + topic = duplicate
+        title = result.get("hdd_section_title", "")
+        topic = result.get("topic", "")
+        return f"hdd:{topic}:{title}"
+
+    elif analysis_type in ("module_parse", "module_parse_chunk"):
+        # Module parse: same module_name + sub_record_type = duplicate
+        module_name = result.get("module_name", "")
+        sub_type = result.get("sub_record_type", "")
+        return f"mp:{module_name}:{analysis_type}:{sub_type}"
+
+    else:
+        # Fallback: module_name + file basename
+        module_name = result.get("module_name", "")
+        file_path = result.get("file_path", "")
+        basename = file_path.rsplit("/", 1)[-1] if file_path else ""
+        return f"other:{module_name}:{basename}"
 
 
 # ---------------------------------------------------------------------------

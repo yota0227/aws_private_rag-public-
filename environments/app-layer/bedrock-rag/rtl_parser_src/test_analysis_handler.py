@@ -66,7 +66,7 @@ class TestDispatcherRouting:
         with patch.dict(ah._STAGE_HANDLERS, {"topic_classification": mock_fn}):
             event = {"stage": "topic_classification", "pipeline_id": "tt_20260221"}
             result = ah.analysis_handler(event)
-            mock_fn.assert_called_once_with(event)
+            mock_fn.assert_called_once_with(event, context=None)
             assert result["status"] == "completed"
 
 

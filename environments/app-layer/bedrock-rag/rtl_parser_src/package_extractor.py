@@ -507,12 +507,15 @@ def _extract_functions(rtl_content, pkg_name, file_path, pipeline_id):
 
     # Match function declarations:
     #   [automatic|static] function [return_type] func_name ( args );
+    #   function [automatic|static] [return_type] func_name ( args );
     #     ... body ...
     #   endfunction
     # The return type may include packed dimensions like [N:0].
+    # Qualifier can appear before OR after the 'function' keyword.
     func_pattern = re.compile(
+        r"(?:(automatic|static)\s+)?"  # qualifier before 'function'
         r"\bfunction\s+"
-        r"(automatic\s+|static\s+)?"
+        r"(automatic\s+|static\s+)?"   # qualifier after 'function'
         r"((?:(?:void|int|integer|logic|bit|byte|shortint|longint|string|real)"
         r"(?:\s+(?:unsigned|signed))?"
         r"(?:\s*\[[^\]]*\])*"
@@ -524,10 +527,13 @@ def _extract_functions(rtl_content, pkg_name, file_path, pipeline_id):
     )
 
     for m in func_pattern.finditer(clean):
-        qualifier = m.group(1).strip() if m.group(1) else ""
-        return_type = re.sub(r"\s+", " ", m.group(2).strip())
-        func_name = m.group(3)
-        raw_args = m.group(4).strip()
+        # Qualifier can be in group(1) (before function) or group(2) (after)
+        pre_qual = m.group(1).strip() if m.group(1) else ""
+        post_qual = m.group(2).strip() if m.group(2) else ""
+        qualifier = pre_qual or post_qual
+        return_type = re.sub(r"\s+", " ", m.group(3).strip())
+        func_name = m.group(4)
+        raw_args = m.group(5).strip()
 
         # Skip nested function declarations (inside module/class bodies)
         # by checking if we're inside a module/class scope
@@ -584,20 +590,26 @@ def _extract_tasks(rtl_content, pkg_name, file_path, pipeline_id):
 
     # Match task declarations:
     #   [automatic|static] task task_name ( args );
+    #   task [automatic|static] task_name ( args );
     #     ... body ...
     #   endtask
+    # Qualifier can appear before OR after the 'task' keyword.
     task_pattern = re.compile(
+        r"(?:(automatic|static)\s+)?"  # qualifier before 'task'
         r"\btask\s+"
-        r"(automatic\s+|static\s+)?"
+        r"(automatic\s+|static\s+)?"   # qualifier after 'task'
         r"(\w+)"      # task name
         r"\s*\(([^)]*)\)\s*;",  # argument list
         re.DOTALL
     )
 
     for m in task_pattern.finditer(clean):
-        qualifier = m.group(1).strip() if m.group(1) else ""
-        task_name = m.group(2)
-        raw_args = m.group(3).strip()
+        # Qualifier can be in group(1) (before task) or group(2) (after)
+        pre_qual = m.group(1).strip() if m.group(1) else ""
+        post_qual = m.group(2).strip() if m.group(2) else ""
+        qualifier = pre_qual or post_qual
+        task_name = m.group(3)
+        raw_args = m.group(4).strip()
 
         # Skip nested task declarations inside module/class bodies
         pre_text = clean[:m.start()]
@@ -825,3 +837,141 @@ def _make_claim(claim_text, claim_type, module_name, topic,
     if parser_source:
         claim["parser_source"] = parser_source
     return claim
+
+
+# ---------------------------------------------------------------------------
+# Legacy compatibility functions (used by analysis_handler.py)
+# These return structured dicts rather than claim-format lists.
+# ---------------------------------------------------------------------------
+
+# Chip-config related parameter name patterns
+_CHIP_PARAM_PATTERNS = [
+    "size", "num", "width", "depth", "count", "max", "min",
+    "tensix", "noc", "grid", "tile", "cluster", "core",
+]
+
+
+def extract_package_params(rtl_content):
+    """Extract localparams, parameters, and enums as structured dicts.
+
+    Returns:
+        dict with keys: localparams, parameters, enums
+    """
+    if not rtl_content:
+        return {"localparams": {}, "parameters": {}, "enums": {}}
+
+    content = re.sub(r"//[^\n]*", "", rtl_content)
+    content = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
+
+    localparams = {}
+    lp_pattern = re.compile(
+        r"\blocalparam\s+(?:int\b|integer\b|logic\b|bit\b|string\b|shortint\b|longint\b|byte\b)?\s*"
+        r"(?:unsigned\s+)?"
+        r"(?:\[[^\]]*\]\s*)?"
+        r"(\w+)\s*=\s*([^;]+);",
+        re.MULTILINE
+    )
+    for m in lp_pattern.finditer(content):
+        localparams[m.group(1)] = m.group(2).strip()
+
+    parameters = {}
+    param_pattern = re.compile(
+        r"\bparameter\s+(?:int\b|integer\b|logic\b|bit\b|string\b|shortint\b|longint\b|byte\b)?\s*"
+        r"(?:unsigned\s+)?"
+        r"(?:\[[^\]]*\]\s*)?"
+        r"(\w+)\s*=\s*([^;,\n]+)",
+        re.MULTILINE
+    )
+    for m in param_pattern.finditer(content):
+        parameters[m.group(1)] = m.group(2).strip()
+
+    enums = extract_enum_mapping(rtl_content)
+
+    return {"localparams": localparams, "parameters": parameters, "enums": enums}
+
+
+def identify_chip_config(params):
+    """Identify chip-configuration parameters from extracted params.
+
+    Args:
+        params: dict from extract_package_params() with localparams/parameters/enums
+
+    Returns:
+        dict with keys: chip_params, grid_size
+    """
+    if not params:
+        return {"chip_params": {}, "grid_size": {}}
+
+    chip_params = {}
+    grid_size = {}
+
+    all_params = {}
+    for name, value in params.get("localparams", {}).items():
+        all_params[name] = {"value": value, "type": "localparam"}
+    for name, value in params.get("parameters", {}).items():
+        all_params[name] = {"value": value, "type": "parameter"}
+
+    for name, info in all_params.items():
+        name_lower = name.lower()
+        if any(pat in name_lower for pat in _CHIP_PARAM_PATTERNS):
+            chip_params[name] = info
+
+    # Extract grid size from SizeX/SizeY
+    if "SizeX" in chip_params:
+        grid_size["x"] = chip_params["SizeX"]["value"]
+    if "SizeY" in chip_params:
+        grid_size["y"] = chip_params["SizeY"]["value"]
+
+    return {"chip_params": chip_params, "grid_size": grid_size}
+
+
+def extract_enum_mapping(rtl_content):
+    """Extract typedef enum declarations as name→value mappings.
+
+    Returns:
+        dict mapping enum_type_name → {member_name: value, ...}
+    """
+    if not rtl_content:
+        return {}
+
+    content = re.sub(r"//[^\n]*", "", rtl_content)
+    content = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
+
+    result = {}
+    enum_pattern = re.compile(
+        r"typedef\s+enum\s*(?:logic\s*(?:\[[^\]]*\]\s*)?)?\{([^}]+)\}\s*(\w+)\s*;",
+        re.DOTALL
+    )
+
+    for m in enum_pattern.finditer(content):
+        body = m.group(1)
+        enum_name = m.group(2)
+        members = {}
+        next_value = 0
+
+        for line in body.split(","):
+            line = line.strip()
+            if not line:
+                continue
+            # Match: MEMBER = VALUE or just MEMBER
+            assign_match = re.match(r"(\w+)\s*=\s*(.+)", line)
+            if assign_match:
+                member_name = assign_match.group(1)
+                raw_value = assign_match.group(2).strip()
+                # Try to parse as integer
+                try:
+                    int_val = int(raw_value, 0)
+                    members[member_name] = raw_value
+                    next_value = int_val + 1
+                except ValueError:
+                    members[member_name] = raw_value
+                    next_value += 1
+            else:
+                member_name = re.match(r"(\w+)", line)
+                if member_name:
+                    members[member_name.group(1)] = next_value
+                    next_value += 1
+
+        result[enum_name] = members
+
+    return result

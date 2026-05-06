@@ -211,8 +211,94 @@ function createMcpServer() {
 
   // ========================================================================
   // Phase 3: MCP Tool 분리 — search_archive, get_evidence, list_verified_claims
+  // + search_rtl (v9.1: with client-side dedup)
   // Requirements: 8.1, 8.2, 8.3, 8.6
   // ========================================================================
+
+  // v9.1: Client-side dedup helper functions
+  function dedupResults(results, maxResults) {
+    const seen = new Set();
+    const deduped = [];
+    for (const r of results) {
+      const fp = getResultFingerprint(r);
+      if (seen.has(fp)) continue;
+      seen.add(fp);
+      deduped.push(r);
+      if (deduped.length >= maxResults) break;
+    }
+    if (deduped.length < results.length) {
+      console.log("[DEDUP] " + results.length + " → " + deduped.length + " (removed " + (results.length - deduped.length) + " duplicates)");
+    }
+    return deduped;
+  }
+
+  function getResultFingerprint(r) {
+    const type = r.analysis_type || "";
+    if (type === "claim") {
+      return "claim:" + (r.claim_text || "").substring(0, 200);
+    } else if (type === "hdd_section") {
+      return "hdd:" + (r.topic || "") + ":" + (r.hdd_section_title || "");
+    } else if (type === "module_parse" || type === "module_parse_chunk") {
+      return "mp:" + (r.module_name || "") + ":" + type + ":" + (r.sub_record_type || "");
+    } else {
+      const basename = (r.file_path || "").split("/").pop() || "";
+      return "other:" + (r.module_name || "") + ":" + basename;
+    }
+  }
+
+  mcp.tool(
+    "search_rtl",
+    "RTL 파싱된 데이터를 검색합니다. 모듈명, 포트, 인스턴스, 토픽 등으로 검색 가능합니다. Trinity/N1B0 등 업로드된 RTL 코드의 구조 정보를 조회합니다.",
+    {
+      query: z.string().describe("검색어 (모듈명, 신호명, 키워드 등)"),
+      pipeline_id: z.string().optional().describe("파이프라인 ID 필터 (예: tt_20260221). 생략 시 전체 검색"),
+      topic: z.string().optional().describe("토픽 필터 (예: NoC, FPU, EDC, Overlay). 생략 시 전체 검색"),
+      max_results: z.number().optional().default(50).describe("최대 결과 수 (기본값: 50)")
+    },
+    async (args, extra) => {
+      const startTime = Date.now();
+      try {
+        const requestedMax = args.max_results || 50;
+        console.log("[TOOL] search_rtl: query=" + args.query + " pipeline_id=" + (args.pipeline_id||"all") + " topic=" + (args.topic||"all") + " max=" + requestedMax);
+        const body = { query: args.query, source: "rtl_parsed", max_results: Math.min(requestedMax * 3, 200) };
+        if (args.pipeline_id) body.pipeline_id = args.pipeline_id;
+        if (args.topic) body.topic = args.topic;
+
+        const resp = await ragApi("POST", "/search-archive", body);
+        const execution_time_ms = Date.now() - startTime;
+        if (resp.error) return { content: [{ type: "text", text: "오류: " + resp.error }], isError: true };
+
+        const rawResults = resp.results || [];
+        const totalHits = resp.total_hits || 0;
+        const results = dedupResults(rawResults, requestedMax);
+
+        if (results.length === 0) {
+          return { content: [{ type: "text", text: "\"" + args.query + "\" 검색 결과가 없습니다. (total_hits: " + totalHits + ")" }] };
+        }
+
+        let text = "RTL 검색 결과 (" + results.length + "/" + totalHits + "건):\n";
+        results.forEach(function(r, i) {
+          text += "\n[" + (i+1) + "] " + (r.module_name || "(no name)");
+          if (r.topic) text += " | 토픽: " + (Array.isArray(r.topic) ? r.topic.join(", ") : r.topic);
+          if (r.analysis_type) text += " | 유형: " + r.analysis_type;
+          if (r.pipeline_id) text += " | 파이프라인: " + r.pipeline_id;
+          if (r.claim_text) text += "\n    Claim: " + r.claim_text.substring(0, 500);
+          if (r.claim_type) text += " [" + r.claim_type + "]";
+          if (r.hdd_section_title) text += "\n    HDD: " + r.hdd_section_title;
+          if (r.hdd_content) text += "\n    " + r.hdd_content.substring(0, 800);
+          if (r.port_list) text += "\n    포트: " + r.port_list.substring(0, 800) + (r.port_list.length > 800 ? "..." : "");
+          if (r.instance_list) text += "\n    인스턴스: " + r.instance_list.substring(0, 800) + (r.instance_list.length > 800 ? "..." : "");
+          if (r.parameter_list) text += "\n    파라미터: " + r.parameter_list;
+          if (r.file_path) text += "\n    파일: " + r.file_path;
+        });
+        text += "\n\nexecution_time_ms: " + execution_time_ms;
+        return { content: [{ type: "text", text: text }] };
+      } catch(err) {
+        const execution_time_ms = Date.now() - startTime;
+        return { content: [{ type: "text", text: "RTL 검색 실패: " + err.message }], isError: true };
+      }
+    }
+  );
 
   mcp.tool(
     "search_archive",
