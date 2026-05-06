@@ -31,9 +31,26 @@
 - Property-based tests: `tests/properties/` (Go, gopter) — comprehensive coverage of all infrastructure layers
 - Policy tests: OPA/Rego in `policies/`
 
+## Local Python Environment
+
+- **Python 경로:** `C:\Users\Seung-IlWoo\AppData\Local\Programs\Python\Python313\python.exe`
+- **런처:** `py` (C:\Users\Seung-IlWoo\AppData\Local\Programs\Python\Launcher\py.exe)
+- **버전:** Python 3.13.9
+- **실행 방법:** 항상 `py` 명령어를 사용한다. `python` 또는 `python3`는 Windows App Alias로 동작하지 않음.
+- **테스트 실행:** `py -m pytest` (rtl_parser_src 디렉토리에서)
+- **패키지 설치:** `py -m pip install <package>`
+- **주의:** Lambda 배포 대상은 Python 3.12이지만, 로컬 개발/테스트는 Python 3.13으로 수행. 3.12 전용 기능은 사용하지 않는다.
+
 ## Common Commands
 
 ```bash
+# Python 테스트 실행 (RTL Parser)
+cd environments/app-layer/bedrock-rag/rtl_parser_src
+py -m pytest -v
+
+# 특정 테스트 파일 실행
+py -m pytest test_package_extractor_functions.py -v
+
 # Terraform workflow (run from an environment directory)
 terraform init
 terraform plan
@@ -53,7 +70,7 @@ bash scripts/run-integration-tests.sh
 bash scripts/terraform-validate.sh
 
 # Lambda: Python dependencies
-pip install -r lambda/document-processor/requirements.txt
+py -m pip install -r lambda/document-processor/requirements.txt
 
 # MCP bridge
 cd mcp-bridge && npm install && npm start

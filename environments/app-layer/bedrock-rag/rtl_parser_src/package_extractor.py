@@ -84,13 +84,15 @@ def _extract_localparams(content, pkg_name, file_path, pipeline_id):
         if len(params) > 30:
             claim_text += f" ... and {len(params) - 30} more"
         claims.append(_make_claim(claim_text, "structural", pkg_name,
-                                   "PackageConfig", file_path, pipeline_id))
+                                   "PackageConfig", file_path, pipeline_id,
+                                   parser_source="package_extractor"))
 
         # Create individual claims for ALL localparams (not just pure numeric)
         for name, value in params.items():
             claims.append(_make_claim(
                 f"Package '{pkg_name}' defines localparam {name} = {value}",
                 "structural", pkg_name, "PackageConfig", file_path, pipeline_id,
+                parser_source="package_extractor",
             ))
     return claims
 
@@ -122,6 +124,7 @@ def _extract_enums(content, pkg_name, file_path, pipeline_id):
                 f"Package '{pkg_name}' defines typedef enum '{enum_name}' "
                 f"with {len(members)} members: {', '.join(members)}",
                 "structural", pkg_name, "PackageConfig", file_path, pipeline_id,
+                parser_source="package_extractor",
             ))
     return claims
 
@@ -481,6 +484,7 @@ def _extract_parameters(content, pkg_name, file_path, pipeline_id):
         claims.append(_make_claim(
             f"Package '{pkg_name}' defines parameter {m.group(1)} = {m.group(2).strip()}",
             "structural", pkg_name, "PackageConfig", file_path, pipeline_id,
+            parser_source="package_extractor",
         ))
     return claims
 

@@ -12,12 +12,18 @@ import logging
 import os
 import re
 import hashlib
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
 import boto3
 
 from pipeline_utils import extract_pipeline_id
+from package_extractor import is_package_file, extract_package_constants
+from port_classifier import classify_ports
+from generate_block_parser import extract_generate_blocks
+from always_block_parser import extract_clock_domains
+from bitwidth_evaluator import evaluate_bitwidth
 
 # tiktoken은 Linux Lambda 환경에서만 정상 동작 (Windows 빌드 바이너리 비호환)
 try:
@@ -39,6 +45,37 @@ BEDROCK_REGION = os.environ.get("BEDROCK_REGION", "us-east-1")
 NEPTUNE_ENDPOINT = os.environ.get("NEPTUNE_ENDPOINT", "")
 TITAN_MODEL_ID = "amazon.titan-embed-text-v2:0"
 MAX_TOKENS = 8000
+
+# 파서별 Feature Flag 환경 변수 이름 (Requirements 26.1, 26.2)
+# 기본값 모두 "true" — 모든 파서가 기본 활성화
+_PARSER_FEATURE_FLAGS = {
+    "PARSER_PACKAGE_ENABLED": "true",
+    "PARSER_PORT_CLASSIFIER_ENABLED": "true",
+    "PARSER_GENERATE_BLOCK_ENABLED": "true",
+    "PARSER_ALWAYS_BLOCK_ENABLED": "true",
+    "PARSER_FUNCTION_EXTRACTOR_ENABLED": "true",
+}
+
+
+def _is_parser_enabled(env_var_name: str) -> bool:
+    """환경 변수 feature flag를 읽어 파서 활성화 여부를 반환.
+
+    Args:
+        env_var_name: 환경 변수 이름 (예: "PARSER_PACKAGE_ENABLED")
+
+    Returns:
+        True if the parser is enabled, False otherwise.
+    """
+    default = _PARSER_FEATURE_FLAGS.get(env_var_name, "true")
+    return os.environ.get(env_var_name, default).lower() == "true"
+
+
+# 모듈 레벨 캐시 (기존 코드 호환)
+PARSER_PACKAGE_ENABLED = _is_parser_enabled("PARSER_PACKAGE_ENABLED")
+PARSER_PORT_CLASSIFIER_ENABLED = _is_parser_enabled("PARSER_PORT_CLASSIFIER_ENABLED")
+PARSER_GENERATE_BLOCK_ENABLED = _is_parser_enabled("PARSER_GENERATE_BLOCK_ENABLED")
+PARSER_ALWAYS_BLOCK_ENABLED = _is_parser_enabled("PARSER_ALWAYS_BLOCK_ENABLED")
+PARSER_FUNCTION_EXTRACTOR_ENABLED = _is_parser_enabled("PARSER_FUNCTION_EXTRACTOR_ENABLED")
 
 # AWS 클라이언트
 s3_client = boto3.client("s3")
@@ -83,11 +120,68 @@ def handler(event, context):
     return {"statusCode": 200}
 
 
+# ---------------------------------------------------------------------------
+# 질의 유형 분류 및 동적 Boost (v9)
+# ---------------------------------------------------------------------------
+
+# 질의 유형별 키워드 패턴
+_QUERY_TYPE_KEYWORDS = {
+    "port_query": ["포트", "port", "input", "output", "인터페이스", "AXI", "APB", "clock", "reset", "clk"],
+    "hierarchy_query": ["인스턴스", "계층", "hierarchy", "instantiate", "모듈 트리", "instance", "sub-module"],
+    "config_query": ["파라미터", "parameter", "localparam", "설정", "크기", "size", "SizeX", "SizeY"],
+    "connectivity_query": ["연결", "topology", "ring", "chain", "routing", "generate", "feedthrough"],
+}
+
+# 질의 유형별 동적 boost 가중치
+_DYNAMIC_BOOST_MAP = {
+    "port_query": {"claim": 4.0, "module_parse": 0.5, "hdd_section": 2.0},
+    "hierarchy_query": {"claim": 1.5, "module_parse": 3.0, "hdd_section": 2.0},
+    "config_query": {"claim": 4.0, "module_parse": 1.0, "hdd_section": 2.0},
+    "connectivity_query": {"claim": 4.0, "module_parse": 1.0, "hdd_section": 2.0},
+    "general_query": {"claim": 3.0, "module_parse": 1.0, "hdd_section": 2.0},
+}
+
+
+def classify_query_type(query: str) -> str:
+    """사용자 질의를 키워드 패턴 매칭으로 5가지 유형 중 하나로 분류.
+
+    Args:
+        query: 사용자 질의 문자열
+
+    Returns:
+        질의 유형 문자열: port_query, hierarchy_query, config_query,
+        connectivity_query, 또는 general_query (폴백)
+    """
+    if not query:
+        return "general_query"
+
+    query_lower = query.lower()
+    for query_type, keywords in _QUERY_TYPE_KEYWORDS.items():
+        for keyword in keywords:
+            if keyword.lower() in query_lower:
+                return query_type
+
+    return "general_query"
+
+
+def get_dynamic_boosts(query_type: str) -> dict:
+    """질의 유형에 따른 analysis_type별 boost 가중치 반환.
+
+    Args:
+        query_type: classify_query_type()이 반환한 질의 유형
+
+    Returns:
+        {"claim": float, "module_parse": float, "hdd_section": float}
+    """
+    return _DYNAMIC_BOOST_MAP.get(query_type, _DYNAMIC_BOOST_MAP["general_query"])
+
+
 def _search_rtl(event):
     """RTL OpenSearch 인덱스 검색 — Main Lambda에서 동기 invoke로 호출.
 
     Supports both text search (query) and filtered search
     (pipeline_id, topic, analysis_type parameters).
+    v9: 질의 유형별 동적 boost 적용.
     """
     import requests
     from requests_aws4auth import AWS4Auth
@@ -106,6 +200,10 @@ def _search_rtl(event):
     # 텍스트 검색도 필터 파라미터도 없으면 빈 결과
     if not query and not pipeline_id and not topic and not analysis_type:
         return {"results": [], "total_hits": 0, "query": query}
+
+    # v9: 질의 유형 분류 및 동적 boost
+    query_type = classify_query_type(query) if query else "general_query"
+    dynamic_boosts = get_dynamic_boosts(query_type)
 
     session = boto3.Session()
     credentials = session.get_credentials()
@@ -139,21 +237,22 @@ def _search_rtl(event):
         filter_clauses = [c for c in filter_clauses if "match_all" not in c]
 
     if query:
-        # 텍스트 검색 + 필터 — claim/hdd 우선 검색 (v5 가중치 최적화)
+        # 텍스트 검색 + 필터 — v9 동적 boost 적용
         should_clauses = [
-            {"wildcard": {"module_name": {"value": f"*{query}*", "boost": 0.3}}},
-            {"wildcard": {"module_name": {"value": f"*{query.lower()}*", "boost": 0.3}}},
-            {"match": {"parsed_summary": query}},
+            {"wildcard": {"module_name": {"value": f"*{query}*", "boost": 1.5}}},
+            {"wildcard": {"module_name": {"value": f"*{query.lower()}*", "boost": 1.5}}},
+            {"match": {"parsed_summary": {"query": query, "boost": 1.2}}},
             {"match": {"port_list": query}},
             {"match": {"instance_list": query}},
             {"match": {"claim_text": {"query": query, "boost": 2.0}}},
             {"match": {"hdd_content": {"query": query, "boost": 2.0}}},
         ]
-        # analysis_type 미지정 시 claim/hdd_section 우선 boost
+        # analysis_type 미지정 시 동적 boost 적용 (질의 유형에 따라 가중치 변동)
         if not analysis_type:
             should_clauses.extend([
-                {"term": {"analysis_type": {"value": "claim", "boost": 3.0}}},
-                {"term": {"analysis_type": {"value": "hdd_section", "boost": 2.0}}},
+                {"term": {"analysis_type": {"value": "claim", "boost": dynamic_boosts["claim"]}}},
+                {"term": {"analysis_type": {"value": "hdd_section", "boost": dynamic_boosts["hdd_section"]}}},
+                {"term": {"analysis_type": {"value": "module_parse", "boost": dynamic_boosts["module_parse"]}}},
             ])
         bool_query: dict = {
             "should": should_clauses,
@@ -170,6 +269,7 @@ def _search_rtl(event):
                 "pipeline_id", "topic", "analysis_type",
                 "claim_text", "claim_type", "claim_id",
                 "hdd_content", "hdd_section_title",
+                "parent_module_name", "sub_record_type",
             ],
         }
     else:
@@ -183,6 +283,7 @@ def _search_rtl(event):
                 "pipeline_id", "topic", "analysis_type",
                 "claim_text", "claim_type", "claim_id",
                 "hdd_content", "hdd_section_title",
+                "parent_module_name", "sub_record_type",
             ],
         }
 
@@ -210,15 +311,67 @@ def _search_rtl(event):
                 "claim_id": src.get("claim_id", ""),
                 "hdd_content": src.get("hdd_content", ""),
                 "hdd_section_title": src.get("hdd_section_title", ""),
+                "parent_module_name": src.get("parent_module_name", ""),
+                "sub_record_type": src.get("sub_record_type", ""),
                 "score": hit.get("_score", 0),
             })
 
         total_hits = data.get("hits", {}).get("total", {}).get("value", 0)
-        return {"results": results, "total_hits": total_hits, "query": query}
+        return {
+            "results": results,
+            "total_hits": total_hits,
+            "query": query,
+            "metadata": {"query_type": query_type},
+        }
 
     except Exception as e:
         logger.error(json.dumps({"event": "rtl_search_error", "error": str(e)}))
         return {"results": [], "total_hits": 0, "query": query, "error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# CloudWatch 메트릭 발행 (Requirements 26.4, 26.5)
+# ---------------------------------------------------------------------------
+
+def _get_cloudwatch_client():
+    """CloudWatch 클라이언트 초기화 (VPC Endpoint 의존, graceful degradation)."""
+    try:
+        from botocore.config import Config
+        cw_config = Config(connect_timeout=5, read_timeout=10, retries={'max_attempts': 1})
+        return boto3.client('cloudwatch', region_name='ap-northeast-2', config=cw_config)
+    except Exception:
+        return None
+
+
+def _publish_parser_metric(metric_name, value, unit, parser_name, cloudwatch=None):
+    """파서별 CloudWatch 메트릭 발행 (BOS-AI/RTLParser 네임스페이스).
+
+    Requirements: 26.4, 26.5
+    """
+    if cloudwatch is None:
+        cloudwatch = _get_cloudwatch_client()
+    if not cloudwatch:
+        return
+    try:
+        cloudwatch.put_metric_data(
+            Namespace='BOS-AI/RTLParser',
+            MetricData=[{
+                'MetricName': metric_name,
+                'Value': float(value),
+                'Unit': unit,
+                'Dimensions': [
+                    {'Name': 'parser_name', 'Value': parser_name},
+                ],
+                'Timestamp': datetime.now(timezone.utc),
+            }]
+        )
+    except Exception as e:
+        logger.warning(json.dumps({
+            "event": "parser_metric_publish_failed",
+            "metric_name": metric_name,
+            "parser_name": parser_name,
+            "error": str(e),
+        }))
 
 
 def _process_rtl_file(bucket: str, key: str):
@@ -229,6 +382,9 @@ def _process_rtl_file(bucket: str, key: str):
     except Exception as e:
         _record_error(key, f"S3 GetObject 실패: {e}")
         raise
+
+    # CloudWatch 메트릭 클라이언트 (graceful degradation)
+    cw_client = _get_cloudwatch_client()
 
     # Pipeline_ID 추출
     pipeline_info = extract_pipeline_id(key)
@@ -266,8 +422,173 @@ def _process_rtl_file(bucket: str, key: str):
     # Neptune Graph DB 관계 적재 (Phase 6)
     _load_to_neptune(metadata)
 
+    # v6: Package file → extract localparam/enum/struct as claims
+    if is_package_file(key):
+        if not PARSER_PACKAGE_ENABLED:
+            logger.info(json.dumps({"event": "parser_disabled_skip", "parser_name": "package_extractor"}))
+        else:
+            pkg_start = time.time()
+            pkg_claims = extract_package_constants(
+                rtl_content, file_path=key,
+                pipeline_id=pipeline_info["pipeline_id"],
+            )
+            pkg_elapsed_ms = int((time.time() - pkg_start) * 1000)
+            for claim in pkg_claims:
+                claim.setdefault("parser_source", "package_extractor")
+                claim_summary = claim.get("claim_text", "")
+                claim_truncated = truncate_to_tokens(claim_summary, MAX_TOKENS)
+                claim_embedding = _generate_embedding(claim_truncated)
+                if claim_embedding:
+                    _index_to_opensearch(claim, claim_embedding)
+            logger.info(json.dumps({
+                "event": "parser_execution_result",
+                "parser_name": "package_extractor",
+                "claims_generated": len(pkg_claims),
+                "execution_time_ms": pkg_elapsed_ms,
+                "files_processed": 1,
+                "key": key,
+                "pipeline_id": pipeline_info["pipeline_id"],
+            }))
+            _publish_parser_metric("ParserClaimCount", len(pkg_claims), "Count", "package_extractor", cw_client)
+            _publish_parser_metric("ParserExecutionTime", pkg_elapsed_ms, "Milliseconds", "package_extractor", cw_client)
+
     # DynamoDB 파싱 완료 이벤트 기록
     module_name = metadata.get("module_name", "unknown")
+
+    # v7: Port classification — large modules get per-category port claims
+    port_list = metadata.get("port_list", [])
+    if len(port_list) >= 10:
+        if not PARSER_PORT_CLASSIFIER_ENABLED:
+            logger.info(json.dumps({"event": "parser_disabled_skip", "parser_name": "port_classifier"}))
+            port_claims = []
+        else:
+            port_start = time.time()
+            port_claims = classify_ports(
+                port_list, module_name=module_name,
+                file_path=key, pipeline_id=pipeline_info["pipeline_id"],
+            )
+            port_elapsed_ms = int((time.time() - port_start) * 1000)
+            for claim in port_claims:
+                claim.setdefault("parser_source", "port_classifier")
+                claim_summary = claim.get("claim_text", "")
+                claim_truncated = truncate_to_tokens(claim_summary, MAX_TOKENS)
+                claim_embedding = _generate_embedding(claim_truncated)
+                if claim_embedding:
+                    _index_to_opensearch(claim, claim_embedding)
+            if port_claims:
+                logger.info(json.dumps({
+                    "event": "parser_execution_result",
+                    "parser_name": "port_classifier",
+                    "claims_generated": len(port_claims),
+                    "execution_time_ms": port_elapsed_ms,
+                    "files_processed": 1,
+                    "key": key,
+                    "module_name": module_name,
+                }))
+                _publish_parser_metric("ParserClaimCount", len(port_claims), "Count", "port_classifier", cw_client)
+                _publish_parser_metric("ParserExecutionTime", port_elapsed_ms, "Milliseconds", "port_classifier", cw_client)
+    else:
+        port_claims = []
+
+    # v9 Phase 7: Generate Block Parser (Requirements 18.5, 26.1)
+    if PARSER_GENERATE_BLOCK_ENABLED:
+        gen_start = time.time()
+        gen_claims = extract_generate_blocks(
+            rtl_content, module_name=module_name,
+            file_path=key, pipeline_id=pipeline_info["pipeline_id"],
+        )
+        gen_elapsed_ms = int((time.time() - gen_start) * 1000)
+        for claim in gen_claims:
+            claim.setdefault("parser_source", "generate_block_parser")
+            claim_summary = claim.get("claim_text", "")
+            claim_truncated = truncate_to_tokens(claim_summary, MAX_TOKENS)
+            claim_embedding = _generate_embedding(claim_truncated)
+            if claim_embedding:
+                _index_to_opensearch(claim, claim_embedding)
+        if gen_claims:
+            logger.info(json.dumps({
+                "event": "parser_execution_result",
+                "parser_name": "generate_block_parser",
+                "claims_generated": len(gen_claims),
+                "execution_time_ms": gen_elapsed_ms,
+                "files_processed": 1,
+                "key": key,
+                "module_name": module_name,
+            }))
+            _publish_parser_metric("ParserClaimCount", len(gen_claims), "Count", "generate_block_parser", cw_client)
+            _publish_parser_metric("ParserExecutionTime", gen_elapsed_ms, "Milliseconds", "generate_block_parser", cw_client)
+    else:
+        logger.info(json.dumps({"event": "parser_disabled_skip", "parser_name": "generate_block_parser"}))
+
+    # v9 Phase 7: Always Block Parser — clock domain extraction (Requirements 19.5, 26.1)
+    if PARSER_ALWAYS_BLOCK_ENABLED:
+        always_start = time.time()
+        always_claims = extract_clock_domains(
+            rtl_content, module_name=module_name,
+            file_path=key, pipeline_id=pipeline_info["pipeline_id"],
+        )
+        always_elapsed_ms = int((time.time() - always_start) * 1000)
+        for claim in always_claims:
+            claim.setdefault("parser_source", "always_block_parser")
+            claim_summary = claim.get("claim_text", "")
+            claim_truncated = truncate_to_tokens(claim_summary, MAX_TOKENS)
+            claim_embedding = _generate_embedding(claim_truncated)
+            if claim_embedding:
+                _index_to_opensearch(claim, claim_embedding)
+        if always_claims:
+            logger.info(json.dumps({
+                "event": "parser_execution_result",
+                "parser_name": "always_block_parser",
+                "claims_generated": len(always_claims),
+                "execution_time_ms": always_elapsed_ms,
+                "files_processed": 1,
+                "key": key,
+                "module_name": module_name,
+            }))
+            _publish_parser_metric("ParserClaimCount", len(always_claims), "Count", "always_block_parser", cw_client)
+            _publish_parser_metric("ParserExecutionTime", always_elapsed_ms, "Milliseconds", "always_block_parser", cw_client)
+    else:
+        logger.info(json.dumps({"event": "parser_disabled_skip", "parser_name": "always_block_parser"}))
+
+    # v9 Phase 7: Bitwidth evaluation — resolve parametric port widths (Requirements 22.5)
+    param_context = {}
+    for param_entry in metadata.get("parameter_list", []):
+        if "=" in param_entry:
+            p_name, p_val = param_entry.split("=", 1)
+            try:
+                param_context[p_name.strip()] = int(p_val.strip())
+            except ValueError:
+                pass
+    if param_context:
+        for i, port_entry in enumerate(port_list):
+            # Extract bitwidth expression from port like "input [SizeX-1:0] data"
+            bw_match = re.search(r"\[([^\]]+):([^\]]+)\]", port_entry)
+            if bw_match:
+                high_expr = bw_match.group(1)
+                low_expr = bw_match.group(2)
+                high_val = evaluate_bitwidth(high_expr, param_context)
+                low_val = evaluate_bitwidth(low_expr, param_context)
+                if isinstance(high_val, int) and isinstance(low_val, int):
+                    resolved = port_entry[:bw_match.start()] + f"[{high_val}:{low_val}]" + port_entry[bw_match.end():]
+                    port_list[i] = resolved
+
+    # v9: 대형 모듈 청킹 — 포트 50개 이상 모듈을 Sub_Record로 분할
+    if len(port_list) >= 50:
+        sub_records = _create_sub_records(metadata, port_claims)
+        for sub_record in sub_records:
+            sub_summary = sub_record.get("parsed_summary", "")
+            sub_truncated = truncate_to_tokens(sub_summary, MAX_TOKENS)
+            sub_embedding = _generate_embedding(sub_truncated)
+            if sub_embedding:
+                _index_to_opensearch(sub_record, sub_embedding)
+        if sub_records:
+            logger.info(json.dumps({
+                "event": "sub_records_indexed",
+                "key": key,
+                "sub_record_count": len(sub_records),
+                "module_name": module_name,
+            }))
+
     _record_parse_event(pipeline_info["pipeline_id"], module_name, key)
 
     logger.info(json.dumps({
@@ -278,6 +599,88 @@ def _process_rtl_file(bucket: str, key: str):
         "port_count": len(metadata.get("port_list", [])),
         "instance_count": len(metadata.get("instance_list", [])),
     }))
+
+
+# ---------------------------------------------------------------------------
+# 대형 모듈 청킹 (v9 — Sub_Record 분할)
+# ---------------------------------------------------------------------------
+
+def _create_sub_records(metadata: dict, port_claims: list) -> list:
+    """대형 모듈(포트 50개 이상)을 기능별 Sub_Record로 분할.
+
+    3가지 Sub_Record 유형:
+    - port_summary: Port_Classifier 카테고리별 포트 요약
+    - instance_hierarchy: 인스턴스 목록 + 모듈 타입
+    - parameter_config: 파라미터 목록 + 값
+
+    Args:
+        metadata: 원본 모듈 파싱 메타데이터
+        port_claims: classify_ports()가 생성한 포트 카테고리 claim 목록
+
+    Returns:
+        Sub_Record dict 목록 (각각 개별 임베딩 + OpenSearch 인덱싱 대상)
+    """
+    module_name = metadata.get("module_name", "")
+    file_path = metadata.get("file_path", "")
+    pipeline_id = metadata.get("pipeline_id", "")
+
+    sub_records = []
+
+    # (1) port_summary: Port_Classifier 카테고리별 Sub_Record
+    for claim in port_claims:
+        claim_text = claim.get("claim_text", "")
+        sub_record = {
+            "module_name": module_name,
+            "parent_module_name": module_name,
+            "sub_record_type": "port_summary",
+            "analysis_type": "module_parse_chunk",
+            "file_path": file_path,
+            "pipeline_id": pipeline_id,
+            "parsed_summary": claim_text,
+            "port_list": "",
+            "parameter_list": "",
+            "instance_list": "",
+            "parent_module": metadata.get("parent_module", ""),
+        }
+        sub_records.append(sub_record)
+
+    # (2) instance_hierarchy: 인스턴스 목록 + 모듈 타입
+    instance_list = metadata.get("instance_list", [])
+    if instance_list:
+        instance_summary = f"Module '{module_name}' instance hierarchy: " + ", ".join(instance_list)
+        sub_records.append({
+            "module_name": module_name,
+            "parent_module_name": module_name,
+            "sub_record_type": "instance_hierarchy",
+            "analysis_type": "module_parse_chunk",
+            "file_path": file_path,
+            "pipeline_id": pipeline_id,
+            "parsed_summary": instance_summary,
+            "port_list": "",
+            "parameter_list": "",
+            "instance_list": " ".join(instance_list) if isinstance(instance_list, list) else instance_list,
+            "parent_module": metadata.get("parent_module", ""),
+        })
+
+    # (3) parameter_config: 파라미터 목록 + 값
+    parameter_list = metadata.get("parameter_list", [])
+    if parameter_list:
+        param_summary = f"Module '{module_name}' parameter configuration: " + ", ".join(parameter_list)
+        sub_records.append({
+            "module_name": module_name,
+            "parent_module_name": module_name,
+            "sub_record_type": "parameter_config",
+            "analysis_type": "module_parse_chunk",
+            "file_path": file_path,
+            "pipeline_id": pipeline_id,
+            "parsed_summary": param_summary,
+            "port_list": "",
+            "parameter_list": " ".join(parameter_list) if isinstance(parameter_list, list) else parameter_list,
+            "instance_list": "",
+            "parent_module": metadata.get("parent_module", ""),
+        })
+
+    return sub_records
 
 
 # ---------------------------------------------------------------------------
@@ -515,15 +918,24 @@ def _index_to_opensearch(metadata: dict, embedding: list):
             "embedding": embedding,
             "module_name": metadata.get("module_name", ""),
             "parent_module": metadata.get("parent_module", ""),
-            "port_list": " ".join(metadata.get("port_list", [])),
-            "parameter_list": " ".join(metadata.get("parameter_list", [])),
-            "instance_list": " ".join(metadata.get("instance_list", [])),
+            "port_list": " ".join(metadata.get("port_list", [])) if isinstance(metadata.get("port_list"), list) else metadata.get("port_list", ""),
+            "parameter_list": " ".join(metadata.get("parameter_list", [])) if isinstance(metadata.get("parameter_list"), list) else metadata.get("parameter_list", ""),
+            "instance_list": " ".join(metadata.get("instance_list", [])) if isinstance(metadata.get("instance_list"), list) else metadata.get("instance_list", ""),
             "file_path": metadata.get("file_path", ""),
-            "parsed_summary": generate_parsed_summary(metadata),
+            "parsed_summary": metadata.get("parsed_summary", "") or generate_parsed_summary(metadata),
             "pipeline_id": metadata.get("pipeline_id", ""),
             "chip_type": metadata.get("chip_type", ""),
             "snapshot_date": metadata.get("snapshot_date", ""),
             "analysis_type": metadata.get("analysis_type", "module_parse"),
+            # claim fields (v6+)
+            "claim_text": metadata.get("claim_text", ""),
+            "claim_type": metadata.get("claim_type", ""),
+            "claim_id": metadata.get("claim_id", ""),
+            "topic": metadata.get("topic", ""),
+            # v9 Phase 7 fields (Requirements 23.6, 26.7)
+            "parent_module_name": metadata.get("parent_module_name", ""),
+            "sub_record_type": metadata.get("sub_record_type", ""),
+            "parser_source": metadata.get("parser_source", ""),
         }
 
         # AOSS는 PUT /{index}/_doc/{id} (문서 ID 지정)를 지원하지 않음

@@ -499,8 +499,8 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 정수 리터럴/지원 연산자/파라미터 참조 외 구문 거부, 악의적 입력 시 ValueError 검증
 
 
-- [ ] 18. Phase 7: Consumption Side — 대형 모듈 청킹 + 질의 유형별 동적 Boost
-  - [ ] 18.1 대형 모듈 청킹 구현 (`environments/app-layer/bedrock-rag/rtl_parser_src/handler.py` 수정)
+- [x] 18. Phase 7: Consumption Side — 대형 모듈 청킹 + 질의 유형별 동적 Boost
+  - [x] 18.1 대형 모듈 청킹 구현 (`environments/app-layer/bedrock-rag/rtl_parser_src/handler.py` 수정)
     - `_process_rtl_file()` 함수 확장: 포트 50개 이상 모듈 감지 시 Sub_Record 분할
     - 3가지 Sub_Record 유형 생성: `port_summary`(Port_Classifier 카테고리별), `instance_hierarchy`(인스턴스 목록 + 모듈 타입), `parameter_config`(파라미터 목록 + 값)
     - 각 Sub_Record에 `parent_module_name`, `sub_record_type`, `analysis_type='module_parse_chunk'` 필드 포함
@@ -513,7 +513,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - **Validates: Requirements 23.1, 23.2, 23.3**
     - 50+ 포트 → 3가지 Sub_Record 생성 + 필드 포함 + 기존 레코드 유지, 50 미만 → Sub_Record 미생성 검증
 
-  - [ ] 18.3 질의 유형별 동적 Boost 구현 (`environments/app-layer/bedrock-rag/rtl_parser_src/handler.py` 수정)
+  - [x] 18.3 질의 유형별 동적 Boost 구현 (`environments/app-layer/bedrock-rag/rtl_parser_src/handler.py` 수정)
     - `classify_query_type(query)` 함수 추가: 키워드 패턴 매칭으로 5가지 유형 분류
     - `get_dynamic_boosts(query_type)` 함수 추가: 유형별 boost 가중치 반환
     - 질의 유형: port_query(claim 4.0, module_parse 0.5), hierarchy_query(claim 1.5, module_parse 3.0), config_query(claim 4.0, module_parse 1.0), connectivity_query(claim 4.0, module_parse 1.0), general_query(claim 3.0, module_parse 1.0)
@@ -528,8 +528,8 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - classify_query_type 5가지 유형 분류, get_dynamic_boosts 가중치 정확성, 미매칭 시 general_query 폴백 검증
 
 
-- [ ] 19. Phase 7: Generation Side — Hybrid Grounding
-  - [ ] 19.1 Hybrid Grounding 구현 (`environments/app-layer/bedrock-rag/lambda_src/index.py` 수정)
+- [x] 19. Phase 7: Generation Side — Hybrid Grounding
+  - [x] 19.1 Hybrid Grounding 구현 (`environments/app-layer/bedrock-rag/lambda_src/index.py` 수정)
     - `generate_hdd_section()` 함수 확장: `grounding_mode` 파라미터 수용 (strict/hybrid/free, 기본값 hybrid)
     - Foundation_Model 프롬프트에 Hybrid_Grounding 지시 포함
     - `[GROUNDED from claim:{claim_id}]` 태그 + claim_id 각주 첨부
@@ -552,8 +552,8 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - strict 모드 GROUNDED만 + KB 부족 시 NOT IN KB, hybrid 모드 양쪽 태그, free 모드 태그 없음 검증
 
 
-- [ ] 20. Phase 7: Quality Infrastructure — 파서별 기여도 측정
-  - [ ] 20.1 파서 Feature Flag 및 parser_source 필드 구현 (`environments/app-layer/bedrock-rag/rtl_parser_src/handler.py` 수정)
+- [x] 20. Phase 7: Quality Infrastructure — 파서별 기여도 측정
+  - [x] 20.1 파서 Feature Flag 및 parser_source 필드 구현 (`environments/app-layer/bedrock-rag/rtl_parser_src/handler.py` 수정)
     - 환경 변수 feature flag 추가: `PARSER_PACKAGE_ENABLED`, `PARSER_PORT_CLASSIFIER_ENABLED`, `PARSER_GENERATE_BLOCK_ENABLED`, `PARSER_ALWAYS_BLOCK_ENABLED`, `PARSER_FUNCTION_EXTRACTOR_ENABLED` (기본값 모두 `true`)
     - 비활성화된 파서 건너뛰기 + 로그 기록 (INFO)
     - 각 파서 실행 결과를 CloudWatch 구조화 로그에 기록: parser_name, claims_generated, execution_time_ms, files_processed
@@ -570,21 +570,21 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - **Validates: Requirements 26.6**
     - 모든 파서 생성 claim에 parser_source 필드 존재 + 빈 문자열 아님 검증
 
-  - [ ] 20.4 파서 기여도 측정 API 구현 (`environments/app-layer/bedrock-rag/rtl_parser_src/handler.py` + `environments/app-layer/bedrock-rag/lambda_src/index.py` 수정)
+  - [x] 20.4 파서 기여도 측정 API 구현 (`environments/app-layer/bedrock-rag/rtl_parser_src/handler.py` + `environments/app-layer/bedrock-rag/lambda_src/index.py` 수정)
     - `handler.py`: CloudWatch `BOS-AI/RTLParser` 네임스페이스에 `ParserClaimCount`, `ParserExecutionTime`, `ParserHitRatio` 메트릭 발행
     - `index.py`: `parser_contribution` 액션 추가 — pipeline_id(필수) 입력, 파서별 claims_total, claims_hit_in_search, hit_ratio, avg_search_score 집계 반환
     - `handler()` 라우팅에 `action == 'parser_contribution'` 분기 추가
     - _Requirements: 26.4, 26.5, 26.8_
 
 
-- [ ] 21. Phase 7: OpenSearch 인덱스 필드 확장 + Handler 통합 배선
-  - [ ] 21.1 OpenSearch 인덱스 스크립트 업데이트 (`scripts/create-opensearch-index.py` 수정)
+- [x] 21. Phase 7: OpenSearch 인덱스 필드 확장 + Handler 통합 배선
+  - [x] 21.1 OpenSearch 인덱스 스크립트 업데이트 (`scripts/create-opensearch-index.py` 수정)
     - `parent_module_name`(keyword) 필드 매핑 추가
     - `sub_record_type`(keyword) 필드 매핑 추가
     - `parser_source`(keyword) 필드 매핑 추가
     - _Requirements: 23.6, 26.7_
 
-  - [ ] 21.2 Handler 통합 배선 (`environments/app-layer/bedrock-rag/rtl_parser_src/handler.py` 수정)
+  - [x] 21.2 Handler 통합 배선 (`environments/app-layer/bedrock-rag/rtl_parser_src/handler.py` 수정)
     - `_process_rtl_file()` 함수에 Phase 7 파서 호출 통합:
       - `from generate_block_parser import extract_generate_blocks`
       - `from always_block_parser import extract_clock_domains`

@@ -93,6 +93,8 @@ def handler(event, context):
         return ingest_claims(event, context)
     if event.get('action') == 'cross_check_claims':
         return cross_check_claims(event, context)
+    if event.get('action') == 'parser_contribution':
+        return parser_contribution(event, context)
 
 
     logger.info(f"Event path: {event.get('path')}, method: {event.get('httpMethod')}")
@@ -728,7 +730,7 @@ def list_documents(event=None):
 
 def handle_query(event):
     """RAG 질의 처리 — Verification Pipeline 우선 실행, 폴백 시 Bedrock KB 검색
-    Requirements: 9.1, 9.7
+    Requirements: 9.1, 9.7, 25.7
     """
     start_time = time.time()
     body = parse_body(event)
@@ -743,10 +745,15 @@ def handle_query(event):
         })
 
     variant = body.get('variant', None)
+    grounding_mode = body.get('grounding_mode', 'hybrid')
+
+    # grounding_mode 유효성 검증 (Requirements 25.7)
+    if grounding_mode not in VALID_GROUNDING_MODES:
+        return response(400, {'error': f'invalid grounding_mode: {grounding_mode}. Valid: {sorted(VALID_GROUNDING_MODES)}'})
 
     # Verification Pipeline 우선 실행 (Task 5.4)
     try:
-        pipeline_result = verification_pipeline(query, variant=variant)
+        pipeline_result = verification_pipeline(query, variant=variant, grounding_mode=grounding_mode)
         response_time_ms = int((time.time() - start_time) * 1000)
 
         # 구조화 로그
@@ -755,6 +762,7 @@ def handle_query(event):
             'query_length': len(query),
             'response_time_ms': response_time_ms,
             'verification_pipeline': True,
+            'grounding_mode': grounding_mode,
             'fallback': pipeline_result.get('verification_metadata', {}).get('fallback', False),
             'claims_used': len(pipeline_result.get('verification_metadata', {}).get('claims_used', []))
         }))
@@ -769,9 +777,18 @@ def handle_query(event):
             'metadata': {
                 'search_type': 'verification_pipeline',
                 'query_length': len(query),
-                'response_time_ms': response_time_ms
+                'response_time_ms': response_time_ms,
+                'grounding_mode': grounding_mode
             }
         }
+
+        # Grounding ratios for non-free modes (Requirements 25.4)
+        if grounding_mode != "free":
+            grounding_ratios = _calculate_grounding_ratios(pipeline_result.get('answer', ''))
+            result['grounded_ratio'] = grounding_ratios['grounded_ratio']
+            result['inferred_ratio'] = grounding_ratios['inferred_ratio']
+            if grounding_ratios['kb_coverage_warning']:
+                result['kb_coverage_warning'] = grounding_ratios['kb_coverage_warning']
 
         return response(200, result)
 
@@ -1886,12 +1903,106 @@ def _is_publishable(claim):
 # 면책 조항 (Requirements 10.6)
 HDD_DISCLAIMER = "이 문서는 AI가 검증된 claim을 기반으로 자동 생성하였습니다"
 
+# KB 커버리지 경고 메시지 (Requirements 25.5)
+KB_COVERAGE_WARNING = "KB 커버리지가 낮습니다. 추가 RTL 파싱 또는 Spec 문서 업로드를 권장합니다."
+
+# Hybrid Grounding 유효 모드 (Requirements 25.6)
+VALID_GROUNDING_MODES = {"strict", "hybrid", "free"}
+
+
+def _build_grounding_prompt(grounding_mode, claims):
+    """Hybrid Grounding 모드에 따른 프롬프트 지시문 생성
+    Requirements: 25.1, 25.2, 25.3, 25.6, 25.8
+
+    Args:
+        grounding_mode: 'strict', 'hybrid', or 'free'
+        claims: list of claim dicts with 'claim_id' and 'statement'
+
+    Returns:
+        str: grounding instructions to append to the LLM prompt
+    """
+    if grounding_mode == "free":
+        return ""
+
+    # Build claim reference list for the LLM
+    claim_refs = ""
+    for i, claim in enumerate(claims):
+        claim_id = claim.get('claim_id', f'unknown_{i}')
+        statement = claim.get('statement', '')
+        claim_refs += f"  - claim_id: {claim_id} | statement: {statement}\n"
+
+    if grounding_mode == "strict":
+        return f"""
+[Hybrid Grounding 지시 — STRICT 모드]
+반드시 아래 claim 목록에서 직접 근거를 찾을 수 있는 내용만 작성하세요.
+각 문장 앞에 반드시 `[GROUNDED from claim:{{claim_id}}]` 태그를 붙이세요.
+KB에 근거가 없는 내용은 절대 작성하지 마세요.
+만약 제공된 claim으로 섹션을 작성하기에 정보가 부족하면, `[NOT IN KB] 이 섹션에 대한 KB 근거가 부족합니다.` 메시지만 출력하세요.
+
+사용 가능한 Claim 목록:
+{claim_refs}"""
+
+    # hybrid mode (default)
+    return f"""
+[Hybrid Grounding 지시 — HYBRID 모드]
+아래 claim 목록에서 직접 근거를 찾을 수 있는 내용에는 `[GROUNDED from claim:{{claim_id}}]` 태그를 붙이세요.
+LLM의 일반 지식으로 추론한 내용에는 `[INFERRED]` 태그를 붙이고, 문장 끝에 `※ Spec 확인 필요`를 추가하세요.
+
+형식 예시:
+- [GROUNDED from claim:abc-123] UCIE PHY의 LTSSM은 4개 상태를 가진다.
+- [INFERRED] 일반적으로 CDC 처리에는 2-stage synchronizer가 사용된다. ※ Spec 확인 필요
+
+사용 가능한 Claim 목록:
+{claim_refs}"""
+
+
+def _calculate_grounding_ratios(generated_text):
+    """생성된 텍스트에서 [GROUNDED]와 [INFERRED] 태그를 파싱하여 비율 계산
+    Requirements: 25.4, 25.5
+
+    Args:
+        generated_text: LLM이 생성한 텍스트
+
+    Returns:
+        dict with 'grounded_ratio', 'inferred_ratio', 'grounded_count',
+        'inferred_count', 'kb_coverage_warning' (str or None)
+    """
+    grounded_pattern = re.compile(r'\[GROUNDED(?:\s+from\s+claim:[^\]]+)?\]')
+    inferred_pattern = re.compile(r'\[INFERRED\]')
+
+    grounded_count = len(grounded_pattern.findall(generated_text))
+    inferred_count = len(inferred_pattern.findall(generated_text))
+
+    total = grounded_count + inferred_count
+
+    if total == 0:
+        # No tags found (e.g., free mode or LLM didn't follow instructions)
+        grounded_ratio = 0.0
+        inferred_ratio = 0.0
+    else:
+        grounded_ratio = round(grounded_count / total, 4)
+        inferred_ratio = round(inferred_count / total, 4)
+
+    # KB coverage warning (Requirements 25.5)
+    kb_coverage_warning = None
+    if inferred_ratio > 0.5:
+        kb_coverage_warning = KB_COVERAGE_WARNING
+
+    return {
+        'grounded_ratio': grounded_ratio,
+        'inferred_ratio': inferred_ratio,
+        'grounded_count': grounded_count,
+        'inferred_count': inferred_count,
+        'kb_coverage_warning': kb_coverage_warning
+    }
+
 
 def generate_hdd_section(event):
     """POST /rag/generate-hdd — HDD 섹션 자동 생성
-    Requirements: 10.1, 10.2, 10.3, 10.6
+    Requirements: 10.1, 10.2, 10.3, 10.6, 25.1~25.8
     - topic의 verified + approved claim 조회
     - Foundation_Model로 HDD 마크다운 생성
+    - Hybrid Grounding: grounding_mode (strict/hybrid/free) 지원
     - evidence 각주 포함 (include_evidence=true)
     - 면책 조항 자동 포함
     """
@@ -1899,11 +2010,14 @@ def generate_hdd_section(event):
     topic = body.get('topic', '')
     section_title = body.get('section_title', '')
     include_evidence = body.get('include_evidence', True)
+    grounding_mode = body.get('grounding_mode', 'hybrid')
 
     if not topic:
         return response(400, {'error': 'missing required parameter: topic'})
     if not section_title:
         return response(400, {'error': 'missing required parameter: section_title'})
+    if grounding_mode not in VALID_GROUNDING_MODES:
+        return response(400, {'error': f'invalid grounding_mode: {grounding_mode}. Valid: {sorted(VALID_GROUNDING_MODES)}'})
 
     table = dynamodb.Table(CLAIM_DB_TABLE)
 
@@ -1923,6 +2037,18 @@ def generate_hdd_section(event):
     # approved claim만 필터 (Requirements 14.5, 14.7)
     approved_claims = [c for c in result.get('Items', []) if _is_publishable(c)]
 
+    # strict 모드에서 claim 부족 시 [NOT IN KB] 메시지 (Requirements 25.8)
+    if not approved_claims and grounding_mode == "strict":
+        return response(200, {
+            'topic': topic,
+            'section_title': section_title,
+            'markdown': '[NOT IN KB] 이 섹션에 대한 KB 근거가 부족합니다.',
+            'claims_used': 0,
+            'grounding_mode': grounding_mode,
+            'grounded_ratio': 0.0,
+            'inferred_ratio': 0.0
+        })
+
     if not approved_claims:
         return response(403, {
             'error': 'claim requires approval for critical topic',
@@ -1930,7 +2056,7 @@ def generate_hdd_section(event):
             'message': 'No verified+approved claims found for this topic. Claims must have approval_status=approved.'
         })
 
-    # Foundation Model로 HDD 마크다운 생성 (Requirements 10.2)
+    # Foundation Model로 HDD 마크다운 생성 (Requirements 10.2, 25.1~25.3)
     try:
         bedrock_runtime = boto3.client('bedrock-runtime', region_name=BACKEND_REGION)
         model_id = os.environ.get('INVOKE_MODEL_ID', 'us.anthropic.claude-3-5-haiku-20241022-v1:0')
@@ -1940,6 +2066,7 @@ def generate_hdd_section(event):
         footnotes = []
         for i, claim in enumerate(approved_claims):
             claims_context += f"\n[Claim {i+1}] (confidence: {claim.get('confidence', 'N/A')})\n"
+            claims_context += f"  claim_id: {claim.get('claim_id', '')}\n"
             claims_context += f"  Statement: {claim.get('statement', '')}\n"
             for ev in claim.get('evidence', []):
                 footnote_idx = len(footnotes) + 1
@@ -1952,14 +2079,18 @@ def generate_hdd_section(event):
                 })
 
         evidence_instruction = ""
-        if include_evidence:
+        if include_evidence and grounding_mode == "free":
             evidence_instruction = "\n각 주장에 대해 [^N] 형식의 각주 번호를 포함하세요. 각주는 문서 끝에 배치됩니다."
+
+        # Hybrid Grounding 프롬프트 지시문 (Requirements 25.1, 25.2, 25.3)
+        grounding_instruction = _build_grounding_prompt(grounding_mode, approved_claims)
 
         prompt = f"""다음 검증된 claim들을 기반으로 HDD(Hardware Design Description) 섹션을 마크다운 형식으로 작성하세요.
 
 섹션 제목: {section_title}
 주제: {topic}
 {evidence_instruction}
+{grounding_instruction}
 
 검증된 Claim 목록:
 {claims_context}
@@ -1984,6 +2115,9 @@ def generate_hdd_section(event):
         logger.error(f"HDD section generation failed: {e}")
         return response(500, {'error': f'HDD section generation failed: {str(e)}'})
 
+    # Grounding ratio 계산 (Requirements 25.4, 25.5)
+    grounding_ratios = _calculate_grounding_ratios(markdown_content)
+
     # evidence 각주 추가 (Requirements 10.3)
     if include_evidence and footnotes:
         markdown_content += "\n\n---\n\n### 참조 (Evidence)\n\n"
@@ -2003,17 +2137,29 @@ def generate_hdd_section(event):
         'topic': topic,
         'section_title': section_title,
         'claims_used': len(approved_claims),
-        'include_evidence': include_evidence
+        'include_evidence': include_evidence,
+        'grounding_mode': grounding_mode,
+        'grounded_ratio': grounding_ratios['grounded_ratio'],
+        'inferred_ratio': grounding_ratios['inferred_ratio']
     }))
 
-    return response(200, {
+    result_body = {
         'topic': topic,
         'section_title': section_title,
         'markdown': markdown_content,
         'claims_used': len(approved_claims),
         'include_evidence': include_evidence,
+        'grounding_mode': grounding_mode,
+        'grounded_ratio': grounding_ratios['grounded_ratio'],
+        'inferred_ratio': grounding_ratios['inferred_ratio'],
         'disclaimer': HDD_DISCLAIMER
-    })
+    }
+
+    # KB 커버리지 경고 (Requirements 25.5)
+    if grounding_ratios['kb_coverage_warning']:
+        result_body['kb_coverage_warning'] = grounding_ratios['kb_coverage_warning']
+
+    return response(200, result_body)
 
 
 def publish_markdown(event):
@@ -2128,11 +2274,11 @@ def publish_markdown(event):
 # Requirements: 9.1~9.9
 # ============================================================================
 
-def verification_pipeline(query, variant=None):
+def verification_pipeline(query, variant=None, grounding_mode='hybrid'):
     """8단계 Verification Pipeline 실행
     (1) 질문 수신 → (2) topic 식별 → (3) claim 검색 → (3.5) Neptune placeholder
     → (4) evidence 추적 → (5) 충돌 검사 → (6) 버전 확인 → (7) 답변 생성 → (8) evidence 첨부
-    Requirements: 9.1~9.9
+    Requirements: 9.1~9.9, 25.1~25.8
     """
     pipeline_start = time.time()
     step_times = {}
@@ -2261,9 +2407,9 @@ def verification_pipeline(query, variant=None):
     latest_claims = [c for c in verified_claims if c.get('is_latest', False)]
     _log_step('6_version_check', step_start)
 
-    # (7) Foundation Model로 답변 생성 (Requirements 9.5, 16.12)
+    # (7) Foundation Model로 답변 생성 (Requirements 9.5, 16.12, 25.1~25.3)
     step_start = time.time()
-    answer = _generate_answer_from_claims(query, latest_claims, has_conflicts, neptune_results)
+    answer = _generate_answer_from_claims(query, latest_claims, has_conflicts, neptune_results, grounding_mode=grounding_mode)
     _log_step('7_answer_generation', step_start)
 
     # (8) Evidence 첨부
@@ -2355,8 +2501,8 @@ JSON 배열만 반환하세요. 다른 텍스트는 포함하지 마세요.
         return []
 
 
-def _generate_answer_from_claims(query, claims, has_conflicts, neptune_results=None):
-    """Verified claim + Neptune 그래프 컨텍스트 기반 답변 생성 (Requirements 9.5, 16.12)"""
+def _generate_answer_from_claims(query, claims, has_conflicts, neptune_results=None, grounding_mode='hybrid'):
+    """Verified claim + Neptune 그래프 컨텍스트 기반 답변 생성 (Requirements 9.5, 16.12, 25.1~25.3)"""
     try:
         bedrock_runtime = boto3.client('bedrock-runtime', region_name=BACKEND_REGION)
         model_id = os.environ.get('INVOKE_MODEL_ID', 'us.anthropic.claude-3-5-haiku-20241022-v1:0')
@@ -2365,6 +2511,7 @@ def _generate_answer_from_claims(query, claims, has_conflicts, neptune_results=N
         claims_context = ""
         for i, claim in enumerate(claims):
             claims_context += f"\n[Claim {i+1}] (confidence: {claim.get('confidence', 'N/A')})\n"
+            claims_context += f"  claim_id: {claim.get('claim_id', '')}\n"
             claims_context += f"  Statement: {claim.get('statement', '')}\n"
             for ev in claim.get('evidence', []):
                 claims_context += f"  Evidence: {ev.get('source_chunk', '')[:200]}\n"
@@ -2380,8 +2527,12 @@ def _generate_answer_from_claims(query, claims, has_conflicts, neptune_results=N
         if has_conflicts:
             conflict_warning = "\n주의: 일부 정보에 충돌이 감지되었습니다. 답변에 이 사실을 언급하세요."
 
+        # Hybrid Grounding 프롬프트 지시문 (Requirements 25.1~25.3)
+        grounding_instruction = _build_grounding_prompt(grounding_mode, claims)
+
         prompt = f"""다음 검증된 claim들을 기반으로 질문에 답변하세요.
 claim의 statement와 evidence만 사용하여 정확한 답변을 생성하세요.{conflict_warning}
+{grounding_instruction}
 
 검증된 Claim 목록:
 {claims_context}{graph_context}
@@ -3408,6 +3559,171 @@ Evidence: {evidence}
             'claims_pending': claims_pending,
             'total_processed': total_processed
         }
+
+
+# ============================================================================
+# Parser Contribution API (Task 20.4)
+# Requirements: 26.4, 26.5, 26.8
+# ============================================================================
+
+def parser_contribution(event, context):
+    """파서별 기여도 측정 — pipeline_id 기준으로 parser_source별 claim 통계 반환.
+
+    Input: pipeline_id (required)
+    Output: per-parser claims_total, claims_hit_in_search, hit_ratio, avg_search_score
+
+    Requirements: 26.4, 26.5, 26.8
+    """
+    pipeline_id = event.get('pipeline_id', '')
+    if not pipeline_id:
+        return {'error': 'pipeline_id is required'}
+
+    if not RTL_OPENSEARCH_ENDPOINT:
+        return {'error': 'RTL_OPENSEARCH_ENDPOINT not configured', 'pipeline_id': pipeline_id}
+
+    try:
+        import requests
+        from requests_aws4auth import AWS4Auth
+
+        session = boto3.Session()
+        credentials = session.get_credentials()
+        aoss_region = os.environ.get('BEDROCK_REGION', 'us-east-1')
+        auth = AWS4Auth(
+            credentials.access_key,
+            credentials.secret_key,
+            aoss_region,
+            'aoss',
+            session_token=credentials.token,
+        )
+
+        url = f"{RTL_OPENSEARCH_ENDPOINT}/{RTL_OPENSEARCH_INDEX}/_search"
+
+        # Query all claims for this pipeline_id, aggregate by parser_source
+        search_body = {
+            "size": 0,
+            "query": {
+                "bool": {
+                    "must": [
+                        {"term": {"pipeline_id": pipeline_id}},
+                    ],
+                    "must_not": [
+                        {"term": {"parser_source": ""}},
+                    ]
+                }
+            },
+            "aggs": {
+                "by_parser": {
+                    "terms": {
+                        "field": "parser_source",
+                        "size": 20,
+                    },
+                    "aggs": {
+                        "avg_score": {
+                            "avg": {"field": "_score"}
+                        }
+                    }
+                }
+            }
+        }
+
+        resp = requests.post(
+            url, auth=auth, json=search_body,
+            headers={"Content-Type": "application/json"}, timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        # Parse aggregation results
+        parser_stats = {}
+        buckets = data.get("aggregations", {}).get("by_parser", {}).get("buckets", [])
+        for bucket in buckets:
+            parser_name = bucket.get("key", "unknown")
+            claims_total = bucket.get("doc_count", 0)
+            parser_stats[parser_name] = {
+                "claims_total": claims_total,
+                "claims_hit_in_search": 0,
+                "hit_ratio": 0.0,
+                "avg_search_score": 0.0,
+            }
+
+        # Now query with a broad text match to estimate hit ratio
+        # (claims that would actually appear in search results)
+        hit_search_body = {
+            "size": 0,
+            "query": {
+                "bool": {
+                    "must": [
+                        {"term": {"pipeline_id": pipeline_id}},
+                        {"exists": {"field": "claim_text"}},
+                    ],
+                    "must_not": [
+                        {"term": {"parser_source": ""}},
+                        {"term": {"claim_text": ""}},
+                    ]
+                }
+            },
+            "aggs": {
+                "by_parser": {
+                    "terms": {
+                        "field": "parser_source",
+                        "size": 20,
+                    }
+                }
+            }
+        }
+
+        hit_resp = requests.post(
+            url, auth=auth, json=hit_search_body,
+            headers={"Content-Type": "application/json"}, timeout=30,
+        )
+        if hit_resp.status_code == 200:
+            hit_data = hit_resp.json()
+            hit_buckets = hit_data.get("aggregations", {}).get("by_parser", {}).get("buckets", [])
+            for bucket in hit_buckets:
+                parser_name = bucket.get("key", "unknown")
+                hit_count = bucket.get("doc_count", 0)
+                if parser_name in parser_stats:
+                    parser_stats[parser_name]["claims_hit_in_search"] = hit_count
+                    total = parser_stats[parser_name]["claims_total"]
+                    parser_stats[parser_name]["hit_ratio"] = (
+                        hit_count / total if total > 0 else 0.0
+                    )
+
+        # Publish ParserHitRatio metrics to CloudWatch
+        try:
+            from botocore.config import Config
+            cw_config = Config(connect_timeout=5, read_timeout=10, retries={'max_attempts': 1})
+            cw = boto3.client('cloudwatch', region_name='ap-northeast-2', config=cw_config)
+            for parser_name, stats in parser_stats.items():
+                cw.put_metric_data(
+                    Namespace='BOS-AI/RTLParser',
+                    MetricData=[{
+                        'MetricName': 'ParserHitRatio',
+                        'Value': float(stats['hit_ratio']),
+                        'Unit': 'None',
+                        'Dimensions': [
+                            {'Name': 'parser_name', 'Value': parser_name},
+                        ],
+                        'Timestamp': datetime.utcnow(),
+                    }]
+                )
+        except Exception as metric_err:
+            logger.warning(f"ParserHitRatio metric publish failed: {metric_err}")
+
+        logger.info(json.dumps({
+            'event': 'parser_contribution_result',
+            'pipeline_id': pipeline_id,
+            'parser_count': len(parser_stats),
+        }))
+
+        return {
+            'pipeline_id': pipeline_id,
+            'parser_stats': parser_stats,
+        }
+
+    except Exception as e:
+        logger.error(f"parser_contribution failed: {e}", exc_info=True)
+        return {'error': str(e), 'pipeline_id': pipeline_id}
 
 
 # ============================================================================
