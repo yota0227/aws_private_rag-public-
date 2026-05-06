@@ -511,8 +511,8 @@ def _extract_functions(rtl_content, pkg_name, file_path, pipeline_id):
     #   endfunction
     # The return type may include packed dimensions like [N:0].
     func_pattern = re.compile(
-        r"\b(automatic\s+|static\s+)?"
-        r"function\s+"
+        r"\bfunction\s+"
+        r"(automatic\s+|static\s+)?"
         r"((?:(?:void|int|integer|logic|bit|byte|shortint|longint|string|real)"
         r"(?:\s+(?:unsigned|signed))?"
         r"(?:\s*\[[^\]]*\])*"
@@ -587,8 +587,8 @@ def _extract_tasks(rtl_content, pkg_name, file_path, pipeline_id):
     #     ... body ...
     #   endtask
     task_pattern = re.compile(
-        r"\b(automatic\s+|static\s+)?"
-        r"task\s+"
+        r"\btask\s+"
+        r"(automatic\s+|static\s+)?"
         r"(\w+)"      # task name
         r"\s*\(([^)]*)\)\s*;",  # argument list
         re.DOTALL
