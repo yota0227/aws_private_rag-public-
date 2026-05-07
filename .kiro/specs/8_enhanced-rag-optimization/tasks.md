@@ -2,7 +2,7 @@
 
 ## Overview
 
-BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시스템으로 확장한다. 7개 Phase로 나누어 점진적으로 구현하며, 각 Phase는 이전 Phase의 결과물에 의존한다. Terraform IaC로 AWS 리소스를 관리하고, Python 3.12 Lambda 함수, Node.js MCP Bridge, Go 1.21 + gopter 속성 기반 테스트를 사용한다. Phase 7은 v9 RTL Parser Pipeline Enhancement로, Supply Side 파서 6종 확장, Consumption Side 검색 개선, Generation Side Hybrid Grounding, Quality Infrastructure 파서 기여도 측정을 포함한다.
+BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시스템으로 확장한다. 8개 Phase로 나누어 점진적으로 구현하며, 각 Phase는 이전 Phase의 결과물에 의존한다. Terraform IaC로 AWS 리소스를 관리하고, Python 3.12 Lambda 함수, Node.js MCP Bridge, Go 1.21 + gopter 속성 기반 테스트를 사용한다. Phase 7은 v9 RTL Parser Pipeline Enhancement로, Supply Side 파서 6종 확장, Consumption Side 검색 개선, Generation Side Hybrid Grounding, Quality Infrastructure 파서 기여도 측정을 포함한다. Phase 8은 v9.2 RTL Wiring & Topology Parser로, v9.1 리뷰에서 식별된 5개 잔여 갭(EP Index Table, NOC2AXI dual-row, NoC repeater, clock_routing array, dispatch feedthrough wire)을 해소하여 Content Fidelity 80%+ 달성을 목표로 한다.
 
 ## Tasks
 
@@ -605,7 +605,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
   - `cd tests && go test -v ./properties/ -run TestEnhancedRagOptimization -count=1` (Phase 7 Property 26~39 포함)
 
 
-- [ ] 23. Final Checkpoint - 전체 7 Phase 통합 테스트
+- [ ] 23. Phase 7 Final Checkpoint - 전체 7 Phase 통합 테스트
   - 전체 시스템 통합 동작 확인 (Phase 1~7)
   - `cd environments/app-layer/bedrock-rag && terraform validate`
   - `cd environments/app-layer/knowledge-graph && terraform validate`
@@ -632,3 +632,127 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
 - Confluence/Jira는 Cloud 환경이므로 별도 연동 방식 검토 (이 스펙 범위 외)
 - Codebeamer 연동은 Spec 6 (codebeamer-aspice-rag-integration)에서 처리
 
+
+
+
+- [-] 24. Phase 8: EP Index Table 계산 및 Package Helper Function 확장 (Gap 1)
+  - [x] 24.1 EP Index Table 계산 구현 (`environments/app-layer/bedrock-rag/rtl_parser_src/package_extractor.py` 수정)
+    - `_compute_ep_index_table(constants, enums, pkg_name, file_path, pipeline_id)` 함수 추가
+    - `extract_package_constants()` 함수 내에서 SizeX, SizeY, tile_t 추출 직후 호출
+    - 계산 공식: `EndpointIndex = x * SizeY + y` (x: 0..SizeX-1, y: 0..SizeY-1)
+    - 각 EP에 대해 개별 claim 생성: `"Endpoint EP={ep} at position (X={x}, Y={y}) is tile type {tile_t_member}"`
+    - EP Table 전체 요약 claim 1건 추가 생성
+    - tile_t enum → Y 좌표 매핑 테이블 (`TILE_TYPE_Y_MAPPING` 딕셔너리)
+    - tile_t 매핑 불가 시 "UNKNOWN" 타입으로 기록 + WARNING 로그
+    - SizeX/SizeY 미추출 시 EP Table 생성 건너뛰기 + WARNING 로그
+    - `PARSER_EP_TABLE_ENABLED` 환경 변수 feature flag (기본값 `true`)
+    - `parser_source` 필드를 `"ep_index_table"` 로 설정
+    - _Requirements: 27.1, 27.2, 27.3, 27.4, 27.6_
+
+  - [ ] 24.2 Package Helper Function 추출 범위 확장 (`package_extractor.py` 수정)
+    - 기존 함수 추출 로직의 검색 범위를 패키지 파일 전체로 확장
+    - `getTensixIndex`, `getNoc2AxiIndex`, `getApbIndex`, `getDmIndex` 등 인덱스 계산 헬퍼 함수 누락 없이 추출
+    - 함수 검색 정규식 개선: 패키지 스코프 외부 함수도 포함
+    - _Requirements: 27.5_
+
+  - [x] 24.3 EP Index Table 단위 테스트 작성 (`environments/app-layer/bedrock-rag/rtl_parser_src/test_ep_table.py` — 신규)
+    - SizeX=4, SizeY=5 → 20개 EP claim 생성 검증 (인덱스 0~19 연속)
+    - tile_t 매핑 검증: TENSIX(Y=0~2), NOC2AXI_ROUTER_NE_OPT(Y=3+4)
+    - EP Table 요약 claim 존재 검증
+    - PARSER_EP_TABLE_ENABLED=false → claim 0건 검증
+    - SizeX/SizeY 미추출 시 graceful skip 검증
+    - tile_t 미추출 시 "UNKNOWN" 타입 폴백 검증
+    - EP 공식 라운드트립: claim_text에서 EP, X, Y 파싱 → EP = X * SizeY + Y 성립 검증
+    - Helper function 4개 추출 검증 (getTensixIndex, getNoc2AxiIndex, getApbIndex, getDmIndex)
+    - _Requirements: 27.1, 27.2, 27.3, 27.4, 27.5, 27.6, 27.7_
+
+
+- [ ] 25. Phase 8: Generate Block Instance-Position Mapping 확장 (Gap 2-3)
+  - [ ] 25.1 Instance-Position Mapping 구현 (`environments/app-layer/bedrock-rag/rtl_parser_src/generate_block_parser.py` 수정)
+    - `_extract_instance_positions(block_content, block_label, genvar_ranges, module_name, file_path, pipeline_id)` 함수 추가
+    - `extract_generate_blocks()` 함수 내에서 각 generate 블록 파싱 후 호출
+    - 인스턴스화 패턴 정규식: `r'(\w+)\s+(\w+)\s*\('` (module_type instance_name)
+    - 위치(X,Y) 유추: genvar 변수 또는 상수에서 추론
+    - Dual-row 감지: 2개 Y 좌표에 걸치는 블록 → `Y={y1}+{y2}` 형식
+    - EP ID 추출 패턴: `r'\.ep_id\s*\(\s*(\d+|[\w\*\+\-]+)\s*\)'`
+    - claim_text 형식: `"Generate block '{label}' at (X={x}, Y={y_range}) instantiates '{module_name}' with EP={ep_id} ({tile_type})"`
+    - 위치 유추 불가 시 "UNKNOWN" 기록 + WARNING 로그
+    - _Requirements: 28.1, 28.2, 28.3, 28.5, 28.6, 28.7_
+
+  - [ ] 25.2 NoC Repeater 추출 구현 (`generate_block_parser.py` 수정)
+    - `_extract_noc_repeaters(block_content, block_label, genvar_ranges, module_name, file_path, pipeline_id)` 함수 추가
+    - `tt_noc_repeaters` 등 repeater 인스턴스 인식
+    - 파라미터 추출: `#(.NUM(4))` 패턴에서 NUM 값 추출
+    - 배치 위치 유추: inter-column (X 좌표 간) 위치
+    - claim_text 형식: `"NoC repeater '{instance_name}' with NUM={num} stages placed at Y={y} between X={x1}↔X={x2}"`
+    - _Requirements: 28.4_
+
+  - [ ] 25.3 Instance-Position Mapping 단위 테스트 작성 (`environments/app-layer/bedrock-rag/rtl_parser_src/test_instance_position.py` — 신규)
+    - NOC2AXI dual-row 검증: Y=4+3 형식, EP 2개 명시
+    - NoC repeater NUM 파라미터 검증: NUM=4, NUM=6 추출
+    - NoC repeater inter-column 위치 검증: X=1↔X=2
+    - Instance EP ID 추출 검증: .ep_id(9) → EP=9
+    - Instance 위치 UNKNOWN 폴백 검증: genvar 미유추 시
+    - 인스턴스명/모듈명 비어있지 않음 검증
+    - generate 블록 라벨 → 모듈명 매핑 정확성 검증
+    - _Requirements: 28.1, 28.2, 28.3, 28.4, 28.5, 28.7, 28.8_
+
+
+- [ ] 26. Phase 8: Wire Declaration Parser 구현 (Gap 4-5)
+  - [ ] 26.1 Wire Declaration Parser 구현 (`environments/app-layer/bedrock-rag/rtl_parser_src/wire_declaration_parser.py` — 신규)
+    - `extract_wire_declarations(rtl_content, module_name, file_path, pipeline_id, known_structs)` 메인 함수
+    - 3가지 wire 선언 패턴 정규식 (Pattern A/B/C)
+    - `_parse_dimensions(dim_str)`: `[SizeX][SizeY-1][2]` → `['SizeX', 'SizeY-1', '2']`
+    - `_evaluate_dimensions(dims, params)`: bitwidth_evaluator.py SafeIntEvaluator 재사용하여 숫자 평가
+    - `_infer_purpose(signal_name)`: wire 이름에서 연결 목적 유추 (PURPOSE_HEURISTICS 딕셔너리)
+    - struct 타입 wire claim_text: `"Wire '{signal_name}' of type '{struct_type}' with dimensions [{dims}] ({evaluated} array) for {purpose}"`
+    - 비-struct wire claim_text: `"Wire '{signal_name}' with dimensions [{dims}] ({evaluated} array) connects {purpose}"`
+    - known_structs에 존재하는 struct 타입 참조 시 claim에 참조 정보 포함
+    - `parser_source` 필드를 `"wire_declaration_parser"` 로 설정
+    - `PARSER_WIRE_DECLARATION_ENABLED` 환경 변수 feature flag (기본값 `true`)
+    - _Requirements: 29.1, 29.2, 29.3, 29.4, 29.5, 29.6, 29.7, 29.8, 29.9, 29.11_
+
+  - [ ] 26.2 Handler 통합 배선 (`environments/app-layer/bedrock-rag/rtl_parser_src/handler.py` 수정)
+    - `from wire_declaration_parser import extract_wire_declarations` import 추가
+    - `PARSER_EP_TABLE_ENABLED` feature flag 변수 추가
+    - `PARSER_WIRE_DECLARATION_ENABLED` feature flag 변수 추가
+    - `_process_rtl_file()` 함수 내에서 wire_declaration_parser 호출 (기존 파서 호출 후)
+    - known_structs를 package_extractor 결과에서 전달
+    - _Requirements: 29.6, 29.7_
+
+  - [ ] 26.3 OpenSearch 인덱스 필드 확장 (`scripts/create-opensearch-index.py` 수정)
+    - `wire_type`(keyword) 필드 매핑 추가
+    - `array_dimensions`(keyword) 필드 매핑 추가
+    - `struct_type_ref`(keyword) 필드 매핑 추가
+    - `inferred_purpose`(text) 필드 매핑 추가
+    - _Requirements: 29.3, 29.4_
+
+  - [ ] 26.4 Wire Declaration Parser 단위 테스트 작성 (`environments/app-layer/bedrock-rag/rtl_parser_src/test_wire_declaration_parser.py` — 신규)
+    - Pattern A 파싱: `wire trinity_clock_routing_t clock_routing_in[SizeX][SizeY];` → struct type + dims 추출
+    - Pattern B 파싱: `logic [31:0] some_signal[SizeX];` → bit_range + dims 추출
+    - Pattern C 파싱: `trinity_clock_routing_t clock_routing_out[SizeX][SizeY];` → implicit wire 추출
+    - 배열 차원 파싱: `[SizeX][SizeY-1][2]` → `['SizeX', 'SizeY-1', '2']`
+    - 차원 평가: SizeX=4, SizeY=5 → "4×5 array" (bitwidth_evaluator 연동)
+    - 목적 유추: `de_to_t6_coloumn` → "dispatch-to-tensix feedthrough"
+    - 목적 유추: `clock_routing_in` → "clock distribution"
+    - Feature flag off: PARSER_WIRE_DECLARATION_ENABLED=false → claim 0건
+    - struct 참조 연결: known_structs에 `trinity_clock_routing_t` 존재 시 참조 포함
+    - 신호명 비어있지 않음 + 차원/struct 정보 최소 1개 존재 검증
+    - 차원 라운드트립: _parse_dimensions → 재조합 → 원본 일치
+    - _Requirements: 29.1, 29.2, 29.3, 29.4, 29.5, 29.7, 29.8, 29.9, 29.10_
+
+
+- [ ] 27. Phase 8 Checkpoint — 전체 Phase 8 통합 테스트
+  - Ensure all tests pass, ask the user if questions arise.
+  - EP Index Table: `package_extractor.py` EP 계산 + tile_t 매핑 동작 확인
+  - Instance-Position Mapping: `generate_block_parser.py` dual-row + repeater 추출 동작 확인
+  - Wire Declaration Parser: `wire_declaration_parser.py` 3가지 패턴 + 차원 평가 동작 확인
+  - Handler 통합: feature flag 제어 + OpenSearch 인덱싱 동작 확인
+  - `cd environments/app-layer/bedrock-rag/rtl_parser_src && py -m pytest -v`
+
+
+- [ ] 28. Final Checkpoint - 전체 8 Phase 통합 테스트
+  - 전체 시스템 통합 동작 확인 (Phase 1~8)
+  - `cd environments/app-layer/bedrock-rag && terraform validate`
+  - Content Fidelity 목표: v9.1 74% → v9.2 80%+ 달성 여부 확인
+  - 5개 갭 해소 확인: EP Table (+3pp), NOC2AXI+repeater (+5pp), clock_routing+dispatch (+5pp)

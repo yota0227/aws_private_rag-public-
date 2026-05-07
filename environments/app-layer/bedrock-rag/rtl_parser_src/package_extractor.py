@@ -26,6 +26,7 @@ up to 3 levels deep; exceeding 3 levels triggers a truncation warning.
 import re
 import hashlib
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,11 @@ def extract_package_constants(rtl_content: str, file_path: str = "",
     claims.extend(_extract_parameters(content, pkg_name, file_path, pipeline_id))
     claims.extend(_extract_functions(rtl_content, pkg_name, file_path, pipeline_id))
     claims.extend(_extract_tasks(rtl_content, pkg_name, file_path, pipeline_id))
+
+    # Phase 8: EP Index Table 계산 (SizeX, SizeY, tile_t 기반)
+    if os.environ.get("PARSER_EP_TABLE_ENABLED", "true").lower() == "true":
+        ep_claims = _compute_ep_index_table(content, pkg_name, file_path, pipeline_id)
+        claims.extend(ep_claims)
 
     return claims
 
@@ -814,6 +820,90 @@ def _summarize_body(body):
             parts.append(f"{len(lines)} statement(s)")
 
     return "; ".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Phase 8: EP Index Table 계산 (Requirements 27.1~27.7)
+# ---------------------------------------------------------------------------
+
+# N1B0 variant: (X, Y) → tile_t member
+_N1B0_TILE_MAP = {
+    (0, 4): "NOC2AXI_NE_OPT",
+    (1, 4): "NOC2AXI_ROUTER_NE_OPT",
+    (2, 4): "NOC2AXI_ROUTER_NW_OPT",
+    (3, 4): "NOC2AXI_NW_OPT",
+    (0, 3): "DISPATCH_E",
+    (3, 3): "DISPATCH_W",
+    (1, 3): "ROUTER",
+    (2, 3): "ROUTER",
+}
+
+
+def _compute_ep_index_table(content, pkg_name, file_path, pipeline_id):
+    """Compute EP Index Table from SizeX, SizeY, tile_t enum.
+
+    EndpointIndex = x * SizeY + y
+    Generates one claim per EP + one summary claim.
+    """
+    claims = []
+
+    # Extract SizeX, SizeY from localparams
+    size_x_match = re.search(r"\blocalparam\b[^;]*\bSizeX\s*=\s*(\d+)", content)
+    size_y_match = re.search(r"\blocalparam\b[^;]*\bSizeY\s*=\s*(\d+)", content)
+
+    if not size_x_match or not size_y_match:
+        logger.warning("EP Table: SizeX or SizeY not found, skipping EP table generation")
+        return claims
+
+    size_x = int(size_x_match.group(1))
+    size_y = int(size_y_match.group(1))
+
+    if size_x <= 0 or size_y <= 0:
+        logger.warning("EP Table: invalid SizeX=%d or SizeY=%d", size_x, size_y)
+        return claims
+
+    # Generate per-EP claims
+    ep_entries = []
+    for x in range(size_x):
+        for y in range(size_y):
+            ep = x * size_y + y
+            tile_type = _get_tile_type(x, y)
+            claim_text = (
+                f"Endpoint EP={ep} at position (X={x}, Y={y}) "
+                f"is tile type {tile_type}"
+            )
+            claims.append(_make_claim(
+                claim_text, "structural", pkg_name,
+                "PackageConfig", file_path, pipeline_id,
+                parser_source="ep_index_table",
+            ))
+            ep_entries.append(f"EP{ep}=({x},{y}) {tile_type}")
+
+    # Generate summary claim
+    total = size_x * size_y
+    summary_text = (
+        f"EP Index Table: {size_x}\u00d7{size_y}={total} endpoints. "
+        + ", ".join(ep_entries[:10])
+    )
+    if total > 10:
+        summary_text += f", ... ({total - 10} more)"
+    claims.append(_make_claim(
+        summary_text, "structural", pkg_name,
+        "PackageConfig", file_path, pipeline_id,
+        parser_source="ep_index_table",
+    ))
+
+    logger.info("EP Table: generated %d claims for %dx%d grid", len(claims), size_x, size_y)
+    return claims
+
+
+def _get_tile_type(x, y):
+    """Determine tile type for position (x, y) based on N1B0 layout."""
+    if (x, y) in _N1B0_TILE_MAP:
+        return _N1B0_TILE_MAP[(x, y)]
+    if y <= 2:
+        return "TENSIX"
+    return "UNKNOWN"
 
 
 def _make_claim(claim_text, claim_type, module_name, topic,

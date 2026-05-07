@@ -1,4 +1,4 @@
-# 요구사항 문서: Enhanced RAG Optimization (v0.4)
+# 요구사항 문서: Enhanced RAG Optimization (v0.5)
 
 ## 소개
 
@@ -19,6 +19,15 @@ v0.2 변경 사항 (아키텍트 리뷰 반영):
 - IAM Explicit Deny로 Source of Truth 버킷 보호
 - Object Lock 범위 명확화, RTL Parser Lambda 명칭 수정, Claim_DB 용어집 수정
 - Claim-level variant 지원 추가
+
+v0.5 변경 사항 (v9.2 Phase 8 — 5 Remaining Gaps):
+- v9.1 리뷰에서 식별된 5개 잔여 갭 해소 요구사항 추가 (요구사항 27~29)
+- Gap 1: EP Index Table 20행 계산 — Package Parser 확장 (요구사항 27)
+- Gap 2-3: NOC2AXI_ROUTER dual-row + NoC repeater placement — Generate Block Parser 인스턴스-위치 매핑 확장 (요구사항 28)
+- Gap 4-5: clock_routing 2D array + dispatch feedthrough wire 선언 — Wire Declaration Parser 신규 (요구사항 29)
+- 용어집에 EP_Index_Table, Wire_Declaration_Parser, Instance_Position_Mapping 추가
+- 핵심 변경 영역 15~17 추가
+- 품질 기준선: v9.1 Content Fidelity 74% → v9.2 목표 80%+
 
 v0.4 변경 사항 (v9 RTL Parser Pipeline Enhancement):
 - v9 RTL 파서 파이프라인 개선 요구사항 추가 (요구사항 17~26, Spec RAG 제외 순수 RTL 측 개선)
@@ -55,8 +64,11 @@ v0.3 변경 사항 (Phase 1~5 테스트 결과 반영):
 12. v9 Consumption Side 검색 개선: 대형 모듈 청킹, 질의 유형별 동적 boost (v0.4 신규)
 13. v9 Generation Side: Hybrid Grounding `[GROUNDED]`/`[INFERRED]` 태그 (v0.4 신규)
 14. v9 Quality Infrastructure: 파서별 기여도 측정 프레임워크 (v0.4 신규)
+15. v9.2 EP Index Table 계산: Package Parser 확장 (SizeX×SizeY EP 테이블 + tile_t 매핑) (v0.5 신규)
+16. v9.2 Instance-Position Mapping: Generate Block Parser 확장 (NOC2AXI dual-row + NoC repeater 위치) (v0.5 신규)
+17. v9.2 Wire Declaration Parser: 신규 파서 (clock_routing 2D array + dispatch feedthrough wire 선언) (v0.5 신규)
 
-단계적 도입: Phase 1(문서 ingestion 분리 + RTL 파이프라인) → Phase 2(Claim DB 구축) → Phase 3(MCP Tool 오픈) → Phase 4(문서 생성 + Human Review) → Phase 5(conflict detector + cross-check + KPI 모니터링) → Phase 6(Neptune Graph DB + 관계 추출 파이프라인 + 3저장소 통합 질의) → Phase 7(v9 RTL Parser Pipeline Enhancement: Supply 파서 확장 + Consumption 검색 개선 + Hybrid Grounding + 파서 기여도 측정)
+단계적 도입: Phase 1(문서 ingestion 분리 + RTL 파이프라인) → Phase 2(Claim DB 구축) → Phase 3(MCP Tool 오픈) → Phase 4(문서 생성 + Human Review) → Phase 5(conflict detector + cross-check + KPI 모니터링) → Phase 6(Neptune Graph DB + 관계 추출 파이프라인 + 3저장소 통합 질의) → Phase 7(v9 RTL Parser Pipeline Enhancement: Supply 파서 확장 + Consumption 검색 개선 + Hybrid Grounding + 파서 기여도 측정) → Phase 8(v9.2 RTL Wiring & Topology Parser: EP Index Table + Instance-Position Mapping + Wire Declaration Parser)
 
 보류 항목: Aurora PostgreSQL(DynamoDB 대체), Step Functions(Lambda 내부 오케스트레이션), ECS/Fargate MCP 서버(온프렘 Node.js 유지)
 
@@ -91,6 +103,9 @@ v0.3 변경 사항 (Phase 1~5 테스트 결과 반영):
 - **Content_Fidelity**: 정답지(엔지니어 수동 작성 HDD) 대비 자동 생성물의 섹션별 가중 일치도. 14개 HDD 섹션을 기능별 중요도로 가중 평균한 메인 품질 지표. v8 기준 68%
 - **Sub_Record**: 대형 모듈(포트 50개 이상)을 port/instance/logic 등 기능 단위로 분할한 OpenSearch 레코드. 1 모듈 = 1 레코드 한계를 극복하여 검색 정밀도를 향상시킨다
 - **Query_Type_Boost**: 사용자 질의의 유형(포트 질의, 계층 질의, 설정 질의 등)을 분류하고, 유형에 따라 `analysis_type`별 boost 가중치를 동적으로 조정하는 검색 전략
+- **EP_Index_Table**: `EndpointIndex = x * SizeY + y` 공식으로 계산된 SizeX×SizeY 크기의 엔드포인트 인덱스 테이블. 각 행은 (X, Y) 좌표와 tile_t 타입을 매핑한다. trinity_pkg.sv의 SizeX=4, SizeY=5 기준 20행
+- **Wire_Declaration_Parser**: RTL 파일에서 wire/logic/reg 선언문의 struct 타입과 배열 차원을 추출하는 신규 파서 컴포넌트. clock_routing 2D array, dispatch feedthrough wire 등 구조적 배선 정보를 claim으로 변환한다
+- **Instance_Position_Mapping**: Generate 블록 내부의 모듈 인스턴스화 문에서 인스턴스의 위치(X,Y)와 EP ID를 추출하여 claim으로 변환하는 기능. NOC2AXI_ROUTER dual-row 구조, NoC repeater 배치 등을 포함한다
 
 ## 요구사항
 
@@ -484,3 +499,64 @@ v0.3 변경 사항 (Phase 1~5 테스트 결과 반영):
 6. THE RTL_Parser_Lambda SHALL 각 claim 레코드에 `parser_source`(생성 파서명) 필드를 추가하여, 검색 결과에서 어떤 파서가 해당 claim을 생성했는지 추적 가능하도록 한다.
 7. THE RTL_OpenSearch_Index SHALL `parser_source`(keyword) 필드 매핑을 추가한다.
 8. THE Lambda_Handler SHALL CloudWatch 커스텀 네임스페이스 `BOS-AI/RTLParser`에 다음 메트릭을 발행한다: `ParserClaimCount`(파서별 claim 생성 수, dimension: parser_name), `ParserExecutionTime`(파서별 실행 시간, dimension: parser_name), `ParserHitRatio`(파서별 검색 활용률, dimension: parser_name).
+
+
+---
+
+## v9.2 RTL Wiring & Topology Parser (Phase 8)
+
+> **품질 기준선:** v9.1 Content Fidelity 74% → v9.2 목표 80%+ (5개 잔여 갭 해소)
+>
+> **갭 분석 (kiro_review_v9.1.md 기반):**
+> - Gap 1: EP Index Table 20행 부재 → +3pp
+> - Gap 2-3: NOC2AXI_ROUTER dual-row + NoC repeater placement 부재 → +5pp
+> - Gap 4-5: clock_routing 2D array + dispatch feedthrough wire 선언 부재 → +5pp
+>
+> **참조 문서:** `test_rtl/rag_result/review/kiro_review_v9.1.md`
+
+### 요구사항 27: EP Index Table 계산 및 Package Helper Function 확장 (Supply Side — Gap 1)
+
+**사용자 스토리:** 반도체 설계 엔지니어로서, `trinity_pkg.sv`에 정의된 SizeX=4, SizeY=5, tile_t enum을 기반으로 계산된 EP(Endpoint) Index Table 20행이 KB에 포함되어, "EP 9는 어떤 위치의 어떤 타일인가?"와 같은 질의에 정확한 답변을 받고 싶다. 또한 `getTensixIndex`, `getNoc2AxiIndex`, `getApbIndex`, `getDmIndex` 등 헬퍼 함수의 시그니처와 로직이 KB에 포함되기를 원한다.
+
+#### 인수 조건
+
+1. THE Package_Function_Extractor SHALL `trinity_pkg.sv`에서 추출된 `SizeX`, `SizeY` localparam 값과 `tile_t` enum 멤버를 사용하여 EP Index Table을 계산한다. 계산 공식: `EndpointIndex = x * SizeY + y` (x: 0..SizeX-1, y: 0..SizeY-1).
+2. THE Package_Function_Extractor SHALL 계산된 EP Index Table의 각 행에 대해 claim 레코드를 생성한다. claim_text 형식: `"Endpoint EP={ep} at position (X={x}, Y={y}) is tile type {tile_t_member}"`.
+3. THE Package_Function_Extractor SHALL EP Index Table 전체를 하나의 요약 claim으로도 생성한다. claim_text 형식: `"EP Index Table: {SizeX}×{SizeY}={total} endpoints. EP0=(0,0) TENSIX, EP1=(0,1) TENSIX, ..., EP19=(3,4) {tile_type}"`.
+4. WHEN `tile_t` enum에 위치별 타일 타입 매핑이 존재하면, THE Package_Function_Extractor SHALL 각 EP의 타일 타입을 정확히 매핑한다. 매핑이 불가능한 경우 `"UNKNOWN"` 타입으로 기록하고 WARNING 로그를 출력한다.
+5. THE Package_Function_Extractor SHALL `getTensixIndex`, `getNoc2AxiIndex`, `getApbIndex`, `getDmIndex` 등 인덱스 계산 헬퍼 함수를 기존 함수 추출 로직으로 검색하되, 검색 범위를 패키지 파일 전체로 확장하여 누락 없이 추출한다.
+6. THE Package_Function_Extractor SHALL EP Table 생성 기능을 `PARSER_EP_TABLE_ENABLED` 환경 변수(기본값 `true`)로 제어한다.
+7. FOR ALL 유효한 SizeX, SizeY 조합에 대해, 생성된 EP claim 수는 정확히 `SizeX * SizeY`개여야 하며, 각 EP의 인덱스는 0부터 `SizeX * SizeY - 1`까지 연속이어야 한다 (EP Table 완전성 속성).
+
+### 요구사항 28: Generate Block Instance-Position Mapping 확장 (Supply Side — Gap 2-3)
+
+**사용자 스토리:** 반도체 설계 엔지니어로서, `trinity.sv`의 generate 블록에서 인스턴스화되는 모듈의 위치(X,Y)와 EP ID가 KB에 포함되어, "NOC2AXI_ROUTER는 어떤 위치에 있고 어떤 EP를 사용하는가?", "NoC repeater는 어디에 배치되는가?"와 같은 질의에 정확한 답변을 받고 싶다.
+
+#### 인수 조건
+
+1. THE Generate_Block_Parser SHALL generate 블록 내부의 모듈 인스턴스화 문(`module_name instance_name(...)`)을 추출하고, 해당 인스턴스의 위치(X,Y)를 genvar 변수 또는 상수에서 유추한다.
+2. THE Generate_Block_Parser SHALL generate 블록의 라벨(예: `gen_noc2axi_router_ne_opt`)과 인스턴스화된 모듈명(예: `trinity_noc2axi_router_ne_opt`)을 매핑하여 claim을 생성한다. claim_text 형식: `"Generate block '{label}' at (X={x}, Y={y_range}) instantiates '{module_name}' with EP={ep_id} ({tile_type})"`.
+3. WHEN generate 블록이 dual-row 구조(2개 Y 좌표에 걸침)를 가지면, THE Generate_Block_Parser SHALL Y 범위를 `Y={y1}+{y2}` 형식으로 기록하고, 각 Y에 대한 EP ID를 별도로 명시한다.
+4. THE Generate_Block_Parser SHALL NoC repeater 인스턴스(`tt_noc_repeaters` 등)의 파라미터(NUM 등)를 추출하고, 배치 위치(inter-column, X 좌표 간)를 claim에 포함한다. claim_text 형식: `"NoC repeater '{instance_name}' with NUM={num} stages placed at Y={y} between X={x1}↔X={x2}"`.
+5. THE Generate_Block_Parser SHALL 인스턴스의 포트 연결에서 EP ID를 추출한다. 포트 연결 패턴: `.ep_id({constant})` 또는 genvar 기반 계산식.
+6. THE Generate_Block_Parser SHALL Instance-Position Mapping 기능을 기존 `extract_generate_blocks` 함수 내에서 확장하며, 별도 함수 `_extract_instance_positions(block_content, genvar_ranges)` 로 모듈화한다.
+7. IF generate 블록 내 인스턴스의 위치를 genvar에서 유추할 수 없으면, THEN THE Generate_Block_Parser SHALL 위치를 `"UNKNOWN"` 으로 기록하고 WARNING 로그를 출력한다.
+8. FOR ALL generate 블록 내 모듈 인스턴스화에 대해, 인스턴스명과 모듈명이 claim에 포함되어야 하며, 빈 문자열이어서는 안 된다 (Instance Mapping 완전성 속성).
+
+### 요구사항 29: Wire Declaration Parser (Supply Side — Gap 4-5)
+
+**사용자 스토리:** 반도체 설계 엔지니어로서, `trinity.sv`에 선언된 wire/signal의 struct 타입과 배열 차원(예: `trinity_clock_routing_t clock_routing_in[SizeX][SizeY]`, `de_to_t6_coloumn[SizeX][SizeY-1][2]`)이 KB에 포함되어, "clock_routing 배열의 크기는?", "dispatch-tensix 간 feedthrough wire는 어떤 차원인가?"와 같은 질의에 정확한 답변을 받고 싶다.
+
+#### 인수 조건
+
+1. THE Wire_Declaration_Parser SHALL RTL 파일에서 wire/logic/reg 선언문을 정규식으로 추출하며, 각 선언에 대해 신호명, 타입(wire/logic/reg), struct 타입명(있는 경우), 배열 차원을 파싱한다.
+2. THE Wire_Declaration_Parser SHALL 배열 차원을 `[dim1][dim2]...[dimN]` 형식으로 추출하며, 각 차원의 표현식(예: `SizeX`, `SizeY-1`, `2`)을 문자열 그대로 보존한다. 파라미터 값이 해석 가능한 경우 평가된 숫자도 함께 기록한다.
+3. THE Wire_Declaration_Parser SHALL struct 타입이 지정된 wire에 대해 claim을 생성한다. claim_text 형식: `"Wire '{signal_name}' of type '{struct_type}' with dimensions [{dim1}][{dim2}]... ({evaluated_dims} array)"`.
+4. THE Wire_Declaration_Parser SHALL 배열 차원이 있는 비-struct wire에 대해서도 claim을 생성한다. claim_text 형식: `"Wire '{signal_name}' with dimensions [{dim1}][{dim2}]... connects {inferred_purpose}"`.
+5. WHEN wire 이름에서 연결 목적을 유추할 수 있으면(예: `de_to_t6` → dispatch-to-tensix, `clock_routing` → clock distribution), THE Wire_Declaration_Parser SHALL 유추된 목적을 claim의 `inferred_purpose` 필드에 포함한다.
+6. THE Wire_Declaration_Parser SHALL `handler.py`의 `_process_rtl_file` 함수에서 기본 모듈 파싱 후 호출되며, 생성된 claim을 OpenSearch에 인덱싱한다. `parser_source` 필드를 `"wire_declaration_parser"`로 설정한다.
+7. THE Wire_Declaration_Parser SHALL `PARSER_WIRE_DECLARATION_ENABLED` 환경 변수(기본값 `true`)로 제어한다.
+8. THE Wire_Declaration_Parser SHALL 다음 wire 선언 패턴을 지원한다: (a) `wire type_name signal_name[dim1][dim2]`, (b) `logic [N:0] signal_name[dim1]`, (c) `type_name signal_name[dim1][dim2]` (implicit wire).
+9. IF wire 선언의 struct 타입이 동일 패키지에서 이미 파싱된 struct와 일치하면, THEN THE Wire_Declaration_Parser SHALL claim에 struct 정의 참조를 포함한다.
+10. FOR ALL wire 선언에 대해, 신호명이 비어있지 않고 최소 1개의 차원 정보 또는 struct 타입 정보가 claim에 포함되어야 한다 (Wire Declaration 완전성 속성).
+11. THE Wire_Declaration_Parser SHALL 신규 파일 `environments/app-layer/bedrock-rag/rtl_parser_src/wire_declaration_parser.py`로 구현한다.
