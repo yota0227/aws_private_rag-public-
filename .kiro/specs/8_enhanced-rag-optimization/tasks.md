@@ -667,8 +667,8 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - _Requirements: 27.1, 27.2, 27.3, 27.4, 27.5, 27.6, 27.7_
 
 
-- [ ] 25. Phase 8: Generate Block Instance-Position Mapping 확장 (Gap 2-3)
-  - [ ] 25.1 Instance-Position Mapping 구현 (`environments/app-layer/bedrock-rag/rtl_parser_src/generate_block_parser.py` 수정)
+- [x] 25. Phase 8: Generate Block Instance-Position Mapping 확장 (Gap 2-3)
+  - [x] 25.1 Instance-Position Mapping 구현 (`environments/app-layer/bedrock-rag/rtl_parser_src/generate_block_parser.py` 수정)
     - `_extract_instance_positions(block_content, block_label, genvar_ranges, module_name, file_path, pipeline_id)` 함수 추가
     - `extract_generate_blocks()` 함수 내에서 각 generate 블록 파싱 후 호출
     - 인스턴스화 패턴 정규식: `r'(\w+)\s+(\w+)\s*\('` (module_type instance_name)
@@ -679,7 +679,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 위치 유추 불가 시 "UNKNOWN" 기록 + WARNING 로그
     - _Requirements: 28.1, 28.2, 28.3, 28.5, 28.6, 28.7_
 
-  - [ ] 25.2 NoC Repeater 추출 구현 (`generate_block_parser.py` 수정)
+  - [x] 25.2 NoC Repeater 추출 구현 (`generate_block_parser.py` 수정)
     - `_extract_noc_repeaters(block_content, block_label, genvar_ranges, module_name, file_path, pipeline_id)` 함수 추가
     - `tt_noc_repeaters` 등 repeater 인스턴스 인식
     - 파라미터 추출: `#(.NUM(4))` 패턴에서 NUM 값 추출
@@ -687,7 +687,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - claim_text 형식: `"NoC repeater '{instance_name}' with NUM={num} stages placed at Y={y} between X={x1}↔X={x2}"`
     - _Requirements: 28.4_
 
-  - [ ] 25.3 Instance-Position Mapping 단위 테스트 작성 (`environments/app-layer/bedrock-rag/rtl_parser_src/test_instance_position.py` — 신규)
+  - [x] 25.3 Instance-Position Mapping 단위 테스트 작성 (`environments/app-layer/bedrock-rag/rtl_parser_src/test_instance_position.py` — 신규)
     - NOC2AXI dual-row 검증: Y=4+3 형식, EP 2개 명시
     - NoC repeater NUM 파라미터 검증: NUM=4, NUM=6 추출
     - NoC repeater inter-column 위치 검증: X=1↔X=2
@@ -698,8 +698,8 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - _Requirements: 28.1, 28.2, 28.3, 28.4, 28.5, 28.7, 28.8_
 
 
-- [ ] 26. Phase 8: Wire Declaration Parser 구현 (Gap 4-5)
-  - [ ] 26.1 Wire Declaration Parser 구현 (`environments/app-layer/bedrock-rag/rtl_parser_src/wire_declaration_parser.py` — 신규)
+- [x] 26. Phase 8: Wire Declaration Parser 구현 (Gap 4-5)
+  - [x] 26.1 Wire Declaration Parser 구현 (`environments/app-layer/bedrock-rag/rtl_parser_src/wire_declaration_parser.py` — 신규)
     - `extract_wire_declarations(rtl_content, module_name, file_path, pipeline_id, known_structs)` 메인 함수
     - 3가지 wire 선언 패턴 정규식 (Pattern A/B/C)
     - `_parse_dimensions(dim_str)`: `[SizeX][SizeY-1][2]` → `['SizeX', 'SizeY-1', '2']`
@@ -712,7 +712,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - `PARSER_WIRE_DECLARATION_ENABLED` 환경 변수 feature flag (기본값 `true`)
     - _Requirements: 29.1, 29.2, 29.3, 29.4, 29.5, 29.6, 29.7, 29.8, 29.9, 29.11_
 
-  - [ ] 26.2 Handler 통합 배선 (`environments/app-layer/bedrock-rag/rtl_parser_src/handler.py` 수정)
+  - [x] 26.2 Handler 통합 배선 (`environments/app-layer/bedrock-rag/rtl_parser_src/handler.py` 수정)
     - `from wire_declaration_parser import extract_wire_declarations` import 추가
     - `PARSER_EP_TABLE_ENABLED` feature flag 변수 추가
     - `PARSER_WIRE_DECLARATION_ENABLED` feature flag 변수 추가
@@ -720,14 +720,14 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - known_structs를 package_extractor 결과에서 전달
     - _Requirements: 29.6, 29.7_
 
-  - [ ] 26.3 OpenSearch 인덱스 필드 확장 (`scripts/create-opensearch-index.py` 수정)
+  - [x] 26.3 OpenSearch 인덱스 필드 확장 (`scripts/create-opensearch-index.py` 수정)
     - `wire_type`(keyword) 필드 매핑 추가
     - `array_dimensions`(keyword) 필드 매핑 추가
     - `struct_type_ref`(keyword) 필드 매핑 추가
     - `inferred_purpose`(text) 필드 매핑 추가
     - _Requirements: 29.3, 29.4_
 
-  - [ ] 26.4 Wire Declaration Parser 단위 테스트 작성 (`environments/app-layer/bedrock-rag/rtl_parser_src/test_wire_declaration_parser.py` — 신규)
+  - [x] 26.4 Wire Declaration Parser 단위 테스트 작성 (`environments/app-layer/bedrock-rag/rtl_parser_src/test_wire_declaration_parser.py` — 신규)
     - Pattern A 파싱: `wire trinity_clock_routing_t clock_routing_in[SizeX][SizeY];` → struct type + dims 추출
     - Pattern B 파싱: `logic [31:0] some_signal[SizeX];` → bit_range + dims 추출
     - Pattern C 파싱: `trinity_clock_routing_t clock_routing_out[SizeX][SizeY];` → implicit wire 추출

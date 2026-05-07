@@ -24,6 +24,7 @@ from port_classifier import classify_ports
 from generate_block_parser import extract_generate_blocks
 from always_block_parser import extract_clock_domains
 from bitwidth_evaluator import evaluate_bitwidth
+from wire_declaration_parser import extract_wire_declarations
 
 # tiktoken은 Linux Lambda 환경에서만 정상 동작 (Windows 빌드 바이너리 비호환)
 try:
@@ -76,6 +77,8 @@ PARSER_PORT_CLASSIFIER_ENABLED = _is_parser_enabled("PARSER_PORT_CLASSIFIER_ENAB
 PARSER_GENERATE_BLOCK_ENABLED = _is_parser_enabled("PARSER_GENERATE_BLOCK_ENABLED")
 PARSER_ALWAYS_BLOCK_ENABLED = _is_parser_enabled("PARSER_ALWAYS_BLOCK_ENABLED")
 PARSER_FUNCTION_EXTRACTOR_ENABLED = _is_parser_enabled("PARSER_FUNCTION_EXTRACTOR_ENABLED")
+PARSER_EP_TABLE_ENABLED = _is_parser_enabled("PARSER_EP_TABLE_ENABLED")
+PARSER_WIRE_DECLARATION_ENABLED = _is_parser_enabled("PARSER_WIRE_DECLARATION_ENABLED")
 
 # AWS 클라이언트
 s3_client = boto3.client("s3")
@@ -647,6 +650,42 @@ def _process_rtl_file(bucket: str, key: str):
                 if isinstance(high_val, int) and isinstance(low_val, int):
                     resolved = port_entry[:bw_match.start()] + f"[{high_val}:{low_val}]" + port_entry[bw_match.end():]
                     port_list[i] = resolved
+
+    # v9.2 Phase 8: Wire Declaration Parser (Gap 4-5)
+    if PARSER_WIRE_DECLARATION_ENABLED:
+        wire_start = time.time()
+        # Pass known struct types from package extraction if available
+        wire_known_structs = None
+        if is_package_file(key):
+            # Package files may have struct definitions already extracted
+            wire_known_structs = None  # Will be populated from pkg_claims if available
+        wire_claims = extract_wire_declarations(
+            rtl_content, module_name=module_name,
+            file_path=key, pipeline_id=pipeline_info["pipeline_id"],
+            known_structs=wire_known_structs,
+        )
+        wire_elapsed_ms = int((time.time() - wire_start) * 1000)
+        for claim in wire_claims:
+            claim.setdefault("parser_source", "wire_declaration_parser")
+            claim_summary = claim.get("claim_text", "")
+            claim_truncated = truncate_to_tokens(claim_summary, MAX_TOKENS)
+            claim_embedding = _generate_embedding(claim_truncated)
+            if claim_embedding:
+                _index_to_opensearch(claim, claim_embedding)
+        if wire_claims:
+            logger.info(json.dumps({
+                "event": "parser_execution_result",
+                "parser_name": "wire_declaration_parser",
+                "claims_generated": len(wire_claims),
+                "execution_time_ms": wire_elapsed_ms,
+                "files_processed": 1,
+                "key": key,
+                "module_name": module_name,
+            }))
+            _publish_parser_metric("ParserClaimCount", len(wire_claims), "Count", "wire_declaration_parser", cw_client)
+            _publish_parser_metric("ParserExecutionTime", wire_elapsed_ms, "Milliseconds", "wire_declaration_parser", cw_client)
+    else:
+        logger.info(json.dumps({"event": "parser_disabled_skip", "parser_name": "wire_declaration_parser"}))
 
     # v9: 대형 모듈 청킹 — 포트 50개 이상 모듈을 Sub_Record로 분할
     if len(port_list) >= 50:

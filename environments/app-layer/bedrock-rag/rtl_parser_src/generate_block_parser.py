@@ -95,6 +95,24 @@ def extract_generate_blocks(rtl_content, module_name="", file_path="",
         )
         claims.extend(block_claims)
 
+        # Phase 8: Extract instance-position mappings (Gap 2-3)
+        # Build genvar_ranges from for-loop headers in this block
+        genvar_ranges = _build_genvar_ranges(block_text)
+        # Extract block label for context
+        block_label = _extract_block_label(block_text)
+
+        instance_claims = _extract_instance_positions(
+            block_text, block_label, genvar_ranges,
+            module_name, file_path, pipeline_id,
+        )
+        claims.extend(instance_claims)
+
+        repeater_claims = _extract_noc_repeaters(
+            block_text, block_label, genvar_ranges,
+            module_name, file_path, pipeline_id,
+        )
+        claims.extend(repeater_claims)
+
     logger.info(
         "Extracted %d generate block claims from module '%s' in %s",
         len(claims), module_name, file_path,
@@ -549,6 +567,225 @@ def _extract_generate_if_claims(block_text, module_name, file_path,
             f"Module '{module_name}' has generate block '{label}' "
             f"with conditional instantiation: when ({condition}), "
             f"{target} is created"
+        )
+
+        claims.append(_make_claim(
+            claim_text, "structural", module_name,
+            "GenerateTopology", file_path, pipeline_id,
+            parser_source="generate_block_parser",
+        ))
+
+    return claims
+
+
+# ---------------------------------------------------------------------------
+# Phase 8: Instance-Position Mapping helpers (Gap 2-3)
+# ---------------------------------------------------------------------------
+
+def _build_genvar_ranges(block_text):
+    """Build a dict of genvar_name → {'start': str, 'limit': str} from for-loop headers.
+
+    Used to infer (X, Y) positions from genvar variables.
+    """
+    ranges = {}
+    pattern = re.compile(
+        r"\bfor\s*\(\s*genvar\s+(\w+)\s*=\s*(\w+)\s*;\s*\w+\s*<\s*(\w+)\s*;"
+        r"\s*\w+\s*\+\+\s*\)",
+    )
+    for m in pattern.finditer(block_text):
+        ranges[m.group(1)] = {"start": m.group(2), "limit": m.group(3)}
+    return ranges
+
+
+def _extract_block_label(block_text):
+    """Extract the first begin : label from a generate block."""
+    m = re.search(r"\bbegin\s*:\s*(\w+)", block_text)
+    return m.group(1) if m else ""
+
+
+# Position heuristics from block label keywords
+_LABEL_POSITION_HEURISTICS = {
+    "ne_opt": {"x": "1"},
+    "nw_opt": {"x": "2"},
+    "se_opt": {"x": "1"},
+    "sw_opt": {"x": "2"},
+    "north": {"y": "0"},
+    "south": {"y": "1"},
+    "east": {"x": "0"},
+    "west": {"x": "1"},
+}
+
+
+def _infer_position_from_label(block_label):
+    """Infer X,Y position from block label heuristics.
+
+    Returns dict with 'x' and/or 'y' keys, or empty dict.
+    """
+    if not block_label:
+        return {}
+    label_lower = block_label.lower()
+    for keyword, pos in _LABEL_POSITION_HEURISTICS.items():
+        if keyword in label_lower:
+            return pos
+    return {}
+
+
+def _extract_instance_positions(block_content, block_label, genvar_ranges,
+                                module_name, file_path, pipeline_id):
+    """Extract module instantiation positions from generate block content.
+
+    Looks for patterns like: module_type instance_name(...)
+    Tries to infer (X,Y) position from genvar variables or constants.
+    Detects dual-row structures (2 Y coordinates).
+    Extracts EP ID from .ep_id(N) port connections.
+    """
+    claims = []
+
+    # Instance pattern: module_type instance_name (
+    # Exclude keywords that look like instances but aren't
+    _KEYWORDS = {"if", "for", "begin", "end", "assign", "always", "initial",
+                 "generate", "endgenerate", "module", "endmodule", "wire",
+                 "logic", "reg", "input", "output", "inout", "parameter",
+                 "localparam", "genvar", "else", "case", "endcase"}
+
+    instance_pattern = re.compile(r'(\w+)\s+(\w+)\s*\(')
+
+    # EP ID pattern
+    ep_pattern = re.compile(
+        r'\.(?:ep_id|endpoint_id|noc_endpoint_id)\s*\(\s*(\d+|[\w\*\+\-]+)\s*\)'
+    )
+
+    # Find all instances in the block
+    for m in instance_pattern.finditer(block_content):
+        module_type = m.group(1)
+        instance_name = m.group(2)
+
+        # Skip keywords and common non-instance patterns
+        if module_type in _KEYWORDS or instance_name in _KEYWORDS:
+            continue
+        if not module_type or not instance_name:
+            continue
+
+        # Extract EP ID from the port connections following this instance
+        # Look ahead in the content from this match position
+        rest = block_content[m.start():]
+        ep_match = ep_pattern.search(rest[:500])  # limit search window
+        ep_id = ep_match.group(1) if ep_match else "UNKNOWN"
+
+        # Infer position from genvar ranges
+        x_pos = "UNKNOWN"
+        y_pos = "UNKNOWN"
+
+        # Check genvar ranges for x/y inference
+        for var_name, var_range in genvar_ranges.items():
+            var_lower = var_name.lower()
+            if 'x' in var_lower or var_lower in ('col', 'c'):
+                x_pos = f"0..{var_range['limit']}"
+            elif 'y' in var_lower or var_lower in ('row', 'r'):
+                y_pos = f"0..{var_range['limit']}"
+
+        # Try label-based heuristics
+        label_pos = _infer_position_from_label(block_label)
+        if label_pos.get("x") and x_pos == "UNKNOWN":
+            x_pos = label_pos["x"]
+        if label_pos.get("y") and y_pos == "UNKNOWN":
+            y_pos = label_pos["y"]
+
+        # Dual-row detection: if block_label contains "router" and
+        # genvar covers 2+ Y values, format as Y=y1+y2
+        y_range = y_pos
+        if "router" in (block_label or "").lower() and y_pos != "UNKNOWN":
+            # Check if there are multiple Y coordinates referenced
+            y_refs = re.findall(r'\[\s*(\d+)\s*\]', block_content)
+            unique_y = sorted(set(y_refs))
+            if len(unique_y) >= 2:
+                y_range = "+".join(unique_y[:2])
+
+        # Determine tile_type from context
+        tile_type = "tile"
+        if "noc2axi" in (block_label or "").lower() or "noc2axi" in module_type.lower():
+            tile_type = "NOC2AXI"
+        elif "router" in (block_label or "").lower():
+            tile_type = "router"
+
+        if x_pos == "UNKNOWN" and y_pos == "UNKNOWN":
+            logger.warning(
+                "Cannot infer position for instance '%s' in block '%s' of module '%s'",
+                instance_name, block_label, module_name,
+            )
+
+        claim_text = (
+            f"Generate block '{block_label}' at (X={x_pos}, Y={y_range}) "
+            f"instantiates '{module_type}' with EP={ep_id} ({tile_type})"
+        )
+
+        claims.append(_make_claim(
+            claim_text, "structural", module_name,
+            "GenerateTopology", file_path, pipeline_id,
+            parser_source="generate_block_parser",
+        ))
+
+    return claims
+
+
+def _extract_noc_repeaters(block_content, block_label, genvar_ranges,
+                           module_name, file_path, pipeline_id):
+    """Extract NoC repeater instances with NUM parameter and placement info.
+
+    Looks for tt_noc_repeaters instances with #(.NUM(N)) parameter.
+    Infers inter-column placement from context.
+    """
+    claims = []
+
+    # Repeater pattern: tt_noc_repeaters (or similar) with #(.NUM(N))
+    repeater_pattern = re.compile(
+        r'(\w*noc_repeater\w*)\s*'
+        r'#\s*\(\s*\.?NUM\s*\(\s*(\d+)\s*\)\s*\)\s*'
+        r'(\w+)\s*\(',
+        re.IGNORECASE,
+    )
+
+    for m in repeater_pattern.finditer(block_content):
+        module_type = m.group(1)
+        num_stages = m.group(2)
+        instance_name = m.group(3)
+
+        if not instance_name or not module_type:
+            continue
+
+        # Infer Y position from genvar ranges
+        y_pos = "UNKNOWN"
+        for var_name, var_range in genvar_ranges.items():
+            var_lower = var_name.lower()
+            if 'y' in var_lower or var_lower in ('row', 'r'):
+                y_pos = f"0..{var_range['limit']}"
+                break
+
+        # Infer inter-column X placement
+        # Default: between X=1 and X=2 (most common for NoC repeaters)
+        x1 = "1"
+        x2 = "2"
+
+        # Try to infer from genvar ranges
+        for var_name, var_range in genvar_ranges.items():
+            var_lower = var_name.lower()
+            if 'x' in var_lower or var_lower in ('col', 'c'):
+                x1 = var_range['start']
+                x2 = var_range['limit']
+                break
+
+        # Try to infer from block label
+        label_lower = (block_label or "").lower()
+        if "col_0" in label_lower or "east" in label_lower:
+            x1 = "0"
+            x2 = "1"
+        elif "col_1" in label_lower or "west" in label_lower:
+            x1 = "1"
+            x2 = "2"
+
+        claim_text = (
+            f"NoC repeater '{instance_name}' with NUM={num_stages} stages "
+            f"placed at Y={y_pos} between X={x1}\u2194X={x2}"
         )
 
         claims.append(_make_claim(
