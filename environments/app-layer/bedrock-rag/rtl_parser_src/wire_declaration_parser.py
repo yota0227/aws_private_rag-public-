@@ -93,10 +93,11 @@ def extract_wire_declarations(rtl_content, module_name="", file_path="",
     # Pattern A: wire/logic struct_type signal_name[dims];
     # e.g.: wire trinity_clock_routing_t clock_routing_in[SizeX][SizeY];
     #        logic some_struct_t my_signal[4][8];
+    #        wire trinity_pkg::trinity_clock_routing_t clock_routing_in[...];
     pattern_a = re.compile(
         r'\b(wire|logic|reg)\s+'
-        r'(\w+_t|\w+)\s+'  # struct type (prefer _t suffix but accept any)
-        r'(\w+)\s*'         # signal name
+        r'((?:\w+::)?\w+)\s+'  # struct type with optional pkg:: prefix
+        r'(\w+)\s*'             # signal name
         r'((?:\[[^\]]+\])+)\s*;',  # one or more dimensions
     )
 
@@ -109,12 +110,14 @@ def extract_wire_declarations(rtl_content, module_name="", file_path="",
         r'((?:\[[^\]]+\])+)\s*;',  # one or more dimensions
     )
 
-    # Pattern C: type_name_t signal_name[dims]; (no wire/logic keyword)
-    # e.g.: trinity_clock_routing_t clock_routing_out[SizeX][SizeY];
+    # Pattern C: pkg::type_name signal_name[dims]; (no wire/logic keyword)
+    # e.g.: trinity_pkg::trinity_clock_routing_t clock_routing_out[SizeX][SizeY];
+    #        tt_chip_global_pkg::de_to_t6_t [...] de_to_t6_coloumn[...];
     pattern_c = re.compile(
-        r'^[ \t]*(\w+_t)\s+'  # type ending with _t at start of line
-        r'(\w+)\s*'           # signal name
-        r'((?:\[[^\]]+\])+)\s*;',  # one or more dimensions
+        r'^[ \t]*((?:\w+::)?\w+_t)\s+'  # type with optional pkg:: prefix, ending with _t
+        r'(?:\[[^\]]+\]\s*)?'            # optional packed dimension (e.g., [NumDispatchCorners-1:0])
+        r'(\w+)\s*'                      # signal name
+        r'((?:\[[^\]]+\])+)\s*;',        # one or more array dimensions
         re.MULTILINE,
     )
 
@@ -136,8 +139,8 @@ def extract_wire_declarations(rtl_content, module_name="", file_path="",
         purpose = _infer_purpose(signal_name)
         evaluated = "\u00d7".join(dims) if dims else "unknown"
 
-        # Check if it's a real struct type (ends with _t or in known_structs)
-        is_struct = struct_type.endswith('_t') or struct_type in known_structs
+        # Check if it's a real struct type (ends with _t or has :: or in known_structs)
+        is_struct = struct_type.endswith('_t') or '::' in struct_type or struct_type in known_structs
 
         if is_struct:
             claim_text = (
