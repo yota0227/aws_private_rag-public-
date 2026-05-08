@@ -737,12 +737,13 @@ def _extract_noc_repeaters(block_content, block_label, genvar_ranges,
     """
     claims = []
 
-    # Repeater pattern: tt_noc_repeaters (or similar) with #(.NUM(N))
+    # Repeater pattern: tt_noc_repeaters (or similar) with #(.NUM_REPEATERS(N)) or #(.NUM(N))
+    # Actual RTL: tt_noc_repeaters #(\n  .NUM_REPEATERS(4)\n) instance_name (
     repeater_pattern = re.compile(
         r'(\w*noc_repeater\w*)\s*'
-        r'#\s*\(\s*\.?NUM\s*\(\s*(\d+)\s*\)\s*\)\s*'
+        r'#\s*\([^)]*\.(?:NUM_REPEATERS|NUM)\s*\(\s*(\d+)\s*\)[^)]*\)\s*'
         r'(\w+)\s*\(',
-        re.IGNORECASE,
+        re.IGNORECASE | re.DOTALL,
     )
 
     for m in repeater_pattern.finditer(block_content):

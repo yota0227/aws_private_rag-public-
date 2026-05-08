@@ -576,6 +576,13 @@ def _process_rtl_file(bucket: str, key: str):
             rtl_content, module_name=module_name,
             file_path=key, pipeline_id=pipeline_info["pipeline_id"],
         )
+        # Also extract module-level repeaters (outside generate blocks)
+        from generate_block_parser import _extract_noc_repeaters
+        module_level_repeater_claims = _extract_noc_repeaters(
+            rtl_content, "", {},
+            module_name, key, pipeline_info["pipeline_id"],
+        )
+        gen_claims.extend(module_level_repeater_claims)
         gen_elapsed_ms = int((time.time() - gen_start) * 1000)
         for claim in gen_claims:
             claim.setdefault("parser_source", "generate_block_parser")
