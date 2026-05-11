@@ -19,6 +19,18 @@ lambda/**/*.zip
 lambda/**/__pycache__/
 lambda/**/*.pyc
 
+# Python cache (all locations)
+**/__pycache__/
+*.pyc
+*.pyo
+
+# Deployment packages
+**/*-deployment-package.zip
+**/package.zip
+
+# Temp files
+*.tmp.*
+
 # Go
 tests/go.sum
 vendor/

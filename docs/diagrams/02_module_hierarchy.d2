@@ -1,0 +1,73 @@
+# Trinity N1B0 Module Hierarchy
+# Render: d2 02_module_hierarchy.d2 02_module_hierarchy.svg
+
+direction: down
+
+trinity: {
+  label: "trinity (top)\n106 ports, N1B0 variant"
+  style.fill: "#E8E8E8"
+  style.bold: true
+
+  compute: {
+    label: "Compute [x12]"
+    style.fill: "#87CEEB"
+
+    tt_tensix_with_l1: {
+      label: "tt_tensix_with_l1"
+      fpu: "FPU (tt_fp_max_array, tt_dual_align)"
+      sfpu: "SFPU (tt_sfpu_lregs, hazard detect)"
+      tdma: "TDMA (xy_addr, thread_ctx, rts_rtr)"
+      l1: "L1 Cache (wrap2, pipe, superarb)"
+    }
+  }
+
+  dispatch: {
+    label: "Dispatch [x2]"
+    style.fill: "#90EE90"
+    east: "tt_dispatch_top_east (EP=3)"
+    west: "tt_dispatch_top_west (EP=18)"
+  }
+
+  noc: {
+    label: "NoC Fabric"
+    style.fill: "#FFE4B5"
+    repeaters: "tt_noc_repeaters_cardinal"
+    arbiter: "noc_arbiter_tree [xN]"
+    secded: "tt_noc_secded_chk_corr_116_10"
+    sync: "tt_noc_sync3_pulse (CDC)"
+    async_fifo: "tt_upf_async_fifo"
+  }
+
+  niu: {
+    label: "NIU [x4]"
+    style.fill: "#FFD700"
+    timeout: "tt_niu_mst_timeout"
+    local_reg: "tt_noc2axi_local_reg"
+    cfg: "tt_noc2axi_cfg"
+  }
+
+  edc: {
+    label: "EDC Ring"
+    style.fill: "#FFB6C1"
+    biu: "tt_edc1_biu_soc_apb4_wrap"
+    sec_reg: "tt_edc1_noc_sec_block_reg"
+    repeater: "tt_edc1_serial_bus_repeater"
+    connector: "tt_edc1_intf_connector [x2]"
+  }
+
+  clock: {
+    label: "Clock Infrastructure"
+    style.fill: "#DDA0DD"
+    clkbuf: "tt_clkbuf"
+    clkgater: "tt_clkgater / tt_clk_gater"
+    smn_clkdiv: "tt_smn_clkdiv"
+  }
+
+  overlay: {
+    label: "Overlay (RISC-V)"
+    style.fill: "#98FB98"
+    fds: "FDS registers (tensix/dispatch)"
+    cluster: "tt_cluster_ctrl_t6_l1_csr_reg"
+    wrapper: "tt_neo_overlay_wrapper"
+  }
+}

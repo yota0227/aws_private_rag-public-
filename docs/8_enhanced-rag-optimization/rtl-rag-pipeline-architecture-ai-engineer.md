@@ -3,6 +3,7 @@
 | 버전 | 날짜 | 변경 내용 |
 |------|------|----------|
 | v1.0 | 2026-05-04 | 초판. 원본(rtl-rag-pipeline-architecture.md)에서 AI Engineer 관점으로 분리 |
+| v2.0 | 2026-05-08 | v9.2 기준 업데이트. 8종 파서 반영, Layer 4~5 부분 커버, 동적 Boost/청킹/Hybrid Grounding 구현 완료 |
 
 **대상:** AI/RAG Engineer (파이프라인 구현·개선 담당)
 **목적:** RTL 코드를 어떻게 바라보고, 어떤 전략으로 전처리하여 KB를 구축하는지 이해한다. 이를 바탕으로 파서와 검색 파이프라인을 개선한다.
@@ -38,27 +39,27 @@ HDD 한 문서에는 여러 층위의 정보가 필요하다. 각 층위마다 *
 
 ```
 ┌─────────────────────────────────────────────────┐
-│  Layer 1: 구조 (Structure)                       │  ← RTL에서 직접 추출 가능
+│  Layer 1: 구조 (Structure)                       │  ← ✅ RTL에서 직접 추출
 │  모듈명, 포트, 파라미터, 인스턴스 계층            │
 ├─────────────────────────────────────────────────┤
-│  Layer 2: 타입/설정 (Type/Config)                │  ← 패키지 파일에서 추출 가능
-│  localparam, enum, struct, 그리드 크기            │
+│  Layer 2: 타입/설정 (Type/Config)                │  ← ✅ 패키지 파일에서 추출
+│  localparam, enum, struct, function, EP Table    │
 ├─────────────────────────────────────────────────┤
-│  Layer 3: 인터페이스 분류 (Interface)             │  ← 패턴 매칭으로 분류 가능
+│  Layer 3: 인터페이스 분류 (Interface)             │  ← ✅ 패턴 매칭으로 분류
 │  포트의 기능별 그룹핑 (Power, AXI, Clock 등)      │
 ├─────────────────────────────────────────────────┤
-│  Layer 4: 동작 (Behavior)                        │  ← always/assign 분석 필요
-│  FSM, 데이터패스, 클럭 도메인 크로싱              │     (현재 미지원)
+│  Layer 4: 동작 (Behavior)                        │  ← ⚠️ 부분 지원 (v9)
+│  클럭 도메인 추출, CDC 경고                       │     FSM/데이터패스는 미지원
 ├─────────────────────────────────────────────────┤
-│  Layer 5: 연결 (Connectivity)                    │  ← generate 블록 분석 필요
-│  배선 토폴로지, ring/mesh, feedthrough            │     (현재 미지원)
+│  Layer 5: 연결 (Connectivity)                    │  ← ⚠️ 부분 지원 (v9~v9.2)
+│  generate 토폴로지, wire 배열, 인스턴스 위치      │     assign 구동 관계는 미지원
 ├─────────────────────────────────────────────────┤
-│  Layer 6: 설계 의도 (Intent)                     │  ← RTL에 없음. Spec 문서 필요
+│  Layer 6: 설계 의도 (Intent)                     │  ← ❌ RTL에 없음. Spec 문서 필요
 │  "왜 이렇게 설계했는가", 비교 테이블, 제약 조건    │
 └─────────────────────────────────────────────────┘
 ```
 
-**현재 파이프라인은 Layer 1~3을 커버한다.** Layer 4~5가 다음 개선 대상이고, Layer 6은 Spec RAG가 필요하다.
+**v9.2 파이프라인은 Layer 1~3을 완전 커버하고, Layer 4~5를 부분 커버한다.** Layer 6은 Spec RAG가 필요하다.
 
 ---
 
@@ -85,12 +86,31 @@ RTL 소스 (.sv / .v / .svh)
 │  Stage 2: 의미 강화 (Semantic Enrichment)             │
 │                                                       │
 │  2a. Package Parser (*_pkg.sv 전용)                   │
-│      → localparam, enum, struct 추출                  │
-│      → claim 레코드 생성 (~30건)                      │
+│      → localparam, enum, struct, function/task 추출   │
+│      → EP Index Table 계산 (v9.2)                     │
+│      → 중첩 struct + 필드별 비트폭 (v9)               │
+│      → claim 레코드 생성 (~80건)                      │
 │                                                       │
 │  2b. Port Classifier (포트 10개+ 모듈)                │
 │      → 9개 기능 카테고리로 포트 분류                   │
 │      → 카테고리별 claim 레코드 생성 (~11건)            │
+│                                                       │
+│  2c. Generate Block Parser (v9 신규)                  │
+│      → generate for/if 블록 토폴로지 인식             │
+│      → 인스턴스-위치 매핑, NoC repeater (v9.2)        │
+│      → claim 레코드 생성 (~20건)                      │
+│                                                       │
+│  2d. Always Block Parser (v9 신규)                    │
+│      → always_ff 클럭 도메인 추출, CDC 경고           │
+│      → claim 레코드 생성 (~15건)                      │
+│                                                       │
+│  2e. Wire Declaration Parser (v9.2 신규)              │
+│      → struct/logic wire 선언 + 배열 차원 + 목적 유추 │
+│      → claim 레코드 생성 (~10건)                      │
+│                                                       │
+│  2f. Bitwidth Evaluator (v9 신규)                     │
+│      → 파라미터 표현식을 정수로 평가 (SizeX-1 → 3)    │
+│      → ast.NodeVisitor 기반 안전한 파서               │
 └──────────────┬───────────────────────────────────────┘
                │
                ▼
@@ -259,61 +279,59 @@ KB에는 3가지 타입의 레코드가 공존한다:
 
 ## 5. 현재 한계와 개선 방향
 
-### 5.1 파서가 못 잡는 RTL 구조
+### 5.1 파서가 못 잡는 RTL 구조 (v9.2 기준 — 남은 갭)
 
-| RTL 구조 | 예시 | 담고 있는 정보 | 개선 방향 |
-|----------|------|---------------|----------|
-| `always_ff` 블록 | `always_ff @(posedge clk)` | FSM 상태 전이, 레지스터 업데이트 | **Behavior 파서** — FSM 추출, 클럭 도메인 식별 |
-| `always_comb` 블록 | `always_comb begin ... end` | 조합 로직, mux 선택 | **Behavior 파서** — 데이터패스 추출 |
-| `assign` 문 | `assign o_data = sel ? a : b;` | 신호 구동 관계 | **Connectivity 파서** — 신호 그래프 구축 |
-| `generate for` | `for (genvar i=0; i<SizeX; i++)` | 타일 배열, 반복 구조 | **Generate 파서** — 토폴로지 추출 |
-| `generate if` | `if (FEATURE_EN) begin ... end` | 조건부 하드웨어 | **Generate 파서** — 설정별 구조 차이 |
+| RTL 구조 | 예시 | 담고 있는 정보 | 상태 |
+|----------|------|---------------|------|
+| `always_ff` 블록 | `always_ff @(posedge clk)` | 클럭 도메인 | ✅ 해결 (Always Block Parser) |
+| `always_comb` 블록 | `always_comb begin ... end` | FSM, mux 선택 | ❌ 미지원 |
+| `assign` 문 | `assign o_data = sel ? a : b;` | 신호 구동 관계 | ❌ 미지원 |
+| `generate for` | `for (genvar i=0; i<SizeX; i++)` | 토폴로지, 인스턴스 위치 | ✅ 해결 (Generate Block Parser) |
+| `generate if` | `if (FEATURE_EN) begin ... end` | 조건부 bypass | ✅ 해결 (Generate Block Parser) |
+| `function` / `task` | `function automatic int ...` | 인덱스 계산 | ✅ 해결 (Package Function Extractor) |
+| wire 선언 | `struct_t sig [SizeX][SizeY]` | 배선 구조 | ✅ 해결 (Wire Declaration Parser) |
+| `interface` / `modport` | `interface axi_if` | 구조화된 포트 번들 | ❌ 미지원 |
 
-### 5.2 파서 분리 로드맵
+### 5.2 파서 아키텍처 (v9.2 현재)
 
-현재 파서들은 역할이 섞여 있다. 기여도 측정이 어렵고 확장성에 제약이 있다. 다음 단계에서 역할별 분리를 고려 중:
+v9.2에서 파서 분리가 완료되었다. 각 파서는 독립적으로 feature flag로 제어 가능하다.
 
 ```
-현재                              목표
-─────                            ─────
-기본 모듈 파서 (전부 다 함)        Structure 파서 (hierarchy, 인스턴스 트리)
-                                  Interface 파서 (Port Classifier 확장)
-Package Parser                    Type 파서 (localparam, enum, struct, function)
-                                  Behavior 파서 (always/assign → FSM, 데이터패스)  ← 신규
-                                  Connectivity 파서 (generate → 토폴로지, 배선)    ← 신규
+v9.2 파서 아키텍처 (8종)
+─────────────────────────
+① 기본 모듈 파서          → module_parse 레코드 (구조)
+② Package Parser          → claim (localparam, enum, struct, function, EP Table)
+③ Port Classifier         → claim (포트 기능 분류)
+④ Generate Block Parser   → claim (토폴로지, 인스턴스 위치, repeater)
+⑤ Always Block Parser     → claim (클럭 도메인, CDC 경고)
+⑥ Bitwidth Evaluator      → 내부 유틸 (표현식 → 정수 평가)
+⑦ Wire Declaration Parser → claim (wire 배열, struct 참조, 목적 유추)
+⑧ 대형 모듈 청킹          → module_parse_chunk (50+ 포트 모듈 분할)
 ```
 
-**목적:** 각 파서의 기여도를 독립 측정 → 다음 투자 포인트 식별
+**Feature Flag 제어:** 환경 변수 `PARSER_*_ENABLED` (기본값 모두 `true`)로 A/B 테스트 가능.
 
-### 5.3 검색 측 개선 방향
+**파서별 기여도 측정:** CloudWatch `BOS-AI/RTLParser` 네임스페이스에 `ParserClaimCount`, `ParserExecutionTime`, `ParserHitRatio` 메트릭 발행.
 
-| 영역 | 현재 | 개선 방향 |
-|------|------|----------|
-| 임베딩 | Titan v2 단일 모델 | 코드 특화 임베딩 모델 비교 실험 |
-| 청킹 | 모듈 단위 (1 모듈 = 1 레코드) | 대형 모듈 분할 전략 (포트/인스턴스/로직 별도) |
-| 하이브리드 검색 | 벡터 + 키워드 고정 비율 | 질의 유형별 동적 비율 조정 |
-| 그래프 검색 | 미구현 (Neptune 준비 중) | 관계 기반 탐색 (인스턴스 트리, 신호 경로) |
+### 5.3 검색 측 (v9.2 구현 완료)
 
-### 5.4 Hybrid Grounding (다음 버전)
+| 영역 | v1.0 상태 | v9.2 상태 |
+|------|----------|----------|
+| 임베딩 | Titan v2 단일 모델 | Titan v2 (변경 없음) |
+| 청킹 | 모듈 단위 (1 모듈 = 1 레코드) | ✅ 대형 모듈 분할 (50+ 포트 → 3 Sub_Record) |
+| 하이브리드 검색 | 벡터 + 키워드 고정 비율 | ✅ 질의 유형별 동적 Boost (5가지 유형) |
+| 그래프 검색 | 미구현 | ✅ Neptune Graph DB (인스턴스 트리, 신호 경로, CDC) |
+| Grounding | No Grounding only | ✅ Hybrid Grounding (strict/hybrid/free 3모드) |
 
-현재 RAG의 딜레마:
-- **Grounded 모드:** KB에 있는 것만 기술 → 거짓말 없음, 빈 섹션 많음
-- **No Grounding:** 자유 서술 → 문서는 꽉 차지만 환각 발생
+### 5.4 동적 Boost 상세 (v9.2)
 
-**Hybrid 모드 = 제3의 길:**
-
-```markdown
-## NoC Routing Algorithm
-
-[GROUNDED from KB]
-지원 알고리즘 3종: DOR, Tendril, Dynamic (tt_noc_pkg.sv)
-
-[INFERRED by LLM]
-DOR는 일반적으로 X-first 순서로 동작하며, 데드락 방지를 위해
-VC 2개 이상을 사용합니다. ※ Spec 확인 필요.
-```
-
-검증 엔지니어는 `[GROUNDED]`는 신뢰하고 `[INFERRED]`만 검토하면 됨.
+| 질의 유형 | claim boost | module_parse boost | 매칭 키워드 |
+|-----------|------------|-------------------|------------|
+| port_query | 4.0 | 0.5 | port, pin, signal, interface |
+| hierarchy_query | 1.5 | 3.0 | instance, hierarchy, tree, sub-module |
+| config_query | 4.0 | 1.0 | parameter, config, constant, setting |
+| connectivity_query | 4.0 | 1.0 | connect, wire, route, topology |
+| general_query | 3.0 | 1.0 | (default fallback) |
 
 ---
 

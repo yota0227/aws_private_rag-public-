@@ -1,0 +1,100 @@
+# Overlay (RISC-V Subsystem) — Hardware Design Document (HDD)
+
+> **Pipeline ID:** tt_20260221 | **Version:** v6 | **RAG:** v4.1 + Package Parser | **Generated:** 2026-04-28
+> **Rule:** KB-only content. Missing = `[NOT IN KB]`.
+
+---
+
+## 1. Overview
+
+*Source: HDD [1]*
+
+The Overlay subsystem includes `noc2axi_router_nw_opt` with `tt_mem_wrap_32x1024_2p_nomask` SRAM.
+
+**KB-confirmed:** FDS registers (2 types), L1 CSR register, inner module instantiations.
+
+---
+
+## 2. Position in Grid — [NOT IN KB]
+
+---
+
+## 3. Feature Summary
+
+| Feature | Module | Ports | Source |
+|---------|--------|-------|--------|
+| FDS TensixNeo | `tt_fds_tensixneo_reg` → `_inner` | 106 in / 41 out | [2],[5] |
+| FDS Dispatch | `tt_fds_dispatch_reg` → `_inner` | 68 in / 41 out | [3],[7] |
+| L1 CSR | `tt_cluster_ctrl_t6_l1_csr_reg` → `_inner` | 38 in / 97 out | [4],[6] |
+| NoC Bridge | `noc2axi_router_nw_opt` + SRAM | — | [1] |
+| CPU / iDMA / ROCC / LLK / SMN | [NOT IN KB] | — | — |
+
+> Both FDS modules share output count (41) → common FDS output interface.
+
+---
+
+## 4. Block Diagram
+
+```
+┌──────────────────────────────────────────────┐
+│              Overlay Subsystem                │
+│  tt_fds_tensixneo_reg (106/41) → _inner      │
+│  tt_fds_dispatch_reg  (68/41)  → _inner      │
+│  tt_cluster_ctrl_t6_l1_csr_reg (38/97) → _inner │
+│  noc2axi_router_nw_opt + SRAM + selftest     │
+│  CPU / L1 / iDMA / ROCC / LLK / SMN: [NOT IN KB] │
+└──────────────────────────────────────────────┘
+```
+
+---
+
+## 5. Sub-module Hierarchy
+
+```
+Overlay
+├── tt_fds_tensixneo_reg → tt_fds_tensixneo_reg_inner     [2],[5]
+├── tt_fds_dispatch_reg → tt_fds_dispatch_reg_inner       [3],[7]
+├── tt_cluster_ctrl_t6_l1_csr_reg → _inner                [4],[6]
+├── noc2axi_router_nw_opt + tt_mem_wrap_32x1024_2p_nomask [1]
+└── CPU/L1/iDMA/ROCC/LLK/SMN: [NOT IN KB]
+```
+
+---
+
+## 6. Feature Details
+
+### 6.1 CPU Cluster — [NOT IN KB]
+### 6.2 L1 Cache — CSR only: `tt_cluster_ctrl_t6_l1_csr_reg` (38/97). Internals [NOT IN KB].
+### 6.3–6.6 iDMA / ROCC / LLK / SMN — [NOT IN KB]
+
+### 6.7 FDS (Frequency/Droop Sensor)
+
+| Module | In | Out | Inner | Source |
+|--------|----|-----|-------|--------|
+| `tt_fds_tensixneo_reg` | 106 | 41 | `tt_fds_tensixneo_reg_inner` | [2],[5] |
+| `tt_fds_dispatch_reg` | 68 | 41 | `tt_fds_dispatch_reg_inner` | [3],[7] |
+
+### 6.8 Dispatch Engine — [NOT IN KB] (FDS dispatch reg only)
+
+---
+
+## 7–10. Control Path / Parameters / Clock / APB — [NOT IN KB]
+
+---
+
+## 11. Verification Checklist
+
+| Item | Status |
+|------|--------|
+| FDS TensixNeo R/W | [NOT VERIFIED] |
+| FDS Dispatch R/W | [NOT VERIFIED] |
+| L1 CSR R/W | [NOT VERIFIED] |
+| NoC selftest | [NOT VERIFIED] |
+
+---
+
+## 12. RTL File Index — [NOT IN KB]
+
+---
+
+**Search:** topic=Overlay, 7 results (1 hdd + 6 claims). *KB-only.*

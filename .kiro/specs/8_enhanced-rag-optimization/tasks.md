@@ -635,7 +635,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
 
 
 
-- [-] 24. Phase 8: EP Index Table 계산 및 Package Helper Function 확장 (Gap 1)
+- [x] 24. Phase 8: EP Index Table 계산 및 Package Helper Function 확장 (Gap 1)
   - [x] 24.1 EP Index Table 계산 구현 (`environments/app-layer/bedrock-rag/rtl_parser_src/package_extractor.py` 수정)
     - `_compute_ep_index_table(constants, enums, pkg_name, file_path, pipeline_id)` 함수 추가
     - `extract_package_constants()` 함수 내에서 SizeX, SizeY, tile_t 추출 직후 호출
@@ -649,7 +649,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - `parser_source` 필드를 `"ep_index_table"` 로 설정
     - _Requirements: 27.1, 27.2, 27.3, 27.4, 27.6_
 
-  - [ ] 24.2 Package Helper Function 추출 범위 확장 (`package_extractor.py` 수정)
+  - [x] 24.2 Package Helper Function 추출 범위 확장 (`package_extractor.py` 수정)
     - 기존 함수 추출 로직의 검색 범위를 패키지 파일 전체로 확장
     - `getTensixIndex`, `getNoc2AxiIndex`, `getApbIndex`, `getDmIndex` 등 인덱스 계산 헬퍼 함수 누락 없이 추출
     - 함수 검색 정규식 개선: 패키지 스코프 외부 함수도 포함
@@ -742,7 +742,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - _Requirements: 29.1, 29.2, 29.3, 29.4, 29.5, 29.7, 29.8, 29.9, 29.10_
 
 
-- [ ] 27. Phase 8 Checkpoint — 전체 Phase 8 통합 테스트
+- [x] 27. Phase 8 Checkpoint — 전체 Phase 8 통합 테스트
   - Ensure all tests pass, ask the user if questions arise.
   - EP Index Table: `package_extractor.py` EP 계산 + tile_t 매핑 동작 확인
   - Instance-Position Mapping: `generate_block_parser.py` dual-row + repeater 추출 동작 확인
