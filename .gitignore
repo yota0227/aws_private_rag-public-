@@ -84,3 +84,6 @@ response.json
 **/tfplan
 .tmp_pypdf/
 .claude/
+reindex_log*.txt
+tmp_*.json
+reindex_response.json
