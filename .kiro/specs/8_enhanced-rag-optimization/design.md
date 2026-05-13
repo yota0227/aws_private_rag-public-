@@ -1784,3 +1784,303 @@ def _process_rtl_file(event_record, pipeline_id):
 | 27 (EP Index Table) | P40, P41 | SizeX×SizeY, tile_t 매핑, 요약, flag, helper |
 | 28 (Instance-Position) | P42 | dual-row, repeater, EP ID, UNKNOWN |
 | 29 (Wire Declaration) | P43, P44 | struct type, 차원, 평가, 목적, flag, 패턴, 참조 |
+
+
+---
+
+## Phase 9: v9.3 Port Binding Parser + Schematic Viewer + Merge 개선
+
+> **v1.3 변경 사항 (v9.3 — Phase 9):**
+> - Port Binding Parser 신규: `.port(signal)` 매핑 추출 → Neptune CONNECTS_TO 엣지 적재
+> - Graph Export API 신규: Neptune 그래프 부분집합을 JSON으로 내보내기 (3가지 scope)
+> - Interactive Schematic Viewer 확장: 3-view(Chip/Module/Signal) + Graph Export API 연동
+> - HDD Merge 개선: placeholder 실명 복구 + topic→통합본 전파 재생성
+> - 신규 파일 1개: `port_binding_parser.py`
+> - Property 테스트 5개 추가 (Property 40~44)
+> - 품질 목표: v9.2 80% → v9.3 85~88% Content Fidelity
+
+### 핵심 변경 영역 (Phase 9)
+
+| # | 영역 | 설명 | 요구사항 |
+|---|------|------|---------|
+| 30 | Port Binding Parser | `.port(signal)` 명시적 포트 바인딩 추출 | 30.1~30.9 |
+| 31 | Neptune CONNECTS_TO 적재 | 포트 바인딩 → Port/Signal 노드 + CONNECTS_TO 엣지 | 31.1~31.8 |
+| 32 | Graph Export API | Neptune → JSON (chip/module/signal 3가지 scope) | 32.1~32.9 |
+| 33 | Interactive Schematic Viewer | 3-view 시각화 + API 연동 + 경고 배너 | 33.1~33.9 |
+| 34 | HDD Merge 개선 | placeholder 실명 복구 + topic 전파 재생성 | 34.1~34.10 |
+
+### 설계 결정 사항 (Phase 9)
+
+| 결정 | 근거 |
+|------|------|
+| Port Binding Parser를 별도 파일로 분리 | 기존 handler.py의 `parse_rtl_to_ast`는 모듈 선언부만 파싱. 포트 바인딩은 인스턴스화 구문 내부에 있어 파싱 로직이 근본적으로 다름. 독립 파일로 feature flag 제어 가능 |
+| `#(…)` 파라미터 블록과 `(…)` 포트 블록을 위치 기반으로 구분 | SystemVerilog에서 파라미터와 포트 모두 `.name(value)` 형식이므로 이름만으로 구분 불가. 인스턴스화 구문에서 `#(…)` 뒤의 `(…)`가 포트 블록 |
+| Neptune MERGE 연산으로 중복 방지 | 동일 RTL 파일 재업로드 시 기존 노드/엣지를 덮어쓰기. CREATE는 중복 생성, MERGE는 idempotent |
+| Graph Export API 노드 상한 1,000개 | trinity.sv 전체 그래프는 수천 노드 가능. 브라우저 D3.js 렌더링 성능 한계 고려. degree 기준 상위 노드 선택으로 핵심 구조 보존 |
+| Schematic Viewer를 단일 HTML로 유지 | 온프렘 환경에서 별도 빌드/배포 없이 브라우저에서 직접 열기 가능. D3.js CDN + 로컬 fallback 이중 구조 |
+| HDD placeholder 복구 3단계 소스 우선순위 | ① parser_source별 원본 이름이 가장 정확 → ② OpenSearch 검색은 넓은 범위 커버 → ③ Claim statement는 최후 수단 |
+| Topic 전파 max_propagation_depth=5 | 실제 topic 계층은 3~4단계. 5단계면 충분하며 순환 참조 시 무한 루프 방지 |
+| Graph Export API에서 HTTP 503 대신 빈 그래프 반환 | Schematic Viewer가 에러 처리 없이도 빈 화면 + 경고 배너로 graceful degradation 가능 |
+
+### 아키텍처 — Port Binding → Neptune 적재 흐름
+
+```mermaid
+sequenceDiagram
+    participant RTL_S3 as RTL S3 Bucket
+    participant Parser as RTL Parser Lambda
+    participant PBP as Port Binding Parser
+    participant Neptune as Neptune DB
+    participant OS as RTL OpenSearch
+
+    RTL_S3->>Parser: S3 Event (rtl-sources/trinity.sv)
+    Parser->>Parser: parse_rtl_to_ast() — 모듈 메타데이터
+    Parser->>PBP: extract_port_bindings(rtl_content, module_name)
+    PBP-->>Parser: bindings[] (instance, port, signal, bit_range)
+    
+    Parser->>Neptune: MERGE Port nodes ({instance}.{port})
+    Parser->>Neptune: MERGE Signal nodes (signal_expr)
+    Parser->>Neptune: CREATE CONNECTS_TO edges (Port→Signal)
+    
+    alt concatenation binding
+        Parser->>Neptune: CREATE constituent CONNECTS_TO edges (is_constituent=true)
+    end
+    
+    alt Neptune 실패
+        Parser->>Parser: neptune_load_failed=true 로그
+        Note over Parser: S3/OpenSearch 인덱싱 계속
+    end
+    
+    Parser->>OS: 인덱싱 (binding claims + 기존 메타데이터)
+```
+
+### 아키텍처 — Graph Export API + Schematic Viewer
+
+```mermaid
+sequenceDiagram
+    participant User as 엔지니어 (브라우저)
+    participant Viewer as Schematic Viewer (HTML)
+    participant APIGW as API Gateway
+    participant Lambda as Lambda Handler
+    participant Neptune as Neptune DB
+
+    User->>Viewer: 페이지 로드
+    Viewer->>Viewer: 내장 프로토타입 데이터로 렌더링
+    
+    User->>Viewer: "Load from API" 클릭 (scope=chip, root=trinity)
+    Viewer->>APIGW: POST /rag/graph-export {scope, root_module, depth}
+    APIGW->>Lambda: graph_export(event)
+    Lambda->>Neptune: openCypher MATCH (scope별 쿼리)
+    
+    alt Neptune 성공
+        Neptune-->>Lambda: nodes + edges
+        Lambda->>Lambda: degree 기준 상위 1000개 필터
+        Lambda-->>APIGW: {nodes, edges, metadata}
+    else Neptune 실패/타임아웃
+        Lambda-->>APIGW: {nodes:[], edges:[], metadata:{neptune_fallback:true}}
+    end
+    
+    APIGW-->>Viewer: JSON 응답
+    Viewer->>Viewer: D3.js force-directed 재렌더링
+    
+    alt neptune_fallback=true
+        Viewer->>User: ⚠️ 경고 배너 표시
+    end
+```
+
+### 아키텍처 — HDD Merge 실명 복구 + Topic 전파
+
+```mermaid
+flowchart TD
+    A[generate_hdd_section 호출] --> B[Foundation_Model로 마크다운 생성]
+    B --> C{placeholder 존재?}
+    C -->|Yes| D[_resolve_placeholders 호출]
+    C -->|No| G[마크다운 반환]
+    
+    D --> E1["① claim parser_source별 원본 이름 조회"]
+    E1 --> E2["② RTL_OpenSearch_Index 검색"]
+    E2 --> E3["③ Claim_DB statement 원본"]
+    E3 --> F{복구 성공?}
+    F -->|Yes| G
+    F -->|No| H["<!-- NAME_RESOLUTION_FAILED --> 삽입"]
+    H --> G
+    
+    G --> I["Seoul_S3 published/ 저장"]
+    I --> J[_mark_stale_parents 호출]
+    J --> K{parent_topics 존재?}
+    K -->|Yes| L["상위 섹션 stale=true 설정"]
+    K -->|No| M[완료]
+    L --> N{depth < 5?}
+    N -->|Yes| J
+    N -->|No| O["WARNING 로그 + 건너뛰기"]
+```
+
+### 컴포넌트 상세 — Port Binding Parser
+
+**파일:** `environments/app-layer/bedrock-rag/rtl_parser_src/port_binding_parser.py`
+
+```python
+def extract_port_bindings(rtl_content: str, module_name: str, file_path: str, pipeline_id: str) -> list[dict]:
+    """RTL 파일에서 모듈 인스턴스화 구문의 포트 바인딩을 추출한다.
+    
+    파싱 전략:
+    1. 인스턴스화 구문 식별: module_type [#(params)] instance_name (ports);
+    2. #(…) 파라미터 블록 제거 (중첩 괄호 매칭)
+    3. (…) 포트 블록에서 .port_name(signal_expr) 추출
+    4. concatenation {a, b} 분해
+    
+    Returns:
+        [{
+            "instance_name": str,
+            "module_type": str,
+            "port_name": str,
+            "signal_expr": str,
+            "bit_range": str | None,
+            "is_unconnected": bool,
+            "is_concatenation": bool,
+            "constituent_signals": list[str],
+            "source_file": str,
+            "line_number": int
+        }, ...]
+    """
+```
+
+**정규식 패턴:**
+
+```python
+# 인스턴스화 구문 식별 (module_type instance_name)
+INSTANCE_PATTERN = r'(\w+)\s+(?:#\s*\([^)]*(?:\([^)]*\))*[^)]*\)\s*)?(\w+)\s*\('
+
+# 포트 바인딩 추출
+PORT_BINDING_PATTERN = r'\.(\w+)\s*\(\s*(.*?)\s*\)'
+
+# concatenation 감지
+CONCAT_PATTERN = r'^\{(.+)\}$'
+```
+
+### 컴포넌트 상세 — Graph Export API
+
+**엔드포인트:** `POST /rag/graph-export`
+
+**요청 스키마:**
+```json
+{
+  "scope": "chip | module | signal",
+  "root_module": "trinity",
+  "depth": 3,
+  "signal_filter": "i_noc_data"
+}
+```
+
+**응답 스키마:**
+```json
+{
+  "nodes": [
+    {"id": "trinity", "label": "trinity", "type": "Module", "properties": {"port_count": 106}},
+    {"id": "trinity.t0.i_noc_data", "label": "i_noc_data", "type": "Port", "properties": {"direction": "input", "width": 64}}
+  ],
+  "edges": [
+    {"id": "e1", "source": "trinity.t0.i_noc_data", "target": "noc_data_bus", "label": "CONNECTS_TO", "properties": {"bit_range": null}}
+  ],
+  "metadata": {
+    "scope": "chip",
+    "root_module": "trinity",
+    "depth": 3,
+    "node_count": 45,
+    "edge_count": 78,
+    "generated_at": "2026-05-11T10:30:00Z",
+    "neptune_fallback": false,
+    "truncated": false
+  }
+}
+```
+
+**Neptune openCypher 쿼리 (scope별):**
+
+```cypher
+// scope="chip" — 모듈 레벨 aggregation
+MATCH (root:Module {name: $root_module})-[:INSTANTIATES]->(child:Module)
+OPTIONAL MATCH (child)-[:HAS_PORT]->(p:Port)-[:CONNECTS_TO]->(s:Signal)
+RETURN root, child, collect(DISTINCT {port: p.name, signal: s.name}) AS connections
+LIMIT 1000
+
+// scope="module" — 내부 상세
+MATCH (m:Module {name: $root_module})-[:HAS_PORT]->(p:Port)
+OPTIONAL MATCH (p)-[:CONNECTS_TO]->(s:Signal)
+RETURN m, p, s
+
+// scope="signal" — 전파 경로 (기존 trace_signal_path 재사용)
+MATCH path = (m:Module {name: $root_module})-[:HAS_PORT]->(p:Port)-[:CONNECTS_TO*1..5]->(target)
+WHERE p.name CONTAINS $signal_filter
+RETURN path
+```
+
+### 컴포넌트 상세 — HDD Merge 개선
+
+**실명 복구 함수:**
+
+```python
+def _resolve_placeholders(markdown_text: str, claims_used: list, topic: str) -> tuple[str, list]:
+    """placeholder 토큰을 실제 이름으로 복구한다.
+    
+    복구 소스 우선순위:
+    1. claims_used의 parser_source별 원본 이름 (claim_text에서 추출)
+    2. RTL_OpenSearch_Index 검색 (module_name, instance_list, port_list)
+    3. Claim_DB statement 원본 텍스트
+    
+    동일 토큰 다중 후보: confidence 최고 → 동률 시 최신 created_at
+    
+    Returns:
+        (resolved_markdown, unresolved_placeholders_list)
+    """
+```
+
+**Topic 전파 메타데이터:**
+
+```json
+{
+  "s3_key": "published/ucie_phy_hdd.md",
+  "topic": "ucie/phy",
+  "parent_topics": ["ucie/phy/ltssm", "ucie/phy/electrical"],
+  "stale": false,
+  "last_child_update_at": null,
+  "generated_at": "2026-05-11T10:00:00Z"
+}
+```
+
+### 변경 범위 (Phase 9)
+
+| 컴포넌트 | 파일/경로 | 변경 유형 |
+|----------|----------|----------|
+| Port Binding Parser | `rtl_parser_src/port_binding_parser.py` | 신규 |
+| RTL Parser Handler | `rtl_parser_src/handler.py` | 수정 (Neptune 적재 확장) |
+| Lambda Handler | `lambda_src/index.py` | 수정 (graph_export, regenerate_stale_hdd, _resolve_placeholders) |
+| MCP Bridge | `mcp-bridge/server.js` | 수정 (graph_export, regenerate_stale_hdd 도구) |
+| API Gateway | `environments/app-layer/bedrock-rag/api-gateway.tf` | 수정 (2개 라우트 추가) |
+| Schematic Viewer | `docs/diagrams/interactive_schematic.html` | 수정 (3-view + API 연동) |
+| D3.js 로컬 복사본 | `docs/diagrams/vendor/d3.v7.min.js` | 신규 (선택적) |
+| Unit Tests | `rtl_parser_src/test_port_binding_parser.py` | 신규 |
+
+### 테스트 전략 — Phase 9
+
+#### Unit 테스트 (`test_port_binding_parser.py`)
+
+| 테스트 | 검증 내용 | 요구사항 |
+|--------|----------|---------|
+| 기본 `.port(signal)` 추출 | port_name, signal_expr 정확 추출 | 30.1, 30.2 |
+| `.port(signal[3:0])` bit_range | bit_range 필드 정확 추출 | 30.2 |
+| `.port()` unconnected | is_unconnected=true 설정 | 30.1 |
+| `.port({a, b, c})` concatenation | constituent_signals 분해 | 30.3 |
+| `#(.PARAM(val))` 제외 | 파라미터 블록 미추출 | 30.4 |
+| 동일 port_name 중복 | 첫 번째만 채택 + WARNING | 30.9 |
+| feature flag off | claim 0건 | 30.6 |
+| claim_text 형식 | 정규식 매칭 성공 | 30.5 |
+
+#### Property 테스트 (Property 40~44)
+
+| Property | 검증 내용 | 요구사항 |
+|----------|----------|---------|
+| P40: Port Binding 추출 완전성 | 포트 바인딩 추출 정확성 + 파라미터 제외 + 빈 문자열 방지 | 30.1, 30.2, 30.4, 30.8 |
+| P41: Neptune CONNECTS_TO 적재 보존 | 엣지 수 == 바인딩 수, MERGE 중복 방지, 실패 시 fallback | 31.1, 31.7, 31.8 |
+| P42: Graph Export API 응답 구조 | nodes/edges/metadata 존재, 노드 상한, fallback | 32.1, 32.5, 32.6, 32.7 |
+| P43: Placeholder 복구 완전성 | 재생성 후 raw placeholder 미존재 또는 HTML 주석만 | 34.1, 34.2, 34.9 |
+| P44: Topic 전파 무한 루프 방지 | 순환 구조에서 depth=5 초과 시 건너뛰기 | 34.5, 34.7 |

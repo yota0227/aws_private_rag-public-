@@ -347,16 +347,17 @@ resource "aws_lambda_function" "rtl_parser" {
 
   environment {
     variables = {
-      RTL_S3_BUCKET        = aws_s3_bucket.rtl_codes.bucket
-      OPENSEARCH_ENDPOINT  = data.aws_opensearchserverless_collection.virginia.collection_endpoint
-      RTL_OPENSEARCH_INDEX = "rtl-knowledge-base-index"
-      BEDROCK_REGION       = "us-east-1"
-      TITAN_EMBED_MODEL_ID = "amazon.titan-embed-text-v2:0"
-      DYNAMODB_ERROR_TABLE = aws_dynamodb_table.extraction_tasks.name
-      LAMBDA_REGION        = "ap-northeast-2"
-      STEP_FUNCTIONS_ARN   = "arn:aws:states:ap-northeast-2:${data.aws_caller_identity.current.account_id}:stateMachine:analysis-orchestrator-${var.environment}"
-      CLAUDE_MODEL_ID      = "anthropic.claude-3-haiku-20240307-v1:0"
-      CLAIM_DB_TABLE       = aws_dynamodb_table.claim_db.name
+      RTL_S3_BUCKET            = aws_s3_bucket.rtl_codes.bucket
+      OPENSEARCH_ENDPOINT      = data.aws_opensearchserverless_collection.virginia.collection_endpoint
+      RTL_OPENSEARCH_ENDPOINT  = "https://vpce-081afbb1df0f56705-g3n77ca2.aoss.us-east-1.vpce.amazonaws.com"
+      RTL_OPENSEARCH_INDEX     = "rtl-knowledge-base-index"
+      BEDROCK_REGION           = "us-east-1"
+      TITAN_EMBED_MODEL_ID     = "amazon.titan-embed-text-v2:0"
+      DYNAMODB_ERROR_TABLE     = aws_dynamodb_table.extraction_tasks.name
+      LAMBDA_REGION            = "ap-northeast-2"
+      STEP_FUNCTIONS_ARN       = "arn:aws:states:ap-northeast-2:${data.aws_caller_identity.current.account_id}:stateMachine:analysis-orchestrator-${var.environment}"
+      CLAUDE_MODEL_ID          = "anthropic.claude-3-haiku-20240307-v1:0"
+      CLAIM_DB_TABLE           = aws_dynamodb_table.claim_db.name
     }
   }
 

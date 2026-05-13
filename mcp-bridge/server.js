@@ -621,6 +621,94 @@ function createMcpServer() {
     }
   );
 
+  // ========================================================================
+  // Phase 9: Graph Export 도구
+  // Requirements: 32.1, 32.5
+  // ========================================================================
+
+  mcp.tool(
+    "graph_export",
+    "Neptune 그래프의 부분집합을 JSON으로 내보냅니다. Chip/Module/Signal 3가지 scope로 그래프를 조회하여 Schematic Viewer 및 외부 분석 도구에서 활용할 수 있습니다.",
+    {
+      scope: z.enum(["chip", "module", "signal"]).describe("조회 범위: chip(최상위 인스턴스), module(내부 상세), signal(신호 전파 경로)"),
+      root_module: z.string().describe("시작 모듈명 (예: BLK_UCIE)"),
+      depth: z.number().optional().default(3).describe("탐색 깊이 (기본값 3, scope=module 시 무시)"),
+      signal_filter: z.string().optional().describe("신호 필터 (scope=signal 시 필수)")
+    },
+    async (args, extra) => {
+      const startTime = Date.now();
+      try {
+        console.log("[TOOL] graph_export: scope=" + args.scope + " root_module=" + args.root_module + " depth=" + args.depth + " signal_filter=" + (args.signal_filter || "none"));
+        const body = { scope: args.scope, root_module: args.root_module };
+        if (args.depth !== undefined) body.depth = args.depth;
+        if (args.signal_filter) body.signal_filter = args.signal_filter;
+        const resp = await ragApi("POST", "/graph-export", body);
+        const execution_time_ms = Date.now() - startTime;
+        if (resp.error) return { content: [{ type: "text", text: JSON.stringify({ error: resp.error, execution_time_ms }) }], isError: true };
+        let text = "📊 Graph Export 결과\n";
+        text += "  Scope: " + args.scope + "\n";
+        text += "  Root Module: " + args.root_module + "\n";
+        text += "  Depth: " + (args.depth || 3) + "\n";
+        if (args.signal_filter) text += "  Signal Filter: " + args.signal_filter + "\n";
+        const metadata = resp.metadata || {};
+        text += "  노드 수: " + (metadata.node_count || (resp.nodes ? resp.nodes.length : 0)) + "\n";
+        text += "  엣지 수: " + (metadata.edge_count || (resp.edges ? resp.edges.length : 0)) + "\n";
+        if (metadata.truncated) text += "  ⚠️ 노드 상한(1000개) 초과 — 상위 노드만 반환됨\n";
+        if (metadata.neptune_fallback) text += "  ⚠️ Neptune 불가용 — 빈 그래프 반환\n";
+        if (resp.nodes && resp.nodes.length > 0) {
+          text += "\n--- 노드 (상위 10개) ---\n";
+          resp.nodes.slice(0, 10).forEach((node, i) => {
+            text += "  [" + (i+1) + "] " + (node.label || node.id || "unknown") + " (type: " + (node.type || "unknown") + ")\n";
+          });
+          if (resp.nodes.length > 10) text += "  ... 외 " + (resp.nodes.length - 10) + "개\n";
+        }
+        if (resp.edges && resp.edges.length > 0) {
+          text += "\n--- 엣지 (상위 10개) ---\n";
+          resp.edges.slice(0, 10).forEach((edge, i) => {
+            text += "  [" + (i+1) + "] " + (edge.source || "?") + " —[" + (edge.label || "?") + "]→ " + (edge.target || "?") + "\n";
+          });
+          if (resp.edges.length > 10) text += "  ... 외 " + (resp.edges.length - 10) + "개\n";
+        }
+        if ((!resp.nodes || resp.nodes.length === 0) && (!resp.edges || resp.edges.length === 0)) {
+          text += "\n그래프 데이터가 없습니다.";
+        }
+        text += "\n\nexecution_time_ms: " + execution_time_ms;
+        return { content: [{ type: "text", text }] };
+      } catch(err) {
+        const execution_time_ms = Date.now() - startTime;
+        return { content: [{ type: "text", text: JSON.stringify({ error: "graph_export 실패: " + err.message, execution_time_ms }) }], isError: true };
+      }
+    }
+  );
+
+  // regenerate_stale_hdd — Stale HDD 일괄 재생성 (Requirements 34.8)
+  mcp.tool(
+    "regenerate_stale_hdd",
+    "Stale 상태의 HDD 통합본 섹션을 일괄 재생성합니다. topic 전파로 인해 stale 마킹된 섹션들을 최신 claim 기반으로 다시 생성하고 placeholder를 실명으로 복구합니다.",
+    {},
+    async (args, extra) => {
+      const startTime = Date.now();
+      try {
+        console.log("[TOOL] regenerate_stale_hdd: triggered");
+        const resp = await ragApi("POST", "/hdd/regenerate-stale", {});
+        const execution_time_ms = Date.now() - startTime;
+        if (resp.error) return { content: [{ type: "text", text: JSON.stringify({ error: resp.error, execution_time_ms }) }], isError: true };
+        let text = "🔄 Stale HDD 재생성 결과\n";
+        text += "  재생성 완료: " + (resp.sections_regenerated || 0) + "개 섹션\n";
+        text += "  건너뛴 섹션: " + (resp.sections_skipped || 0) + "개\n";
+        text += "  미해결 placeholder: " + (resp.unresolved_placeholder_count || 0) + "개\n";
+        text += "  실행 시간: " + execution_time_ms + "ms\n";
+        if (resp.sections_regenerated === 0 && resp.sections_skipped === 0) {
+          text += "\n  ℹ️ stale 상태의 HDD 섹션이 없습니다.";
+        }
+        return { content: [{ type: "text", text }] };
+      } catch(err) {
+        const execution_time_ms = Date.now() - startTime;
+        return { content: [{ type: "text", text: JSON.stringify({ error: "regenerate_stale_hdd 실패: " + err.message, execution_time_ms }) }], isError: true };
+      }
+    }
+  );
+
   return mcp;
 }
 

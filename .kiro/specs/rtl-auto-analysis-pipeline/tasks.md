@@ -739,3 +739,26 @@ v4.1에서 커버리지 87%를 달성했으나 KB Grounding은 46%에 불과. LL
 - 단위 테스트는 구체적 예시와 엣지 케이스를 검증
 - Python 순수 로직 함수는 Go PBT에서 JSON 입출력 기반으로 검증 (Lambda invoke 또는 subprocess 호출)
 - 기존 인프라 리소스(S3, OpenSearch, DynamoDB, Lambda)는 재사용하며 새로 생성하지 않음
+
+- [x] 28. v5.1 가중치 리밸런싱 (RAG v4.1)
+  - [x] 28.1 module_parse boost 0.3→1.5, parsed_summary 1.0→1.2
+  - [x] 28.2 analysis_type=module_parse type boost 1.0 추가
+  - [x] 28.3 Lambda 배포 + 검증 (커버리지 18%→59%)
+
+- [x] 29. v6 Package Parser (RAG v5)
+  - [x] 29.1 package_extractor.py 신규 (localparam/enum/struct)
+  - [x] 29.2 handler.py 연동
+  - [x] 29.3 Lambda 배포 + trinity_pkg.sv → tile_t 8종, clock_routing_t 확인
+  - [x] 29.4 localparam int 정규식 수정 → 13개 상수 전부 추출
+  - [x] 29.5 _index_to_opensearch claim 필드 추가
+  - [x] 29.6 v6c 산출물 (5개 + 통합 HDD)
+
+- [x] 30. v7 Port Classifier + MCP Bridge (RAG v6)
+  - [x] 30.1 port_classifier.py 신규 (9개 카테고리)
+  - [x] 30.2 handler.py 연동 (포트 10개+ 모듈)
+  - [x] 30.3 Lambda 배포 + trinity.sv → 10개 포트 claim
+  - [x] 30.4 server.js에 search_rtl 도구 추가
+  - [x] 30.5 server.js 응답 길이 확대 (200→800)
+  - [x] 30.6 서버 재시작 + Obot 재등록
+  - [x] 30.7 v7 산출물 (5개 + v7_N1B0_HDD.md)
+  - [x] 30.8 정답지 검증: dm_clk, dm_core_reset_n, APB, EDC APB 전체 노출

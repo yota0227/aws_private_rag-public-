@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Trinity N1B0 — Interactive Module Schematic</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Segoe UI', sans-serif; background: #1a1a2e; color: #eee; overflow: hidden; }
+#header { position: fixed; top: 0; left: 0; right: 0; padding: 12px 20px; background: rgba(26,26,46,0.95); z-index: 100; border-bottom: 1px solid #333; display: flex; justify-content: space-between; align-items: center; }
+#header h1 { font-size: 16px; color: #00d4ff; }
+#header .info { font-size: 12px; color: #888; }
+#api-control-bar { position: fixed; top: 50px; left: 0; right: 0; padding: 8px 20px; background: rgba(26,26,46,0.95); z-index: 99; border-bottom: 1px solid #333; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+#api-control-bar label { font-size: 11px; color: #aaa; white-space: nowrap; }
+#api-control-bar input, #api-control-bar select { padding: 4px 8px; background: #2a2a4a; border: 1px solid #444; color: #ddd; border-radius: 4px; font-size: 11px; }
+#api-control-bar input { width: 140px; }
+#api-control-bar input#api-endpoint { width: 260px; }
+#api-control-bar select { width: 100px; }
+#api-control-bar button { padding: 5px 14px; background: #00d4ff; border: none; color: #1a1a2e; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: bold; }
+#api-control-bar button:hover { background: #33e0ff; }
+#api-control-bar button:disabled { background: #555; color: #999; cursor: not-allowed; }
+#warning-banner { position: fixed; top: 92px; left: 0; right: 0; padding: 8px 20px; background: rgba(255,152,0,0.15); border-bottom: 1px solid #ff9800; z-index: 98; display: none; font-size: 12px; color: #ffb74d; text-align: center; }
+#view-mode-bar { position: fixed; top: 92px; left: 20px; z-index: 97; display: flex; gap: 4px; }
+#view-mode-bar button { padding: 5px 12px; background: #2a2a4a; border: 1px solid #444; color: #ddd; border-radius: 4px; cursor: pointer; font-size: 11px; }
+#view-mode-bar button:hover { background: #3a3a6a; border-color: #00d4ff; }
+#view-mode-bar button.active { background: #00d4ff; color: #1a1a2e; border-color: #00d4ff; font-weight: bold; }
+#controls { position: fixed; top: 130px; left: 20px; z-index: 100; display: flex; flex-direction: column; gap: 6px; }
+#controls button { padding: 6px 12px; background: #2a2a4a; border: 1px solid #444; color: #ddd; border-radius: 4px; cursor: pointer; font-size: 11px; }
+#controls button:hover { background: #3a3a6a; border-color: #00d4ff; }
+#tooltip { position: fixed; padding: 10px 14px; background: rgba(0,0,0,0.9); border: 1px solid #00d4ff; border-radius: 6px; font-size: 11px; pointer-events: none; display: none; z-index: 200; max-width: 400px; }
+#tooltip .title { color: #00d4ff; font-weight: bold; margin-bottom: 4px; }
+#tooltip .ports { color: #aaa; font-family: monospace; font-size: 10px; white-space: pre-wrap; }
+#legend { position: fixed; bottom: 20px; left: 20px; background: rgba(26,26,46,0.95); border: 1px solid #333; border-radius: 8px; padding: 12px; z-index: 100; max-height: 70vh; overflow-y: auto; }
+#legend h3 { font-size: 11px; color: #888; margin-bottom: 6px; }
+#legend .item { display: flex; align-items: center; gap: 8px; margin: 3px 0; font-size: 11px; }
+#legend .dot { width: 12px; height: 12px; border-radius: 50%; }
+svg { width: 100vw; height: 100vh; }
+.link { stroke-opacity: 0.4; }
+.node circle { stroke: #fff; stroke-width: 1.5px; cursor: pointer; transition: all 0.2s; }
+.node circle:hover { stroke-width: 3px; }
+.node text { font-size: 9px; fill: #ccc; pointer-events: none; }
+.node.highlighted circle { stroke: #00d4ff; stroke-width: 3px; filter: drop-shadow(0 0 8px #00d4ff); }
+.link.highlighted { stroke-opacity: 1; stroke-width: 3px; }
+</style>
+</head>
+<body>
+<div id="header">
+  <h1>Trinity N1B0 — Interactive Module Interconnect</h1>
+  <div class="info">Pipeline: tt_20260221 | Drag nodes | Scroll to zoom | Click to highlight connections</div>
+</div>
+<div id="api-control-bar">
+  <label>API Endpoint:</label>
+  <input type="text" id="api-endpoint" placeholder="http://localhost:3000/rag/graph-export" value="">
+  <label>root_module:</label>
+  <input type="text" id="api-root-module" placeholder="trinity" value="">
+  <label>scope:</label>
+  <select id="api-scope">
+    <option value="chip">chip</option>
+    <option value="module">module</option>
+    <option value="signal">signal</option>
+  </select>
+  <label>depth:</label>
+  <input type="number" id="api-depth" placeholder="2" value="2" min="1" max="10" style="width:60px;">
+  <label>signal_filter:</label>
+  <input type="text" id="api-signal-filter" placeholder="" value="">
+  <button id="btn-load-api" onclick="loadFromAPI()">Load from API</button>
+</div>
+<div id="warning-banner"></div>
+<div id="view-mode-bar">
+  <button class="active" onclick="switchView(this,'chip')">Chip View</button>
+  <button onclick="switchView(this,'module')">Module View</button>
+  <button onclick="switchView(this,'signal')">Signal View</button>
+</div>
+<div id="controls">
+  <button onclick="resetZoom()">Reset View</button>
+  <button onclick="toggleLabels()">Toggle Labels</button>
+  <button onclick="filterByType('all')">Show All</button>
+  <button onclick="filterByType('compute')">Compute Only</button>
+  <button onclick="filterByType('noc')">NoC Only</button>
+  <button onclick="filterByType('control')">Control Only</button>
+</div>
+<div id="tooltip"><div class="title"></div><div class="ports"></div></div>
+<div id="legend">
+  <h3>API Node Types</h3>
+  <div class="item"><div class="dot" style="background:#ffffff; border:1px solid #666;"></div> Module</div>
+  <div class="item"><div class="dot" style="background:#ffd54f"></div> Port</div>
+  <div class="item"><div class="dot" style="background:#4fc3f7"></div> Signal</div>
+  <div class="item"><div class="dot" style="background:#ce93d8"></div> ClockDomain</div>
+  <div class="item"><div class="dot" style="background:#81c784"></div> Parameter</div>
+  <h3 style="margin-top:8px">Port Direction</h3>
+  <div class="item"><div style="width:20px;height:2px;border-top:2px solid #ffd54f;"></div> input (solid)</div>
+  <div class="item"><div style="width:20px;height:0;border-top:2px dashed #ffd54f;"></div> output (dashed)</div>
+  <div class="item"><div style="width:20px;height:0;border:2px double #ffd54f;border-width:3px;"></div> inout (double)</div>
+  <h3 style="margin-top:8px">Prototype Types</h3>
+  <div class="item"><div class="dot" style="background:#4fc3f7"></div> Tensix Compute (12)</div>
+  <div class="item"><div class="dot" style="background:#ffd54f"></div> NOC2AXI / NIU (4)</div>
+  <div class="item"><div class="dot" style="background:#81c784"></div> Dispatch (2)</div>
+  <div class="item"><div class="dot" style="background:#ce93d8"></div> Clock/Reset</div>
+  <div class="item"><div class="dot" style="background:#ff8a65"></div> EDC Ring</div>
+  <div class="item"><div class="dot" style="background:#90a4ae"></div> NoC Fabric</div>
+  <div class="item"><div class="dot" style="background:#a5d6a7"></div> Overlay</div>
+  <div class="item"><div class="dot" style="background:#fff; border:1px solid #666;"></div> Top (trinity)</div>
+  <h3 style="margin-top:8px">Link Types</h3>
+  <div class="item"><div style="width:20px;height:2px;background:#ffd54f"></div> NoC mesh</div>
+  <div class="item"><div style="width:20px;height:2px;background:#81c784"></div> Dispatch feedthrough</div>
+  <div class="item"><div style="width:20px;height:2px;background:#ff8a65"></div> EDC ring</div>
+  <div class="item"><div style="width:20px;height:2px;background:#555"></div> Instantiation</div>
+</div>
+<script src="https://d3js.org/d3.v7.min.js" onerror="var s=document.createElement('script');s.src='vendor/d3.v7.min.js';document.head.appendChild(s);"></script>
+<script>
+// Wait for D3 to be available (handles both CDN and fallback)
+function waitForD3(callback) {
+  if (typeof d3 !== 'undefined') { callback(); return; }
+  var check = setInterval(function() {
+    if (typeof d3 !== 'undefined') { clearInterval(check); callback(); }
+  }, 50);
+}
+
+waitForD3(function() {
+// ============================================================
+// Prototype Data (existing nodes/links — initial/default view)
+// ============================================================
+var prototypeNodes = [
+{id:"trinity",label:"trinity (top)",type:"top",size:30,ports:"106 ports total\nAXI:39, EDC_APB:16, SFR:17\nPRTN:14, APB:8, DM:3\nAI:2, NoC:2, Tensix:1"},
+{id:"t0",label:"TENSIX EP=0",type:"compute",size:14,ports:"(0,0) FPU|SFPU|TDMA|L1"},
+{id:"t1",label:"TENSIX EP=1",type:"compute",size:14,ports:"(0,1) FPU|SFPU|TDMA|L1"},
+{id:"t2",label:"TENSIX EP=2",type:"compute",size:14,ports:"(0,2) FPU|SFPU|TDMA|L1"},
+{id:"t5",label:"TENSIX EP=5",type:"compute",size:14,ports:"(1,0) FPU|SFPU|TDMA|L1"},
+{id:"t6",label:"TENSIX EP=6",type:"compute",size:14,ports:"(1,1) FPU|SFPU|TDMA|L1"},
+{id:"t7",label:"TENSIX EP=7",type:"compute",size:14,ports:"(1,2) FPU|SFPU|TDMA|L1"},
+{id:"t10",label:"TENSIX EP=10",type:"compute",size:14,ports:"(2,0) FPU|SFPU|TDMA|L1"},
+{id:"t11",label:"TENSIX EP=11",type:"compute",size:14,ports:"(2,1) FPU|SFPU|TDMA|L1"},
+{id:"t12",label:"TENSIX EP=12",type:"compute",size:14,ports:"(2,2) FPU|SFPU|TDMA|L1"},
+{id:"t15",label:"TENSIX EP=15",type:"compute",size:14,ports:"(3,0) FPU|SFPU|TDMA|L1"},
+{id:"t16",label:"TENSIX EP=16",type:"compute",size:14,ports:"(3,1) FPU|SFPU|TDMA|L1"},
+{id:"t17",label:"TENSIX EP=17",type:"compute",size:14,ports:"(3,2) FPU|SFPU|TDMA|L1"},
+{id:"de",label:"DISPATCH_E",type:"control",size:18,ports:"EP=3 (0,3)\nEast cmd distribution\nde_to_t6_east[4]"},
+{id:"dw",label:"DISPATCH_W",type:"control",size:18,ports:"EP=18 (3,3)\nWest cmd distribution\nde_to_t6_west[4]"},
+{id:"n4",label:"NIU_NE",type:"noc2axi",size:16,ports:"EP=4 (0,4) Corner\nAXI<->NoC bridge"},
+{id:"n9",label:"NIU+RTR_NE",type:"noc2axi",size:18,ports:"EP=9 (1,4) Composite\nDual-row Y=4+Y=3"},
+{id:"n14",label:"NIU+RTR_NW",type:"noc2axi",size:18,ports:"EP=14 (2,4) Composite\nDual-row Y=4+Y=3"},
+{id:"n19",label:"NIU_NW",type:"noc2axi",size:16,ports:"EP=19 (3,4) Corner\nAXI<->NoC bridge"},
+{id:"r8",label:"ROUTER EP=8",type:"noc",size:12,ports:"(1,3) Placeholder tile"},
+{id:"r13",label:"ROUTER EP=13",type:"noc",size:12,ports:"(2,3) Placeholder tile"},
+{id:"rep",label:"noc_repeaters",type:"noc",size:10,ports:"Inter-column repeater\nSignal integrity"},
+{id:"arb",label:"arbiter_tree",type:"noc",size:9,ports:"Priority arbitration"},
+{id:"ecc",label:"SECDED ECC",type:"noc",size:9,ports:"116-bit data\n10-bit check"},
+{id:"edc_biu",label:"EDC BIU",type:"edc",size:14,ports:"tt_edc1_biu_soc_apb4_wrap\n5 IRQs: fatal/crit/cor/sent/rcvd"},
+{id:"edc_d",label:"EDC direct",type:"edc",size:10,ports:"Ring direct connections"},
+{id:"edc_l",label:"EDC loopback",type:"edc",size:10,ports:"Ring U-turn"},
+{id:"clk",label:"Clock Infra",type:"clock",size:12,ports:"tt_clkbuf + tt_clkgater\nclock_routing_t[4][5] mesh"},
+{id:"fds",label:"FDS regs",type:"overlay",size:10,ports:"tt_fds_tensixneo_reg\n106in/41out"},
+{id:"ctrl",label:"Cluster Ctrl",type:"overlay",size:10,ports:"tt_cluster_ctrl_t6_l1_csr\n38in/97out"}
+];
+
+var prototypeLinks = [
+...["t0","t1","t2","t5","t6","t7","t10","t11","t12","t15","t16","t17","de","dw","n4","n9","n14","n19","edc_d","edc_l"].map(function(t){return {source:"trinity",target:t,type:"inst"};}),
+{source:"t0",target:"t5",type:"noc"},{source:"t5",target:"t10",type:"noc"},{source:"t10",target:"t15",type:"noc"},
+{source:"t1",target:"t6",type:"noc"},{source:"t6",target:"t11",type:"noc"},{source:"t11",target:"t16",type:"noc"},
+{source:"t2",target:"t7",type:"noc"},{source:"t7",target:"t12",type:"noc"},{source:"t12",target:"t17",type:"noc"},
+{source:"de",target:"r8",type:"noc"},{source:"r8",target:"r13",type:"noc"},{source:"r13",target:"dw",type:"noc"},
+{source:"n4",target:"n9",type:"noc"},{source:"n9",target:"n14",type:"noc"},{source:"n14",target:"n19",type:"noc"},
+{source:"t0",target:"t1",type:"noc"},{source:"t1",target:"t2",type:"noc"},{source:"t2",target:"de",type:"noc"},{source:"de",target:"n4",type:"noc"},
+{source:"t5",target:"t6",type:"noc"},{source:"t6",target:"t7",type:"noc"},{source:"t7",target:"r8",type:"noc"},{source:"r8",target:"n9",type:"noc"},
+{source:"t10",target:"t11",type:"noc"},{source:"t11",target:"t12",type:"noc"},{source:"t12",target:"r13",type:"noc"},{source:"r13",target:"n14",type:"noc"},
+{source:"t15",target:"t16",type:"noc"},{source:"t16",target:"t17",type:"noc"},{source:"t17",target:"dw",type:"noc"},{source:"dw",target:"n19",type:"noc"},
+{source:"de",target:"t0",type:"dispatch"},{source:"de",target:"t1",type:"dispatch"},{source:"de",target:"t2",type:"dispatch"},
+{source:"dw",target:"t15",type:"dispatch"},{source:"dw",target:"t16",type:"dispatch"},{source:"dw",target:"t17",type:"dispatch"},
+{source:"edc_biu",target:"edc_d",type:"edc"},{source:"edc_d",target:"edc_l",type:"edc"},
+{source:"rep",target:"n9",type:"noc_i"},{source:"rep",target:"n14",type:"noc_i"},
+{source:"arb",target:"r8",type:"noc_i"},{source:"ecc",target:"rep",type:"noc_i"},
+{source:"clk",target:"t0",type:"clk"},{source:"clk",target:"t5",type:"clk"},{source:"clk",target:"t10",type:"clk"},{source:"clk",target:"t15",type:"clk"},
+{source:"fds",target:"t0",type:"ovl"},{source:"ctrl",target:"t0",type:"ovl"}
+];
+
+// ============================================================
+// Color Maps
+// ============================================================
+var prototypeColorMap = {top:"#ffffff",compute:"#4fc3f7",noc2axi:"#ffd54f",control:"#81c784",clock:"#ce93d8",edc:"#ff8a65",noc:"#90a4ae",overlay:"#a5d6a7"};
+var apiColorMap = {Module:"#ffffff",Port:"#ffd54f",Signal:"#4fc3f7",ClockDomain:"#ce93d8",Parameter:"#81c784"};
+var linkColor = {inst:"#333",noc:"#ffd54f",dispatch:"#81c784",edc:"#ff8a65",noc_i:"#90a4ae",clk:"#ce93d8",ovl:"#a5d6a7",CONNECTS_TO:"#4fc3f7",INSTANTIATES:"#81c784",BELONGS_TO:"#ce93d8"};
+
+// ============================================================
+// State
+// ============================================================
+var currentMode = 'prototype';
+var currentView = 'chip';
+var showLbl = true;
+var currentSim = null;
+var _currentNode = null;
+var _currentLink = null;
+var _currentLbl = null;
+
+// ============================================================
+// SVG Setup
+// ============================================================
+var w = window.innerWidth, h = window.innerHeight;
+var svg = d3.select("body").append("svg");
+var gRoot = svg.append("g");
+var zoomBehavior = d3.zoom().scaleExtent([0.2,5]).on("zoom", function(e) { gRoot.attr("transform", e.transform); });
+svg.call(zoomBehavior);
+
+// ============================================================
+// Render Graph
+// ============================================================
+function renderGraph(nodes, links, mode) {
+  gRoot.selectAll("*").remove();
+  if (currentSim) { currentSim.stop(); currentSim = null; }
+
+  function getColor(d) {
+    if (mode === 'api') return apiColorMap[d.type] || "#90a4ae";
+    return prototypeColorMap[d.type] || "#90a4ae";
+  }
+
+  function getSize(d) {
+    if (mode === 'api') {
+      if (d.type === 'Module') return 20;
+      if (d.type === 'Port') return 12;
+      if (d.type === 'Signal') return 10;
+      if (d.type === 'ClockDomain') return 14;
+      if (d.type === 'Parameter') return 10;
+      return 12;
+    }
+    return d.size || 12;
+  }
+
+  function getLinkColor(d) {
+    var t = d.type || d.relationship || 'inst';
+    return linkColor[t] || "#555";
+  }
+
+  var sim = d3.forceSimulation(nodes)
+    .force("link", d3.forceLink(links).id(function(d){return d.id;}).distance(function(d){
+      if (mode === 'api') return 80;
+      return d.type === "noc" ? 55 : d.type === "inst" ? 100 : 80;
+    }))
+    .force("charge", d3.forceManyBody().strength(-250))
+    .force("center", d3.forceCenter(w/2, h/2))
+    .force("collide", d3.forceCollide().radius(function(d){return getSize(d)+8;}));
+  currentSim = sim;
+
+  var link = gRoot.append("g").selectAll("line").data(links).join("line")
+    .attr("class", "link")
+    .attr("stroke", function(d){return getLinkColor(d);})
+    .attr("stroke-width", function(d){
+      if (mode === 'api') return 1.2;
+      return d.type === "noc" ? 1.5 : d.type === "inst" ? 0.3 : 1;
+    });
+
+  var node = gRoot.append("g").selectAll("g").data(nodes).join("g")
+    .attr("class", "node")
+    .call(d3.drag()
+      .on("start", function(e,d){if(!e.active)sim.alphaTarget(0.3).restart();d.fx=d.x;d.fy=d.y;})
+      .on("drag", function(e,d){d.fx=e.x;d.fy=e.y;})
+      .on("end", function(e,d){if(!e.active)sim.alphaTarget(0);d.fx=null;d.fy=null;})
+    );
+
+  // Draw circles with port direction styling
+  node.append("circle")
+    .attr("r", function(d){return getSize(d);})
+    .attr("fill", function(d){return getColor(d);})
+    .attr("opacity", 0.85)
+    .attr("stroke-dasharray", function(d){
+      if (mode === 'api' && d.type === 'Port' && d.properties) {
+        var dir = d.properties.direction || '';
+        if (dir === 'output') return '5,3';
+      }
+      return null;
+    })
+    .attr("stroke-width", function(d){
+      if (mode === 'api' && d.type === 'Port' && d.properties) {
+        var dir = d.properties.direction || '';
+        if (dir === 'inout') return '4px';
+      }
+      return '1.5px';
+    })
+    .attr("stroke", function(d){
+      if (mode === 'api' && d.type === 'Port' && d.properties) {
+        var dir = d.properties.direction || '';
+        if (dir === 'inout') return '#fff';
+      }
+      return '#fff';
+    });
+
+  var lbl = node.append("text")
+    .attr("dy", function(d){return getSize(d)+12;})
+    .attr("text-anchor", "middle")
+    .text(function(d){
+      var label = d.label || d.id || '';
+      return label.split("\n")[0];
+    });
+  if (!showLbl) lbl.style("display", "none");
+
+  // Tooltip and click interactions
+  var tip = d3.select("#tooltip");
+  node.on("mouseover", function(e,d){
+    tip.style("display","block")
+      .style("left",(e.pageX+15)+"px")
+      .style("top",(e.pageY-10)+"px");
+    var title = (d.label||d.id||'').replace(/\n/g," ");
+    tip.select(".title").text(title+" ["+( d.type||'')+"]");
+    var propsText = '';
+    if (mode === 'api' && d.properties) {
+      propsText = Object.entries(d.properties).map(function(kv){return kv[0]+': '+kv[1];}).join('\n');
+    } else if (d.ports) {
+      propsText = d.ports;
+    }
+    tip.select(".ports").text(propsText);
+  })
+  .on("mouseout", function(){tip.style("display","none");})
+  .on("click", function(e,d){
+    node.classed("highlighted",false);
+    link.classed("highlighted",false);
+    var connected = new Set();
+    links.forEach(function(l){
+      var srcId = (typeof l.source==='object') ? l.source.id : l.source;
+      var tgtId = (typeof l.target==='object') ? l.target.id : l.target;
+      if(srcId===d.id||tgtId===d.id){connected.add(srcId);connected.add(tgtId);}
+    });
+    node.classed("highlighted",function(n){return connected.has(n.id);});
+    link.classed("highlighted",function(l){
+      var srcId=(typeof l.source==='object')?l.source.id:l.source;
+      var tgtId=(typeof l.target==='object')?l.target.id:l.target;
+      return srcId===d.id||tgtId===d.id;
+    });
+    // Show full properties in tooltip on click
+    tip.style("display","block")
+      .style("left",(e.pageX+15)+"px")
+      .style("top",(e.pageY-10)+"px");
+    var title2=(d.label||d.id||'').replace(/\n/g," ");
+    tip.select(".title").text(title2+" ["+(d.type||'')+"]");
+    var propsText2='';
+    if(mode==='api'&&d.properties){
+      propsText2=Object.entries(d.properties).map(function(kv){return kv[0]+': '+JSON.stringify(kv[1]);}).join('\n');
+    } else if(d.ports){
+      propsText2=d.ports;
+    }
+    tip.select(".ports").text(propsText2);
+  });
+
+  sim.on("tick", function(){
+    link.attr("x1",function(d){return d.source.x;}).attr("y1",function(d){return d.source.y;})
+      .attr("x2",function(d){return d.target.x;}).attr("y2",function(d){return d.target.y;});
+    node.attr("transform",function(d){return "translate("+d.x+","+d.y+")";});
+  });
+
+  _currentNode = node;
+  _currentLink = link;
+  _currentLbl = lbl;
+}
+
+// ============================================================
+// Initial render with prototype data
+// ============================================================
+renderGraph(prototypeNodes, prototypeLinks, 'prototype');
+
+// ============================================================
+// View Mode Switching
+// ============================================================
+window.switchView = function(btn, view) {
+  currentView = view;
+  document.querySelectorAll('#view-mode-bar button').forEach(function(b){b.classList.remove('active');});
+  btn.classList.add('active');
+  document.getElementById('api-scope').value = view;
+};
+
+// ============================================================
+// Load from API (Graph Export API)
+// ============================================================
+window.loadFromAPI = function() {
+  var endpoint = document.getElementById('api-endpoint').value.trim();
+  var rootModule = document.getElementById('api-root-module').value.trim();
+  var scope = document.getElementById('api-scope').value;
+  var depth = parseInt(document.getElementById('api-depth').value) || 2;
+  var signalFilter = document.getElementById('api-signal-filter').value.trim();
+
+  if (!endpoint) {
+    alert('API Endpoint URL is required.');
+    return;
+  }
+
+  var btn = document.getElementById('btn-load-api');
+  btn.disabled = true;
+  btn.textContent = 'Loading...';
+
+  var body = { scope: scope, depth: depth };
+  if (rootModule) body.root_module = rootModule;
+  if (signalFilter) body.signal_filter = signalFilter;
+
+  fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  })
+  .then(function(resp) {
+    if (!resp.ok) {
+      return resp.text().then(function(t){ throw new Error('API returned ' + resp.status + ': ' + t); });
+    }
+    return resp.json();
+  })
+  .then(function(data) {
+    var warningBanner = document.getElementById('warning-banner');
+    var warnings = [];
+    if (data.metadata && data.metadata.neptune_fallback === true) {
+      warnings.push('\u26A0\uFE0F Neptune \uBD88\uAC00\uC6A9 \u2014 \uBD80\uBD84 \uB370\uC774\uD130 \uD45C\uC2DC');
+    }
+    if (data.metadata && data.metadata.truncated === true) {
+      warnings.push('\u26A0\uFE0F 1000\uAC1C \uCD08\uACFC \u2014 \uC0C1\uC704 \uB178\uB4DC\uB9CC \uD45C\uC2DC');
+    }
+    if (warnings.length > 0) {
+      warningBanner.textContent = warnings.join(' | ');
+      warningBanner.style.display = 'block';
+    } else {
+      warningBanner.style.display = 'none';
+    }
+
+    var apiNodes = (data.nodes || []).map(function(n) {
+      return { id: n.id, label: n.label || n.id, type: n.type || 'Module', properties: n.properties || {}, size: null };
+    });
+    var apiLinks = (data.edges || []).map(function(e) {
+      return { source: e.source, target: e.target, type: e.relationship || e.type || 'CONNECTS_TO' };
+    });
+
+    currentMode = 'api';
+    renderGraph(apiNodes, apiLinks, 'api');
+  })
+  .catch(function(err) {
+    alert('API Error: ' + err.message);
+    document.getElementById('warning-banner').style.display = 'none';
+  })
+  .finally(function() {
+    btn.disabled = false;
+    btn.textContent = 'Load from API';
+  });
+};
+
+// ============================================================
+// Utility Functions
+// ============================================================
+window.resetZoom = function() {
+  svg.transition().duration(500).call(zoomBehavior.transform, d3.zoomIdentity);
+};
+
+window.toggleLabels = function() {
+  showLbl = !showLbl;
+  if (_currentLbl) _currentLbl.style("display", showLbl ? "block" : "none");
+};
+
+window.filterByType = function(t) {
+  if (!_currentNode || !_currentLink) return;
+  if (t === "all") {
+    _currentNode.style("opacity", 1);
+    _currentLink.style("opacity", 1);
+    return;
+  }
+  if (currentMode === 'api') {
+    var typeMap = { compute:["Module"], noc:["Signal","ClockDomain"], control:["Port","Parameter"] };
+    var ts = typeMap[t] || [t];
+    _currentNode.style("opacity", function(d){return ts.indexOf(d.type)>=0?1:0.1;});
+    _currentLink.style("opacity", function(l){
+      var srcType=(typeof l.source==='object')?l.source.type:'';
+      var tgtType=(typeof l.target==='object')?l.target.type:'';
+      return (ts.indexOf(srcType)>=0||ts.indexOf(tgtType)>=0)?1:0.05;
+    });
+  } else {
+    var m = {compute:["compute"],noc:["noc","noc2axi"],control:["control","clock","edc","overlay"]};
+    var ts2 = m[t] || [t];
+    _currentNode.style("opacity", function(d){return ts2.indexOf(d.type)>=0||d.type==="top"?1:0.1;});
+    _currentLink.style("opacity", function(l){
+      var srcType=(typeof l.source==='object')?l.source.type:'';
+      var tgtType=(typeof l.target==='object')?l.target.type:'';
+      return (ts2.indexOf(srcType)>=0||ts2.indexOf(tgtType)>=0)?1:0.05;
+    });
+  }
+};
+
+}); // end waitForD3
+</script>
+</body>
+</html>

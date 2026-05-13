@@ -7,7 +7,8 @@
         "search_archive",
         "rag_query",
         "get_evidence",
-        "list_verified_claims"
+        "list_verified_claims",
+        "rag_categories"
       ]
     }
   }

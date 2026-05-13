@@ -2,7 +2,7 @@
 
 ## Overview
 
-BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시스템으로 확장한다. 8개 Phase로 나누어 점진적으로 구현하며, 각 Phase는 이전 Phase의 결과물에 의존한다. Terraform IaC로 AWS 리소스를 관리하고, Python 3.12 Lambda 함수, Node.js MCP Bridge, Go 1.21 + gopter 속성 기반 테스트를 사용한다. Phase 7은 v9 RTL Parser Pipeline Enhancement로, Supply Side 파서 6종 확장, Consumption Side 검색 개선, Generation Side Hybrid Grounding, Quality Infrastructure 파서 기여도 측정을 포함한다. Phase 8은 v9.2 RTL Wiring & Topology Parser로, v9.1 리뷰에서 식별된 5개 잔여 갭(EP Index Table, NOC2AXI dual-row, NoC repeater, clock_routing array, dispatch feedthrough wire)을 해소하여 Content Fidelity 80%+ 달성을 목표로 한다.
+BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시스템으로 확장한다. 9개 Phase로 나누어 점진적으로 구현하며, 각 Phase는 이전 Phase의 결과물에 의존한다. Terraform IaC로 AWS 리소스를 관리하고, Python 3.12 Lambda 함수, Node.js MCP Bridge, Go 1.21 + gopter 속성 기반 테스트를 사용한다. Phase 7은 v9 RTL Parser Pipeline Enhancement로, Supply Side 파서 6종 확장, Consumption Side 검색 개선, Generation Side Hybrid Grounding, Quality Infrastructure 파서 기여도 측정을 포함한다. Phase 8은 v9.2 RTL Wiring & Topology Parser로, v9.1 리뷰에서 식별된 5개 잔여 갭(EP Index Table, NOC2AXI dual-row, NoC repeater, clock_routing array, dispatch feedthrough wire)을 해소하여 Content Fidelity 80%+ 달성을 목표로 한다. Phase 9는 v9.3 Port Binding Parser + Schematic Viewer + Merge 개선으로, 포트 바인딩 파서(.port(signal) 매핑 추출), Neptune CONNECTS_TO 엣지 적재, Graph Export API(Neptune → JSON), Interactive Schematic Viewer(3-view: Chip/Module/Signal), HDD merge 개선(실명 복구 + topic→통합본 전파)을 포함하여 Content Fidelity 85~88% 달성을 목표로 한다.
 
 ## Tasks
 
@@ -93,7 +93,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - **Validates: Requirements 13.9**
     - Lambda_Handler IAM 정책에 Source of Truth 버킷 PutObject/DeleteObject/DeleteObjectVersion/BypassGovernanceRetention/PutObjectRetention Explicit Deny 존재 검증
 
-- [ ] 2. Phase 1 Checkpoint
+- [x] 2. Phase 1 Checkpoint
   - Ensure all tests pass, ask the user if questions arise.
   - `cd environments/app-layer/bedrock-rag && terraform validate`
   - `cd tests && go test -v ./properties/ -run TestEnhancedRagOptimization -count=1` (Phase 1 관련 테스트)
@@ -183,7 +183,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - **Validates: Requirements 7.3, 7.4, 7.7**
     - 100건 상한, 응답 필드 존재, has_more 시 continuation_token, 신규 claim status=draft/version=1 검증
 
-- [ ] 4. Phase 2 Checkpoint
+- [x] 4. Phase 2 Checkpoint
   - Ensure all tests pass, ask the user if questions arise.
   - `terraform validate` 실행
   - Claim CRUD 함수 및 Ingestion 파이프라인 동작 확인
@@ -236,7 +236,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 단방향 데이터 흐름 보장: Source_of_Truth → Verified_Knowledge → Serving
     - _Requirements: 12.3, 12.4, 12.5, 12.6, 15.8_
 
-- [ ] 6. Phase 3 Checkpoint
+- [x] 6. Phase 3 Checkpoint
   - Ensure all tests pass, ask the user if questions arise.
   - MCP Bridge 도구 3개 + Verification Pipeline 통합 동작 확인
 
@@ -270,7 +270,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 모든 도구 응답에 `execution_time_ms` 포함
     - _Requirements: 10.1, 10.4_
 
-- [ ] 8. Phase 4 Checkpoint
+- [x] 8. Phase 4 Checkpoint
   - Ensure all tests pass, ask the user if questions arise.
   - Human Review Gate + HDD 생성 + 마크다운 출판 통합 동작 확인
 
@@ -325,7 +325,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 모든 신규 리소스 필수 태그 최종 확인
     - _Requirements: 13.6, 15.8_
 
-- [ ] 10. Final Checkpoint - 전체 테스트 통과 확인
+- [x] 10. Final Checkpoint - 전체 테스트 통과 확인
   - Ensure all tests pass, ask the user if questions arise.
   - `cd environments/app-layer/bedrock-rag && terraform validate`
   - `cd tests && go test -v ./properties/ -run TestEnhancedRagOptimization -count=1`
@@ -381,12 +381,12 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - ECR 컨테이너 이미지 배포 전환
     - _Requirements: 16.13_
 
-- [ ] 12. Phase 6 Checkpoint
+- [x] 12. Phase 6 Checkpoint
   - Ensure all tests pass, ask the user if questions arise.
   - Neptune Cluster + 관계 추출 + 3저장소 통합 질의 동작 확인
   - `terraform validate` (knowledge-graph 환경)
 
-- [ ] 13. Final Checkpoint - 전체 6 Phase 통합 테스트
+- [x] 13. Final Checkpoint - 전체 6 Phase 통합 테스트
   - 전체 시스템 통합 동작 확인
   - `cd environments/app-layer/bedrock-rag && terraform validate`
   - `cd environments/app-layer/knowledge-graph && terraform validate`
@@ -470,7 +470,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - **Validates: Requirements 19.4**
     - 2개 이상 도메인 시 CDC claim 생성, 1개 이하 시 CDC claim 미생성 검증
 
-- [ ] 16. Phase 7 Checkpoint — Supply Side 파서 기본 검증
+- [x] 16. Phase 7 Checkpoint — Supply Side 파서 기본 검증
   - Ensure all tests pass, ask the user if questions arise.
   - `package_extractor.py` 함수/태스크 추출 + flit 구조 + 중첩 struct 동작 확인
   - `generate_block_parser.py` 토폴로지 패턴 인식 동작 확인
@@ -596,7 +596,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - _Requirements: 17.5, 18.5, 19.5, 22.5, 23.1, 26.1, 26.3_
 
 
-- [ ] 22. Phase 7 Final Checkpoint — 전체 Phase 7 통합 테스트
+- [x] 22. Phase 7 Final Checkpoint — 전체 Phase 7 통합 테스트
   - Ensure all tests pass, ask the user if questions arise.
   - Supply Side: package_extractor.py (함수/태스크 + flit + 중첩 struct), generate_block_parser.py, always_block_parser.py, bitwidth_evaluator.py 동작 확인
   - Consumption Side: 대형 모듈 청킹 + 질의 유형별 동적 Boost 동작 확인
@@ -605,7 +605,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
   - `cd tests && go test -v ./properties/ -run TestEnhancedRagOptimization -count=1` (Phase 7 Property 26~39 포함)
 
 
-- [ ] 23. Phase 7 Final Checkpoint - 전체 7 Phase 통합 테스트
+- [x] 23. Phase 7 Final Checkpoint - 전체 7 Phase 통합 테스트
   - 전체 시스템 통합 동작 확인 (Phase 1~7)
   - `cd environments/app-layer/bedrock-rag && terraform validate`
   - `cd environments/app-layer/knowledge-graph && terraform validate`
@@ -631,6 +631,15 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
 - 품질 목표: v8 68% → v9 75~78% Content Fidelity (RTL 단독 천장)
 - Confluence/Jira는 Cloud 환경이므로 별도 연동 방식 검토 (이 스펙 범위 외)
 - Codebeamer 연동은 Spec 6 (codebeamer-aspice-rag-integration)에서 처리
+- Phase 9 신규 파일 1개: `port_binding_parser.py`
+- Phase 9 수정 파일: `handler.py`, `index.py`, `server.js`, `api-gateway.tf`, `interactive_schematic.html`
+- Phase 9 Property 테스트 5개 추가 (Property 40~44)
+- Phase 9 요구사항 5개 추가 (요구사항 30~34)
+- 포트 바인딩 파서는 `#(…)` 파라미터 블록과 `(…)` 포트 블록을 구분하여 포트만 추출
+- Graph Export API는 Read-Only Neptune IAM Role 사용 (기존 Phase 6 인프라 재활용)
+- Schematic Viewer는 온프렘 네트워크 없이도 내장 데이터로 동작 (API 호출은 선택적)
+- HDD merge 실명 복구는 3단계 소스 우선순위로 placeholder를 실제 이름으로 치환
+- Topic 전파 재생성은 max_propagation_depth=5로 무한 루프 방지
 
 
 
@@ -751,8 +760,158 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
   - `cd environments/app-layer/bedrock-rag/rtl_parser_src && py -m pytest -v`
 
 
-- [ ] 28. Final Checkpoint - 전체 8 Phase 통합 테스트
+- [x] 28. Final Checkpoint - 전체 8 Phase 통합 테스트
   - 전체 시스템 통합 동작 확인 (Phase 1~8)
   - `cd environments/app-layer/bedrock-rag && terraform validate`
   - Content Fidelity 목표: v9.1 74% → v9.2 80%+ 달성 여부 확인
   - 5개 갭 해소 확인: EP Table (+3pp), NOC2AXI+repeater (+5pp), clock_routing+dispatch (+5pp)
+
+
+- [x] 29. Phase 9: Port Binding Parser + Neptune CONNECTS_TO 엣지 적재
+  - [x] 29.1 Port Binding Parser 구현 (`environments/app-layer/bedrock-rag/rtl_parser_src/port_binding_parser.py` — 신규)
+    - `extract_port_bindings(rtl_content, module_name, file_path, pipeline_id)` 메인 함수
+    - 인스턴스화 구문 식별: `module_type [#(params)] instance_name (port_connections);` 패턴
+    - `#(…)` 블록(파라미터)과 `(…)` 블록(포트) 분리 → 포트 블록만 파싱
+    - `.port_name(signal_expr)` 정규식 추출: port_name, signal_expr, bit_range 분리
+    - `.port_name()` (unconnected) 감지 → `is_unconnected=true`
+    - concatenation 바인딩 `.port({sig_a, sig_b})` 인식 → `constituent_signals` 배열 분해
+    - 동일 instance 내 동일 port_name 중복 시 첫 번째만 채택 + WARNING 로그
+    - claim_text 형식: `"Instance '{instance_name}' of module '{module_type}' binds port '{port_name}' to signal '{signal_expr}'"`
+    - `parser_source='port_binding_parser'` 설정
+    - `PARSER_PORT_BINDING_ENABLED` 환경 변수 feature flag (기본값 `true`)
+    - _Requirements: 30.1, 30.2, 30.3, 30.4, 30.5, 30.6, 30.7, 30.8, 30.9_
+
+  - [x] 29.2 Neptune CONNECTS_TO 엣지 적재 확장 (`environments/app-layer/bedrock-rag/rtl_parser_src/handler.py` 수정)
+    - `_load_port_bindings_to_neptune(bindings, module_name)` 함수 추가
+    - 각 바인딩에 대해 Port 노드 생성/MERGE: `{instance_name}.{port_name}` (속성: instance_name, module_type, port_name, direction, width)
+    - Signal 노드 생성/MERGE: `signal_expr` (속성: name, scope=module_name, width)
+    - CONNECTS_TO 엣지 생성: Port → Signal (속성: bit_range, source_file, line_number, is_concatenation)
+    - concatenation 바인딩: 대표 Signal 노드 + constituent_signals 각각에 보조 CONNECTS_TO 엣지 (`is_constituent=true`)
+    - 동일 `(instance_name, port_name)` 노드 MERGE로 중복 방지 (openCypher MERGE)
+    - Neptune 적재 실패 시 graceful degradation: S3/OpenSearch 인덱싱 계속 + `neptune_load_failed: true` 로그
+    - `_process_rtl_file()` 함수에서 port_binding_parser 호출 후 Neptune 적재 호출 통합
+    - _Requirements: 31.1, 31.2, 31.3, 31.4, 31.5, 31.6, 31.7, 31.8_
+
+  - [ ]* 29.3 Property 40 테스트 작성: Port Binding 추출 완전성
+    - **Property 40: Port Binding 추출 완전성**
+    - **Validates: Requirements 30.1, 30.2, 30.4, 30.8**
+    - `.port(signal)` 패턴 추출, 파라미터 블록 제외, is_unconnected=false 시 signal_expr 비어있지 않음, port_name 비어있지 않음 검증
+
+  - [ ]* 29.4 Property 41 테스트 작성: Neptune CONNECTS_TO 적재 보존
+    - **Property 41: Neptune CONNECTS_TO 적재 보존**
+    - **Validates: Requirements 31.1, 31.7, 31.8**
+    - is_unconnected=false 바인딩 수 == CONNECTS_TO 엣지 수, MERGE로 중복 미생성, Neptune 실패 시 OpenSearch 인덱싱 계속 검증
+
+  - [x] 29.5 Port Binding Parser 단위 테스트 작성 (`environments/app-layer/bedrock-rag/rtl_parser_src/test_port_binding_parser.py` — 신규)
+    - 기본 `.port(signal)` 추출 검증
+    - `.port(signal[3:0])` bit_range 추출 검증
+    - `.port()` unconnected 감지 검증
+    - `.port({a, b, c})` concatenation 분해 검증
+    - `#(.PARAM(val))` 파라미터 블록 제외 검증
+    - 동일 port_name 중복 시 첫 번째만 채택 검증
+    - feature flag off → claim 0건 검증
+    - claim_text 형식 정확성 검증
+    - _Requirements: 30.1, 30.2, 30.3, 30.4, 30.5, 30.8, 30.9_
+
+
+- [x] 30. Phase 9: Graph Export API + Interactive Schematic Viewer
+  - [x] 30.1 Graph Export API 구현 (`environments/app-layer/bedrock-rag/lambda_src/index.py` 수정)
+    - `graph_export(event)` 함수 추가
+    - 입력 파라미터: `scope`(필수, "chip"/"module"/"signal"), `root_module`(필수), `depth`(선택, 기본3), `signal_filter`(선택, scope="signal" 시 필수)
+    - `scope="chip"`: root_module의 직접 자식 인스턴스 + 모듈 간 CONNECTS_TO 엣지 aggregation
+    - `scope="module"`: root_module 내부 인스턴스/포트/바인딩 상세 그래프
+    - `scope="signal"`: signal_filter 매칭 신호의 전파 경로 (trace_signal_path 로직 재사용)
+    - 응답 JSON: `{nodes: [{id, label, type, properties}], edges: [{id, source, target, label, properties}], metadata: {scope, root_module, depth, node_count, edge_count, generated_at, neptune_fallback, truncated}}`
+    - 노드 상한 1,000개 (degree 기준 상위), 초과 시 `truncated=true`
+    - Neptune 타임아웃/실패 시 빈 그래프 + `neptune_fallback=true` 반환 (HTTP 200)
+    - Read-Only Neptune IAM Role 사용
+    - `handler()` 라우팅에 POST `/rag/graph-export` 추가
+    - _Requirements: 32.1, 32.2, 32.3, 32.4, 32.5, 32.6, 32.7, 32.8_
+
+  - [x] 30.2 API Gateway 라우트 추가 (`environments/app-layer/bedrock-rag/api-gateway.tf` 수정)
+    - `/rag/graph-export` POST 라우트 추가
+    - `/rag/hdd/regenerate-stale` POST 라우트 추가 (Task 31.3용)
+    - _Requirements: 32.9_
+
+  - [x] 30.3 MCP Bridge graph_export 도구 추가 (`mcp-bridge/server.js` 수정)
+    - `graph_export` 도구 추가: scope(필수), root_module(필수), depth(선택), signal_filter(선택) → POST /rag/graph-export
+    - 응답에 `execution_time_ms` 포함
+    - _Requirements: 32.1, 32.5_
+
+  - [x] 30.4 Interactive Schematic Viewer 확장 (`docs/diagrams/interactive_schematic.html` 수정)
+    - 상단 컨트롤 바 추가: API Endpoint 입력, root_module, scope 선택(chip/module/signal), depth, signal_filter, "Load from API" 버튼
+    - 3-view 모드 전환: Chip View / Module View / Signal View
+    - 노드 타입별 색상: Module(white), Port(yellow), Signal(blue), ClockDomain(purple), Parameter(green)
+    - 포트 방향별 테두리 스타일: input(실선), output(점선), inout(이중선)
+    - 노드 클릭 → 연결 하이라이트 + tooltip에 properties 전체 표시
+    - `neptune_fallback=true` / `truncated=true` 시 경고 배너 표시
+    - 초기 로드: 내장 프로토타입 데이터로 렌더링 (기존 nodes/links 유지)
+    - D3.js 로컬 복사본 선택적 참조 구조 (`docs/diagrams/vendor/d3.v7.min.js` fallback)
+    - _Requirements: 33.1, 33.2, 33.3, 33.4, 33.5, 33.6, 33.7, 33.8, 33.9_
+
+  - [ ]* 30.5 Property 42 테스트 작성: Graph Export API 응답 구조
+    - **Property 42: Graph Export API 응답 구조**
+    - **Validates: Requirements 32.1, 32.5, 32.6, 32.7**
+    - 응답에 nodes/edges/metadata 필드 존재, scope 유효값 검증, 노드 상한 1000개, Neptune 실패 시 neptune_fallback=true + 빈 그래프 검증
+
+
+- [x] 31. Phase 9: HDD Merge 개선 — 실명 복구 + Topic 전파
+  - [x] 31.1 HDD Merger 실명 복구 구현 (`environments/app-layer/bedrock-rag/lambda_src/index.py` 수정)
+    - `_resolve_placeholders(markdown_text, claims_used, topic)` 함수 추가
+    - placeholder 토큰 정규식: `r'\{(MODULE|INSTANCE|SIGNAL|PORT)_[A-Z0-9_]+\}'`
+    - 복구 소스 우선순위: ① claim의 parser_source별 원본 이름 → ② RTL_OpenSearch_Index 검색 → ③ Claim_DB statement 원본
+    - 동일 토큰 다중 후보 시: confidence 최고 → 동률 시 최신 created_at 선택
+    - 복구 불가 시 HTML 주석 `<!-- NAME_RESOLUTION_FAILED: {TOKEN} -->` 삽입
+    - 응답 metadata에 `unresolved_placeholders` 배열 포함
+    - `generate_hdd_section()` 함수 내에서 마크다운 생성 후 `_resolve_placeholders()` 호출 통합
+    - _Requirements: 34.1, 34.2, 34.3_
+
+  - [x] 31.2 HDD Topic 전파 구현 (`environments/app-layer/bedrock-rag/lambda_src/index.py` 수정)
+    - `generate_hdd_section()` 함수 확장: 생성된 HDD 섹션에 `parent_topics` 메타데이터 저장
+    - `_mark_stale_parents(topic)` 함수 추가: 해당 topic을 parent_topics에 포함하는 상위 섹션의 `stale=true` + `last_child_update_at` 설정
+    - `approve_claim()` 함수 확장: claim approve 시 해당 topic의 HDD 섹션 stale 마킹 호출
+    - `max_propagation_depth=5` 상한 적용 (무한 루프 방지)
+    - 전파 체인 CloudWatch 구조화 로그: `{event: "hdd_propagation", root_topic, propagated_to, depth, duration_ms}`
+    - _Requirements: 34.4, 34.5, 34.7, 34.10_
+
+  - [x] 31.3 Stale HDD 일괄 재생성 엔드포인트 구현 (`environments/app-layer/bedrock-rag/lambda_src/index.py` 수정)
+    - `regenerate_stale_hdd(event)` 함수 추가
+    - Seoul_S3 `published/` 접두사에서 `stale=true` 메타데이터를 가진 섹션 스캔
+    - 각 stale 섹션에 대해 `generate_hdd_section()` 재호출 + `_resolve_placeholders()` 적용
+    - 응답: `{sections_regenerated, sections_skipped, unresolved_placeholder_count, execution_time_ms}`
+    - `handler()` 라우팅에 POST `/rag/hdd/regenerate-stale` 추가
+    - _Requirements: 34.6, 34.9_
+
+  - [x] 31.4 MCP Bridge regenerate_stale_hdd 도구 추가 (`mcp-bridge/server.js` 수정)
+    - `regenerate_stale_hdd` 도구 추가: 파라미터 없음 → POST /rag/hdd/regenerate-stale
+    - 응답에 `execution_time_ms`, `sections_regenerated`, `sections_skipped`, `unresolved_placeholder_count` 포함
+    - _Requirements: 34.8_
+
+  - [ ]* 31.5 Property 43 테스트 작성: Placeholder 복구 완전성
+    - **Property 43: Placeholder 복구 완전성**
+    - **Validates: Requirements 34.1, 34.2, 34.9**
+    - 재생성 후 마크다운에 `{MODULE_*}`/`{INSTANCE_*}`/`{SIGNAL_*}`/`{PORT_*}` 패턴 미존재 또는 HTML 주석 형태만 존재, unresolved_placeholders 배열 정확성 검증
+
+  - [ ]* 31.6 Property 44 테스트 작성: Topic 전파 무한 루프 방지
+    - **Property 44: Topic 전파 무한 루프 방지**
+    - **Validates: Requirements 34.5, 34.7**
+    - 순환 parent_topics 구조에서 max_propagation_depth=5 초과 시 재생성 건너뛰기 + WARNING 로그, stale 마킹 정확성 검증
+
+
+- [x] 32. Phase 9 Checkpoint — 전체 Phase 9 통합 테스트
+  - Ensure all tests pass, ask the user if questions arise.
+  - Port Binding Parser: `.port(signal)` 추출 + concatenation + unconnected 동작 확인
+  - Neptune CONNECTS_TO: 포트 바인딩 → 엣지 적재 + MERGE 중복 방지 동작 확인
+  - Graph Export API: 3가지 scope 모드 + 노드 상한 + fallback 동작 확인
+  - Schematic Viewer: 3-view 전환 + API 연동 + 경고 배너 동작 확인
+  - HDD Merge: placeholder 복구 + topic 전파 + stale 재생성 동작 확인
+  - `cd environments/app-layer/bedrock-rag/rtl_parser_src && py -m pytest -v`
+  - `cd environments/app-layer/bedrock-rag && terraform validate`
+
+
+- [ ] 33. Final Checkpoint - 전체 9 Phase 통합 테스트
+  - 전체 시스템 통합 동작 확인 (Phase 1~9)
+  - `cd environments/app-layer/bedrock-rag && terraform validate`
+  - `cd environments/app-layer/knowledge-graph && terraform validate`
+  - Content Fidelity 목표: v9.2 80% → v9.3 85~88% 달성 여부 확인
+  - 포트 바인딩 기반 신호 추적 정확도 확인 (trace_signal_path 개선)

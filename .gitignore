@@ -82,3 +82,5 @@ response.json
 # Terraform plan files
 *.tfplan
 **/tfplan
+.tmp_pypdf/
+.claude/
