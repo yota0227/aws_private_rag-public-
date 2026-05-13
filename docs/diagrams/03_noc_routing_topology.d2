@@ -1,0 +1,81 @@
+# NoC 2D Mesh Routing Topology
+# Render: d2 03_noc_routing_topology.d2 03_noc_routing_topology.svg
+
+direction: down
+
+title: {
+  label: "NoC 4x5 Mesh — Routing & Repeaters"
+  style.font-size: 20
+}
+
+# Y=4 row (NIU)
+n04: "NIU_NE (corner)" { style.fill: "#FFD700" }
+n14: "NIU_RTR_NE (composite)" { style.fill: "#FFA500" }
+n24: "NIU_RTR_NW (composite)" { style.fill: "#FFA500" }
+n34: "NIU_NW (corner)" { style.fill: "#FFD700" }
+
+# Y=3 row (Dispatch/Router + Repeaters)
+n03: "DISPATCH_E" { style.fill: "#90EE90" }
+n13: "ROUTER" { style.fill: "#D3D3D3" }
+n23: "ROUTER" { style.fill: "#D3D3D3" }
+n33: "DISPATCH_W" { style.fill: "#90EE90" }
+
+# Y=2 row (Tensix)
+n02: "TENSIX" { style.fill: "#87CEEB" }
+n12: "TENSIX" { style.fill: "#87CEEB" }
+n22: "TENSIX" { style.fill: "#87CEEB" }
+n32: "TENSIX" { style.fill: "#87CEEB" }
+
+# Y=1 row (Tensix)
+n01: "TENSIX" { style.fill: "#87CEEB" }
+n11: "TENSIX" { style.fill: "#87CEEB" }
+n21: "TENSIX" { style.fill: "#87CEEB" }
+n31: "TENSIX" { style.fill: "#87CEEB" }
+
+# Y=0 row (Tensix)
+n00: "TENSIX" { style.fill: "#87CEEB" }
+n10: "TENSIX" { style.fill: "#87CEEB" }
+n20: "TENSIX" { style.fill: "#87CEEB" }
+n30: "TENSIX" { style.fill: "#87CEEB" }
+
+# Horizontal links
+n04 -- n14
+n14 -- n24
+n24 -- n34
+n03 -- n13
+n13 -- n23
+n23 -- n33
+n02 -- n12
+n12 -- n22
+n22 -- n32
+n01 -- n11
+n11 -- n21
+n21 -- n31
+n00 -- n10
+n10 -- n20
+n20 -- n30
+
+# Vertical links
+n00 -- n01
+n01 -- n02
+n02 -- n03
+n03 -- n04
+n10 -- n11
+n11 -- n12
+n12 -- n13
+n13 -- n14
+n20 -- n21
+n21 -- n22
+n22 -- n23
+n23 -- n24
+n30 -- n31
+n31 -- n32
+n32 -- n33
+n33 -- n34
+
+# Routing info
+routing: {
+  label: "Routing: DIM_ORDER | TENDRIL | DYNAMIC\nEnableDynamicRouting = 1\nFlit arrays: 4x5x2x2\nInter-column repeaters at Y=3,4"
+  style.fill: "#F0F0F0"
+  style.font-size: 12
+}

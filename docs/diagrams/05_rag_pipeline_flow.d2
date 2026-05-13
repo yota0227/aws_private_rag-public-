@@ -1,0 +1,76 @@
+# RAG Pipeline Data Flow (v9.2)
+# Render: d2 05_rag_pipeline_flow.d2 05_rag_pipeline_flow.svg
+
+direction: right
+
+title: {
+  label: "RTL RAG Pipeline v9.2 — Data Flow"
+  style.font-size: 20
+}
+
+# Source
+rtl: {
+  label: "RTL Sources\n(.sv/.v/.svh)\n9,465 files"
+  style.fill: "#E8E8E8"
+  style.bold: true
+}
+
+# Stage 1: Parsing
+parsers: {
+  label: "Stage 1-2: Parsing (8 parsers)"
+  style.fill: "#FFF8DC"
+
+  basic: "Basic Module Parser\n(module_parse)" { style.fill: "#87CEEB" }
+  pkg: "Package Parser\n(localparam/enum/struct/func)" { style.fill: "#87CEEB" }
+  port: "Port Classifier\n(9 categories)" { style.fill: "#87CEEB" }
+  gen: "Generate Block Parser\n(topology/position)" { style.fill: "#90EE90" }
+  always: "Always Block Parser\n(clock domain/CDC)" { style.fill: "#90EE90" }
+  wire: "Wire Declaration Parser\n(array/struct/purpose)" { style.fill: "#98FB98" }
+  bitwidth: "Bitwidth Evaluator\n(SizeX-1 -> 3)" { style.fill: "#98FB98" }
+  chunk: "Large Module Chunking\n(50+ ports -> 3 sub)" { style.fill: "#98FB98" }
+}
+
+# Stage 3: Indexing
+indexing: {
+  label: "Stage 3: Vectorize + Index"
+  style.fill: "#E6E6FA"
+
+  embed: "Titan Embeddings v2\n(1024-dim)" { style.fill: "#DDA0DD" }
+  os: "OpenSearch Serverless\n(hybrid search)" { style.fill: "#DDA0DD" }
+  neptune: "Neptune Graph DB\n(relationships)" { style.fill: "#DDA0DD" }
+}
+
+# Stage 4: Retrieval
+retrieval: {
+  label: "Stage 4: Search + Generate"
+  style.fill: "#F0FFF0"
+
+  boost: "Dynamic Boost\n(5 query types)" { style.fill: "#90EE90" }
+  verify: "Verification Pipeline\n(3-store parallel)" { style.fill: "#90EE90" }
+  ground: "Hybrid Grounding\n(strict/hybrid/free)" { style.fill: "#90EE90" }
+}
+
+# Output
+output: {
+  label: "HDD Output\n80%+ Content Fidelity"
+  style.fill: "#FFD700"
+  style.bold: true
+}
+
+# Flow
+rtl -> parsers: "S3 trigger"
+parsers -> indexing: "claims + records"
+indexing -> retrieval: "vector + keyword + graph"
+retrieval -> output: "Claude generation"
+
+# Quality loop
+quality: {
+  label: "Quality Infrastructure"
+  style.fill: "#FFF0F0"
+  flags: "Feature Flags\n(PARSER_*_ENABLED)"
+  metrics: "CloudWatch Metrics\n(ParserHitRatio)"
+  contribution: "parser_contribution API"
+}
+
+output -> quality: "feedback" { style.stroke-dash: 3 }
+quality -> parsers: "A/B test" { style.stroke-dash: 3 }

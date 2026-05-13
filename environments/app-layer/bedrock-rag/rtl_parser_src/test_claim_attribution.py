@@ -12,14 +12,25 @@ class TestFilterClaimTargets:
             {"module_name": "tt_noc_router"},
             {"module_name": "tt_noc_repeater"},
             {"module_name": "tt_noc_rr_arb"},
+            {"module_name": "tt_noc_mesh_ctrl"},
+            {"module_name": "tt_noc_vc_alloc"},
+            {"module_name": "tt_noc_sw_alloc"},
+            {"module_name": "tt_noc_input_port"},
+            {"module_name": "tt_noc_output_port"},
+            {"module_name": "tt_noc_crossbar"},
+            {"module_name": "tt_noc_credit_mgr"},
             {"module_name": "tt_fds_dispatch_reg_inner"},
             {"module_name": "tt_edc1_biu_soc_apb4_wrap"},
+            {"module_name": "tt_generic_reg_inner"},
         ]
         result = _filter_claim_targets(modules, "NoC")
         names = [m["module_name"] for m in result]
         assert "tt_noc_router" in names
-        assert "tt_fds_dispatch_reg_inner" not in names
-        assert "tt_edc1_biu_soc_apb4_wrap" not in names
+        # tt_fds_ and tt_edc1_biu_ are whitelisted functional blocks — always included
+        assert "tt_fds_dispatch_reg_inner" in names
+        assert "tt_edc1_biu_soc_apb4_wrap" in names
+        # generic _reg_inner without whitelist prefix is excluded (enough datapath >= 10)
+        assert "tt_generic_reg_inner" not in names
 
     def test_fallback_when_few_datapath(self):
         modules = [

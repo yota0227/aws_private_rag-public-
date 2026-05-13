@@ -1,0 +1,98 @@
+# Clock Distribution Mesh
+# Render: d2 06_clock_distribution.d2 06_clock_distribution.svg
+
+direction: down
+
+title: {
+  label: "Clock Distribution — trinity_clock_routing_t[4][5] Mesh"
+  style.font-size: 20
+}
+
+# Clock sources (top-level inputs)
+sources: {
+  label: "Clock Sources (Top-Level Inputs)"
+  style.fill: "#E8E8E8"
+
+  i_axi_clk: "i_axi_clk (1-bit)\nAXI domain" { style.fill: "#FFD700" }
+  i_noc_clk: "i_noc_clk (1-bit)\nNoC domain" { style.fill: "#FFA500" }
+  i_ai_clk: "i_ai_clk[3:0]\nAI domain (per-column)" { style.fill: "#87CEEB" }
+  i_dm_clk: "i_dm_clk[3:0]\nDM domain (per-column)" { style.fill: "#90EE90" }
+}
+
+# Clock routing struct
+struct: {
+  label: "trinity_clock_routing_t (8 fields)"
+  style.fill: "#F5F5F5"
+
+  f1: "ai_clk" { style.fill: "#87CEEB" }
+  f2: "noc_clk" { style.fill: "#FFA500" }
+  f3: "dm_clk" { style.fill: "#90EE90" }
+  f4: "ai_clk_reset_n" { style.fill: "#B0E0E6" }
+  f5: "noc_clk_reset_n" { style.fill: "#FFE4B5" }
+  f6: "dm_uncore_clk_reset_n" { style.fill: "#98FB98" }
+  f7: "tensix_reset_n" { style.fill: "#DDA0DD" }
+  f8: "power_good" { style.fill: "#FFB6C1" }
+}
+
+# 4x5 mesh
+mesh: {
+  label: "clock_routing_in/out [SizeX-1:0][SizeY-1:0] = 4x5 mesh"
+  style.fill: "#FFFACD"
+
+  c00: "(0,0)" { style.fill: "#87CEEB" }
+  c10: "(1,0)" { style.fill: "#87CEEB" }
+  c20: "(2,0)" { style.fill: "#87CEEB" }
+  c30: "(3,0)" { style.fill: "#87CEEB" }
+
+  c01: "(0,1)" { style.fill: "#87CEEB" }
+  c11: "(1,1)" { style.fill: "#87CEEB" }
+  c21: "(2,1)" { style.fill: "#87CEEB" }
+  c31: "(3,1)" { style.fill: "#87CEEB" }
+
+  c02: "(0,2)" { style.fill: "#87CEEB" }
+  c12: "(1,2)" { style.fill: "#87CEEB" }
+  c22: "(2,2)" { style.fill: "#87CEEB" }
+  c32: "(3,2)" { style.fill: "#87CEEB" }
+
+  c03: "(0,3)" { style.fill: "#90EE90" }
+  c13: "(1,3)" { style.fill: "#D3D3D3" }
+  c23: "(2,3)" { style.fill: "#D3D3D3" }
+  c33: "(3,3)" { style.fill: "#90EE90" }
+
+  c04: "(0,4)" { style.fill: "#FFD700" }
+  c14: "(1,4)" { style.fill: "#FFA500" }
+  c24: "(2,4)" { style.fill: "#FFA500" }
+  c34: "(3,4)" { style.fill: "#FFD700" }
+
+  # Column connections (clock_routing_in -> tile -> clock_routing_out)
+  c00 -- c01
+  c01 -- c02
+  c02 -- c03
+  c03 -- c04
+  c10 -- c11
+  c11 -- c12
+  c12 -- c13
+  c13 -- c14
+  c20 -- c21
+  c21 -- c22
+  c22 -- c23
+  c23 -- c24
+  c30 -- c31
+  c31 -- c32
+  c32 -- c33
+  c33 -- c34
+}
+
+# Flow
+sources -> struct: "packed into struct"
+struct -> mesh: "distributed to each tile"
+
+# Infrastructure
+infra: {
+  label: "Clock Infrastructure Modules"
+  style.fill: "#F0F0F0"
+  buf: "tt_clkbuf (buffer)"
+  gate: "tt_clkgater (gating)"
+  adv: "tt_clk_gater (hysteresis)"
+  div: "tt_smn_clkdiv (noc_clk divider)"
+}

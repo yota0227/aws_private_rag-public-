@@ -22,6 +22,8 @@ Endpoints:
   POST /rag/trace-signal-path       - Neptune 신호 전파 경로 추적
   POST /rag/find-instantiation-tree - Neptune 모듈 인스턴스화 트리 조회
   POST /rag/find-clock-crossings    - Neptune 클럭 도메인 크로싱 조회
+  POST /rag/graph-export            - Neptune 그래프 부분집합 JSON 내보내기
+  POST /rag/hdd/regenerate-stale    - Stale HDD 일괄 재생성
 """
 import json
 import os
@@ -93,6 +95,8 @@ def handler(event, context):
         return ingest_claims(event, context)
     if event.get('action') == 'cross_check_claims':
         return cross_check_claims(event, context)
+    if event.get('action') == 'parser_contribution':
+        return parser_contribution(event, context)
 
 
     logger.info(f"Event path: {event.get('path')}, method: {event.get('httpMethod')}")
@@ -193,6 +197,14 @@ def handler(event, context):
             return find_instantiation_tree(event)
         if '/find-clock-crossings' in path and method == 'POST':
             return find_clock_crossings(event)
+
+        # Graph Export API (Phase 9 — v9.3)
+        if '/graph-export' in path and method == 'POST':
+            return graph_export(event)
+
+        # HDD Stale Regeneration (Phase 9 — v9.3, Requirements 34.6)
+        if '/hdd/regenerate-stale' in path and method == 'POST':
+            return regenerate_stale_hdd(event)
 
         return response(404, {'error': f'Not found: {method} {path}'})
 
@@ -728,7 +740,7 @@ def list_documents(event=None):
 
 def handle_query(event):
     """RAG 질의 처리 — Verification Pipeline 우선 실행, 폴백 시 Bedrock KB 검색
-    Requirements: 9.1, 9.7
+    Requirements: 9.1, 9.7, 25.7
     """
     start_time = time.time()
     body = parse_body(event)
@@ -743,10 +755,15 @@ def handle_query(event):
         })
 
     variant = body.get('variant', None)
+    grounding_mode = body.get('grounding_mode', 'hybrid')
+
+    # grounding_mode 유효성 검증 (Requirements 25.7)
+    if grounding_mode not in VALID_GROUNDING_MODES:
+        return response(400, {'error': f'invalid grounding_mode: {grounding_mode}. Valid: {sorted(VALID_GROUNDING_MODES)}'})
 
     # Verification Pipeline 우선 실행 (Task 5.4)
     try:
-        pipeline_result = verification_pipeline(query, variant=variant)
+        pipeline_result = verification_pipeline(query, variant=variant, grounding_mode=grounding_mode)
         response_time_ms = int((time.time() - start_time) * 1000)
 
         # 구조화 로그
@@ -755,6 +772,7 @@ def handle_query(event):
             'query_length': len(query),
             'response_time_ms': response_time_ms,
             'verification_pipeline': True,
+            'grounding_mode': grounding_mode,
             'fallback': pipeline_result.get('verification_metadata', {}).get('fallback', False),
             'claims_used': len(pipeline_result.get('verification_metadata', {}).get('claims_used', []))
         }))
@@ -769,9 +787,18 @@ def handle_query(event):
             'metadata': {
                 'search_type': 'verification_pipeline',
                 'query_length': len(query),
-                'response_time_ms': response_time_ms
+                'response_time_ms': response_time_ms,
+                'grounding_mode': grounding_mode
             }
         }
+
+        # Grounding ratios for non-free modes (Requirements 25.4)
+        if grounding_mode != "free":
+            grounding_ratios = _calculate_grounding_ratios(pipeline_result.get('answer', ''))
+            result['grounded_ratio'] = grounding_ratios['grounded_ratio']
+            result['inferred_ratio'] = grounding_ratios['inferred_ratio']
+            if grounding_ratios['kb_coverage_warning']:
+                result['kb_coverage_warning'] = grounding_ratios['kb_coverage_warning']
 
         return response(200, result)
 
@@ -1747,6 +1774,14 @@ def approve_claim(event):
                 'approved_by': approved_by
             }))
 
+            # HDD Topic 전파: claim approve 시 해당 topic의 HDD 섹션 stale 마킹 (Requirements 34.5)
+            claim_topic = item.get('topic', '')
+            if claim_topic:
+                try:
+                    _mark_stale_parents(claim_topic)
+                except Exception as e:
+                    logger.warning(f"Failed to mark stale parents for topic {claim_topic}: {e}")
+
             return response(200, {
                 'claim_id': claim_id,
                 'version': int(expected_version),
@@ -1886,12 +1921,106 @@ def _is_publishable(claim):
 # 면책 조항 (Requirements 10.6)
 HDD_DISCLAIMER = "이 문서는 AI가 검증된 claim을 기반으로 자동 생성하였습니다"
 
+# KB 커버리지 경고 메시지 (Requirements 25.5)
+KB_COVERAGE_WARNING = "KB 커버리지가 낮습니다. 추가 RTL 파싱 또는 Spec 문서 업로드를 권장합니다."
+
+# Hybrid Grounding 유효 모드 (Requirements 25.6)
+VALID_GROUNDING_MODES = {"strict", "hybrid", "free"}
+
+
+def _build_grounding_prompt(grounding_mode, claims):
+    """Hybrid Grounding 모드에 따른 프롬프트 지시문 생성
+    Requirements: 25.1, 25.2, 25.3, 25.6, 25.8
+
+    Args:
+        grounding_mode: 'strict', 'hybrid', or 'free'
+        claims: list of claim dicts with 'claim_id' and 'statement'
+
+    Returns:
+        str: grounding instructions to append to the LLM prompt
+    """
+    if grounding_mode == "free":
+        return ""
+
+    # Build claim reference list for the LLM
+    claim_refs = ""
+    for i, claim in enumerate(claims):
+        claim_id = claim.get('claim_id', f'unknown_{i}')
+        statement = claim.get('statement', '')
+        claim_refs += f"  - claim_id: {claim_id} | statement: {statement}\n"
+
+    if grounding_mode == "strict":
+        return f"""
+[Hybrid Grounding 지시 — STRICT 모드]
+반드시 아래 claim 목록에서 직접 근거를 찾을 수 있는 내용만 작성하세요.
+각 문장 앞에 반드시 `[GROUNDED from claim:{{claim_id}}]` 태그를 붙이세요.
+KB에 근거가 없는 내용은 절대 작성하지 마세요.
+만약 제공된 claim으로 섹션을 작성하기에 정보가 부족하면, `[NOT IN KB] 이 섹션에 대한 KB 근거가 부족합니다.` 메시지만 출력하세요.
+
+사용 가능한 Claim 목록:
+{claim_refs}"""
+
+    # hybrid mode (default)
+    return f"""
+[Hybrid Grounding 지시 — HYBRID 모드]
+아래 claim 목록에서 직접 근거를 찾을 수 있는 내용에는 `[GROUNDED from claim:{{claim_id}}]` 태그를 붙이세요.
+LLM의 일반 지식으로 추론한 내용에는 `[INFERRED]` 태그를 붙이고, 문장 끝에 `※ Spec 확인 필요`를 추가하세요.
+
+형식 예시:
+- [GROUNDED from claim:abc-123] UCIE PHY의 LTSSM은 4개 상태를 가진다.
+- [INFERRED] 일반적으로 CDC 처리에는 2-stage synchronizer가 사용된다. ※ Spec 확인 필요
+
+사용 가능한 Claim 목록:
+{claim_refs}"""
+
+
+def _calculate_grounding_ratios(generated_text):
+    """생성된 텍스트에서 [GROUNDED]와 [INFERRED] 태그를 파싱하여 비율 계산
+    Requirements: 25.4, 25.5
+
+    Args:
+        generated_text: LLM이 생성한 텍스트
+
+    Returns:
+        dict with 'grounded_ratio', 'inferred_ratio', 'grounded_count',
+        'inferred_count', 'kb_coverage_warning' (str or None)
+    """
+    grounded_pattern = re.compile(r'\[GROUNDED(?:\s+from\s+claim:[^\]]+)?\]')
+    inferred_pattern = re.compile(r'\[INFERRED\]')
+
+    grounded_count = len(grounded_pattern.findall(generated_text))
+    inferred_count = len(inferred_pattern.findall(generated_text))
+
+    total = grounded_count + inferred_count
+
+    if total == 0:
+        # No tags found (e.g., free mode or LLM didn't follow instructions)
+        grounded_ratio = 0.0
+        inferred_ratio = 0.0
+    else:
+        grounded_ratio = round(grounded_count / total, 4)
+        inferred_ratio = round(inferred_count / total, 4)
+
+    # KB coverage warning (Requirements 25.5)
+    kb_coverage_warning = None
+    if inferred_ratio > 0.5:
+        kb_coverage_warning = KB_COVERAGE_WARNING
+
+    return {
+        'grounded_ratio': grounded_ratio,
+        'inferred_ratio': inferred_ratio,
+        'grounded_count': grounded_count,
+        'inferred_count': inferred_count,
+        'kb_coverage_warning': kb_coverage_warning
+    }
+
 
 def generate_hdd_section(event):
     """POST /rag/generate-hdd — HDD 섹션 자동 생성
-    Requirements: 10.1, 10.2, 10.3, 10.6
+    Requirements: 10.1, 10.2, 10.3, 10.6, 25.1~25.8
     - topic의 verified + approved claim 조회
     - Foundation_Model로 HDD 마크다운 생성
+    - Hybrid Grounding: grounding_mode (strict/hybrid/free) 지원
     - evidence 각주 포함 (include_evidence=true)
     - 면책 조항 자동 포함
     """
@@ -1899,11 +2028,14 @@ def generate_hdd_section(event):
     topic = body.get('topic', '')
     section_title = body.get('section_title', '')
     include_evidence = body.get('include_evidence', True)
+    grounding_mode = body.get('grounding_mode', 'hybrid')
 
     if not topic:
         return response(400, {'error': 'missing required parameter: topic'})
     if not section_title:
         return response(400, {'error': 'missing required parameter: section_title'})
+    if grounding_mode not in VALID_GROUNDING_MODES:
+        return response(400, {'error': f'invalid grounding_mode: {grounding_mode}. Valid: {sorted(VALID_GROUNDING_MODES)}'})
 
     table = dynamodb.Table(CLAIM_DB_TABLE)
 
@@ -1923,6 +2055,18 @@ def generate_hdd_section(event):
     # approved claim만 필터 (Requirements 14.5, 14.7)
     approved_claims = [c for c in result.get('Items', []) if _is_publishable(c)]
 
+    # strict 모드에서 claim 부족 시 [NOT IN KB] 메시지 (Requirements 25.8)
+    if not approved_claims and grounding_mode == "strict":
+        return response(200, {
+            'topic': topic,
+            'section_title': section_title,
+            'markdown': '[NOT IN KB] 이 섹션에 대한 KB 근거가 부족합니다.',
+            'claims_used': 0,
+            'grounding_mode': grounding_mode,
+            'grounded_ratio': 0.0,
+            'inferred_ratio': 0.0
+        })
+
     if not approved_claims:
         return response(403, {
             'error': 'claim requires approval for critical topic',
@@ -1930,7 +2074,7 @@ def generate_hdd_section(event):
             'message': 'No verified+approved claims found for this topic. Claims must have approval_status=approved.'
         })
 
-    # Foundation Model로 HDD 마크다운 생성 (Requirements 10.2)
+    # Foundation Model로 HDD 마크다운 생성 (Requirements 10.2, 25.1~25.3)
     try:
         bedrock_runtime = boto3.client('bedrock-runtime', region_name=BACKEND_REGION)
         model_id = os.environ.get('INVOKE_MODEL_ID', 'us.anthropic.claude-3-5-haiku-20241022-v1:0')
@@ -1940,6 +2084,7 @@ def generate_hdd_section(event):
         footnotes = []
         for i, claim in enumerate(approved_claims):
             claims_context += f"\n[Claim {i+1}] (confidence: {claim.get('confidence', 'N/A')})\n"
+            claims_context += f"  claim_id: {claim.get('claim_id', '')}\n"
             claims_context += f"  Statement: {claim.get('statement', '')}\n"
             for ev in claim.get('evidence', []):
                 footnote_idx = len(footnotes) + 1
@@ -1952,14 +2097,18 @@ def generate_hdd_section(event):
                 })
 
         evidence_instruction = ""
-        if include_evidence:
+        if include_evidence and grounding_mode == "free":
             evidence_instruction = "\n각 주장에 대해 [^N] 형식의 각주 번호를 포함하세요. 각주는 문서 끝에 배치됩니다."
+
+        # Hybrid Grounding 프롬프트 지시문 (Requirements 25.1, 25.2, 25.3)
+        grounding_instruction = _build_grounding_prompt(grounding_mode, approved_claims)
 
         prompt = f"""다음 검증된 claim들을 기반으로 HDD(Hardware Design Description) 섹션을 마크다운 형식으로 작성하세요.
 
 섹션 제목: {section_title}
 주제: {topic}
 {evidence_instruction}
+{grounding_instruction}
 
 검증된 Claim 목록:
 {claims_context}
@@ -1984,6 +2133,9 @@ def generate_hdd_section(event):
         logger.error(f"HDD section generation failed: {e}")
         return response(500, {'error': f'HDD section generation failed: {str(e)}'})
 
+    # Grounding ratio 계산 (Requirements 25.4, 25.5)
+    grounding_ratios = _calculate_grounding_ratios(markdown_content)
+
     # evidence 각주 추가 (Requirements 10.3)
     if include_evidence and footnotes:
         markdown_content += "\n\n---\n\n### 참조 (Evidence)\n\n"
@@ -1998,21 +2150,384 @@ def generate_hdd_section(event):
     # 면책 조항 자동 포함 (Requirements 10.6)
     markdown_content += f"\n\n---\n\n> ⚠️ {HDD_DISCLAIMER}\n"
 
+    # Placeholder 실명 복구 (Requirements 34.1, 34.2, 34.3)
+    markdown_content, unresolved_placeholders = _resolve_placeholders(markdown_content, approved_claims, topic)
+
+    # parent_topics 메타데이터 저장 (Requirements 34.4)
+    parent_topics = body.get('parent_topics', [])
+    _store_hdd_section_metadata(topic, section_title, parent_topics)
+
     logger.info(json.dumps({
         'event': 'hdd_section_generated',
         'topic': topic,
         'section_title': section_title,
         'claims_used': len(approved_claims),
-        'include_evidence': include_evidence
+        'include_evidence': include_evidence,
+        'grounding_mode': grounding_mode,
+        'grounded_ratio': grounding_ratios['grounded_ratio'],
+        'inferred_ratio': grounding_ratios['inferred_ratio'],
+        'unresolved_placeholders': len(unresolved_placeholders)
     }))
 
-    return response(200, {
+    result_body = {
         'topic': topic,
         'section_title': section_title,
         'markdown': markdown_content,
         'claims_used': len(approved_claims),
         'include_evidence': include_evidence,
-        'disclaimer': HDD_DISCLAIMER
+        'grounding_mode': grounding_mode,
+        'grounded_ratio': grounding_ratios['grounded_ratio'],
+        'inferred_ratio': grounding_ratios['inferred_ratio'],
+        'disclaimer': HDD_DISCLAIMER,
+        'unresolved_placeholders': unresolved_placeholders,
+        'parent_topics': parent_topics
+    }
+
+    # KB 커버리지 경고 (Requirements 25.5)
+    if grounding_ratios['kb_coverage_warning']:
+        result_body['kb_coverage_warning'] = grounding_ratios['kb_coverage_warning']
+
+    return response(200, result_body)
+
+
+def _resolve_placeholders(markdown_text, claims_used, topic):
+    """Placeholder 토큰을 실제 이름으로 복구 (Requirements 34.1, 34.2, 34.3)
+
+    복구 소스 우선순위:
+      ① claim의 parser_source별 원본 이름
+      ② RTL_OpenSearch_Index 검색
+      ③ Claim_DB statement 원본
+
+    동일 토큰 다중 후보 시: confidence 최고 → 동률 시 최신 created_at 선택
+    복구 불가 시: HTML 주석 <!-- NAME_RESOLUTION_FAILED: {TOKEN} --> 삽입
+
+    Returns:
+        (resolved_markdown, unresolved_placeholders_list)
+    """
+    PLACEHOLDER_PATTERN = re.compile(r'\{(MODULE|INSTANCE|SIGNAL|PORT)_[A-Z0-9_]+\}')
+
+    full_token_strings = list(set(m.group(0) for m in PLACEHOLDER_PATTERN.finditer(markdown_text)))
+
+    if not full_token_strings:
+        return markdown_text, []
+
+    unresolved = []
+    resolution_map = {}
+
+    for token in full_token_strings:
+        # Extract the token type and identifier
+        # e.g., {MODULE_UCIE_TOP} -> type=MODULE, id=UCIE_TOP
+        inner = token[1:-1]  # Remove { and }
+        parts = inner.split('_', 1)
+        token_type = parts[0] if parts else ''
+        token_id = parts[1] if len(parts) > 1 else ''
+
+        resolved_name = None
+        best_confidence = -1.0
+        best_created_at = ''
+
+        # Source ①: claim의 parser_source별 원본 이름
+        for claim in claims_used:
+            statement = claim.get('statement', '')
+            confidence = float(claim.get('confidence', 0))
+            created_at = claim.get('created_at', '')
+
+            candidate = None
+            if token_type == 'MODULE':
+                module_match = re.search(r"[Mm]odule\s+'([^']+)'", statement)
+                if module_match and token_id.lower() in module_match.group(1).lower().replace(' ', '_'):
+                    candidate = module_match.group(1)
+            elif token_type == 'INSTANCE':
+                inst_match = re.search(r"[Ii]nstance\s+'([^']+)'", statement)
+                if inst_match and token_id.lower() in inst_match.group(1).lower().replace(' ', '_'):
+                    candidate = inst_match.group(1)
+            elif token_type == 'SIGNAL':
+                sig_match = re.search(r"[Ss]ignal\s+'([^']+)'", statement)
+                if sig_match and token_id.lower() in sig_match.group(1).lower().replace(' ', '_'):
+                    candidate = sig_match.group(1)
+            elif token_type == 'PORT':
+                port_match = re.search(r"[Pp]ort\s+'([^']+)'", statement)
+                if port_match and token_id.lower() in port_match.group(1).lower().replace(' ', '_'):
+                    candidate = port_match.group(1)
+
+            if candidate:
+                if confidence > best_confidence or (confidence == best_confidence and created_at > best_created_at):
+                    resolved_name = candidate
+                    best_confidence = confidence
+                    best_created_at = created_at
+
+        # Source ②: RTL_OpenSearch_Index 검색
+        if not resolved_name and RTL_OPENSEARCH_ENDPOINT:
+            try:
+                rtl_lambda_name = os.environ.get('RTL_PARSER_LAMBDA_NAME', 'lambda-rtl-parser-seoul-dev')
+                search_query = token_id.replace('_', ' ')
+                invoke_payload = {
+                    'action': 'search',
+                    'query': search_query,
+                    'max_results': 3,
+                }
+                invoke_resp = lambda_client.invoke(
+                    FunctionName=rtl_lambda_name,
+                    InvocationType='RequestResponse',
+                    Payload=json.dumps(invoke_payload),
+                )
+                data = json.loads(invoke_resp['Payload'].read().decode('utf-8'))
+                results = data.get('results', [])
+
+                for r in results:
+                    candidate = None
+                    if token_type == 'MODULE' and r.get('module_name'):
+                        candidate = r['module_name']
+                    elif token_type == 'INSTANCE' and r.get('instance_list'):
+                        instances = r['instance_list'] if isinstance(r['instance_list'], list) else r['instance_list'].split(',')
+                        for inst in instances:
+                            inst_clean = inst.strip()
+                            if token_id.lower() in inst_clean.lower().replace(' ', '_'):
+                                candidate = inst_clean
+                                break
+                    elif token_type == 'PORT' and r.get('port_list'):
+                        ports = r['port_list'] if isinstance(r['port_list'], list) else r['port_list'].split(',')
+                        for port in ports:
+                            port_clean = port.strip()
+                            if token_id.lower() in port_clean.lower().replace(' ', '_'):
+                                candidate = port_clean
+                                break
+                    elif token_type == 'SIGNAL' and r.get('module_name'):
+                        candidate = r.get('module_name')
+
+                    if candidate:
+                        resolved_name = candidate
+                        break
+            except Exception as e:
+                logger.debug(f"RTL OpenSearch search failed for token {token}: {e}")
+
+        # Source ③: Claim_DB statement 원본
+        if not resolved_name:
+            for claim in claims_used:
+                statement = claim.get('statement', '')
+                name_matches = re.findall(r"'([^']+)'", statement)
+                for name in name_matches:
+                    if token_id.lower() in name.lower().replace(' ', '_').replace('-', '_'):
+                        confidence = float(claim.get('confidence', 0))
+                        created_at = claim.get('created_at', '')
+                        if confidence > best_confidence or (confidence == best_confidence and created_at > best_created_at):
+                            resolved_name = name
+                            best_confidence = confidence
+                            best_created_at = created_at
+
+        if resolved_name:
+            resolution_map[token] = resolved_name
+        else:
+            unresolved.append(token)
+
+    # Apply resolutions
+    for token, name in resolution_map.items():
+        markdown_text = markdown_text.replace(token, name)
+
+    # Insert HTML comments for unresolved placeholders (Requirements 34.2)
+    for token in unresolved:
+        markdown_text = markdown_text.replace(token, f'<!-- NAME_RESOLUTION_FAILED: {token} -->')
+
+    return markdown_text, unresolved
+
+
+def _store_hdd_section_metadata(topic, section_title, parent_topics):
+    """HDD 섹션 메타데이터를 S3에 저장 (Requirements 34.4)
+    published/ 접두사에 메타데이터 JSON 파일 저장
+    """
+    try:
+        metadata_key = f"published/.metadata/{topic.replace('/', '_')}__meta.json"
+        metadata = {
+            'topic': topic,
+            'section_title': section_title,
+            'parent_topics': parent_topics,
+            'stale': False,
+            'last_child_update_at': None,
+            'generated_at': datetime.utcnow().isoformat() + 'Z',
+            'source': 'system_generated'
+        }
+        s3_client.put_object(
+            Bucket=S3_BUCKET_SEOUL,
+            Key=metadata_key,
+            Body=json.dumps(metadata, ensure_ascii=False),
+            ContentType='application/json'
+        )
+        logger.info(f"HDD section metadata stored: {metadata_key}")
+    except Exception as e:
+        logger.warning(f"Failed to store HDD section metadata for {topic}: {e}")
+
+
+def _mark_stale_parents(topic, depth=0, max_depth=5):
+    """해당 topic을 parent_topics에 포함하는 상위 섹션의 stale=true 설정 (Requirements 34.5, 34.7, 34.10)
+
+    max_propagation_depth=5 상한 적용 (무한 루프 방지)
+    전파 체인 CloudWatch 구조화 로그 기록
+    """
+    propagation_start = time.time()
+    propagated_to = []
+
+    if depth >= max_depth:
+        logger.warning(json.dumps({
+            'event': 'hdd_propagation_depth_exceeded',
+            'topic': topic,
+            'depth': depth,
+            'max_depth': max_depth
+        }))
+        return propagated_to
+
+    try:
+        # published/.metadata/ 접두사에서 모든 메타데이터 파일 스캔
+        metadata_prefix = 'published/.metadata/'
+        paginator = s3_client.get_paginator('list_objects_v2')
+        pages = paginator.paginate(Bucket=S3_BUCKET_SEOUL, Prefix=metadata_prefix)
+
+        for page in pages:
+            for obj in page.get('Contents', []):
+                key = obj['Key']
+                try:
+                    resp = s3_client.get_object(Bucket=S3_BUCKET_SEOUL, Key=key)
+                    metadata = json.loads(resp['Body'].read().decode('utf-8'))
+
+                    parent_topics = metadata.get('parent_topics', [])
+                    if topic in parent_topics:
+                        # Mark this section as stale
+                        metadata['stale'] = True
+                        metadata['last_child_update_at'] = datetime.utcnow().isoformat() + 'Z'
+
+                        s3_client.put_object(
+                            Bucket=S3_BUCKET_SEOUL,
+                            Key=key,
+                            Body=json.dumps(metadata, ensure_ascii=False),
+                            ContentType='application/json'
+                        )
+
+                        parent_topic = metadata.get('topic', '')
+                        propagated_to.append(parent_topic)
+
+                        # Recursive propagation (depth + 1)
+                        if parent_topic and depth + 1 < max_depth:
+                            child_propagated = _mark_stale_parents(parent_topic, depth=depth + 1, max_depth=max_depth)
+                            propagated_to.extend(child_propagated)
+
+                except Exception as e:
+                    logger.debug(f"Failed to process metadata file {key}: {e}")
+                    continue
+
+    except Exception as e:
+        logger.error(f"_mark_stale_parents scan failed for topic {topic}: {e}")
+
+    # CloudWatch 구조화 로그 (Requirements 34.10)
+    if depth == 0 and propagated_to:
+        duration_ms = int((time.time() - propagation_start) * 1000)
+        logger.info(json.dumps({
+            'event': 'hdd_propagation',
+            'root_topic': topic,
+            'propagated_to': propagated_to,
+            'depth': len(propagated_to),
+            'duration_ms': duration_ms
+        }))
+
+    return propagated_to
+
+
+def regenerate_stale_hdd(event):
+    """POST /rag/hdd/regenerate-stale — Stale HDD 일괄 재생성 (Requirements 34.6, 34.9)
+
+    Seoul_S3 published/.metadata/ 접두사에서 stale=true 메타데이터를 가진 섹션 스캔
+    각 stale 섹션에 대해 generate_hdd_section() 재호출 + _resolve_placeholders() 적용
+    """
+    start_time = time.time()
+
+    sections_regenerated = 0
+    sections_skipped = 0
+    total_unresolved_count = 0
+
+    try:
+        # published/.metadata/ 접두사에서 stale=true 섹션 스캔
+        metadata_prefix = 'published/.metadata/'
+        paginator = s3_client.get_paginator('list_objects_v2')
+        pages = paginator.paginate(Bucket=S3_BUCKET_SEOUL, Prefix=metadata_prefix)
+
+        stale_sections = []
+        for page in pages:
+            for obj in page.get('Contents', []):
+                key = obj['Key']
+                try:
+                    resp = s3_client.get_object(Bucket=S3_BUCKET_SEOUL, Key=key)
+                    metadata = json.loads(resp['Body'].read().decode('utf-8'))
+                    if metadata.get('stale') is True:
+                        stale_sections.append(metadata)
+                except Exception as e:
+                    logger.debug(f"Failed to read metadata {key}: {e}")
+                    continue
+
+        # 각 stale 섹션 재생성
+        for section_meta in stale_sections:
+            section_topic = section_meta.get('topic', '')
+            section_title = section_meta.get('section_title', '')
+
+            if not section_topic or not section_title:
+                sections_skipped += 1
+                continue
+
+            try:
+                # generate_hdd_section 내부 로직 재사용을 위해 이벤트 구성
+                regen_event = {
+                    'body': json.dumps({
+                        'topic': section_topic,
+                        'section_title': section_title,
+                        'include_evidence': True,
+                        'grounding_mode': 'hybrid',
+                        'parent_topics': section_meta.get('parent_topics', [])
+                    })
+                }
+
+                regen_result = generate_hdd_section(regen_event)
+                regen_body = json.loads(regen_result.get('body', '{}'))
+
+                if regen_result.get('statusCode', 500) == 200:
+                    sections_regenerated += 1
+                    unresolved = regen_body.get('unresolved_placeholders', [])
+                    total_unresolved_count += len(unresolved)
+
+                    # stale 플래그 해제
+                    metadata_key = f"published/.metadata/{section_topic.replace('/', '_')}__meta.json"
+                    section_meta['stale'] = False
+                    section_meta['last_child_update_at'] = None
+                    section_meta['generated_at'] = datetime.utcnow().isoformat() + 'Z'
+                    s3_client.put_object(
+                        Bucket=S3_BUCKET_SEOUL,
+                        Key=metadata_key,
+                        Body=json.dumps(section_meta, ensure_ascii=False),
+                        ContentType='application/json'
+                    )
+                else:
+                    sections_skipped += 1
+                    logger.warning(f"Stale HDD regeneration failed for {section_topic}: {regen_body.get('error', 'unknown')}")
+
+            except Exception as e:
+                sections_skipped += 1
+                logger.error(f"Stale HDD regeneration error for {section_topic}: {e}")
+
+    except Exception as e:
+        logger.error(f"regenerate_stale_hdd scan failed: {e}")
+        return response(500, {'error': f'Stale HDD scan failed: {str(e)}'})
+
+    execution_time_ms = int((time.time() - start_time) * 1000)
+
+    logger.info(json.dumps({
+        'event': 'regenerate_stale_hdd_complete',
+        'sections_regenerated': sections_regenerated,
+        'sections_skipped': sections_skipped,
+        'unresolved_placeholder_count': total_unresolved_count,
+        'execution_time_ms': execution_time_ms
+    }))
+
+    return response(200, {
+        'sections_regenerated': sections_regenerated,
+        'sections_skipped': sections_skipped,
+        'unresolved_placeholder_count': total_unresolved_count,
+        'execution_time_ms': execution_time_ms
     })
 
 
@@ -2128,11 +2643,11 @@ def publish_markdown(event):
 # Requirements: 9.1~9.9
 # ============================================================================
 
-def verification_pipeline(query, variant=None):
+def verification_pipeline(query, variant=None, grounding_mode='hybrid'):
     """8단계 Verification Pipeline 실행
     (1) 질문 수신 → (2) topic 식별 → (3) claim 검색 → (3.5) Neptune placeholder
     → (4) evidence 추적 → (5) 충돌 검사 → (6) 버전 확인 → (7) 답변 생성 → (8) evidence 첨부
-    Requirements: 9.1~9.9
+    Requirements: 9.1~9.9, 25.1~25.8
     """
     pipeline_start = time.time()
     step_times = {}
@@ -2261,9 +2776,9 @@ def verification_pipeline(query, variant=None):
     latest_claims = [c for c in verified_claims if c.get('is_latest', False)]
     _log_step('6_version_check', step_start)
 
-    # (7) Foundation Model로 답변 생성 (Requirements 9.5, 16.12)
+    # (7) Foundation Model로 답변 생성 (Requirements 9.5, 16.12, 25.1~25.3)
     step_start = time.time()
-    answer = _generate_answer_from_claims(query, latest_claims, has_conflicts, neptune_results)
+    answer = _generate_answer_from_claims(query, latest_claims, has_conflicts, neptune_results, grounding_mode=grounding_mode)
     _log_step('7_answer_generation', step_start)
 
     # (8) Evidence 첨부
@@ -2355,8 +2870,8 @@ JSON 배열만 반환하세요. 다른 텍스트는 포함하지 마세요.
         return []
 
 
-def _generate_answer_from_claims(query, claims, has_conflicts, neptune_results=None):
-    """Verified claim + Neptune 그래프 컨텍스트 기반 답변 생성 (Requirements 9.5, 16.12)"""
+def _generate_answer_from_claims(query, claims, has_conflicts, neptune_results=None, grounding_mode='hybrid'):
+    """Verified claim + Neptune 그래프 컨텍스트 기반 답변 생성 (Requirements 9.5, 16.12, 25.1~25.3)"""
     try:
         bedrock_runtime = boto3.client('bedrock-runtime', region_name=BACKEND_REGION)
         model_id = os.environ.get('INVOKE_MODEL_ID', 'us.anthropic.claude-3-5-haiku-20241022-v1:0')
@@ -2365,6 +2880,7 @@ def _generate_answer_from_claims(query, claims, has_conflicts, neptune_results=N
         claims_context = ""
         for i, claim in enumerate(claims):
             claims_context += f"\n[Claim {i+1}] (confidence: {claim.get('confidence', 'N/A')})\n"
+            claims_context += f"  claim_id: {claim.get('claim_id', '')}\n"
             claims_context += f"  Statement: {claim.get('statement', '')}\n"
             for ev in claim.get('evidence', []):
                 claims_context += f"  Evidence: {ev.get('source_chunk', '')[:200]}\n"
@@ -2380,8 +2896,12 @@ def _generate_answer_from_claims(query, claims, has_conflicts, neptune_results=N
         if has_conflicts:
             conflict_warning = "\n주의: 일부 정보에 충돌이 감지되었습니다. 답변에 이 사실을 언급하세요."
 
+        # Hybrid Grounding 프롬프트 지시문 (Requirements 25.1~25.3)
+        grounding_instruction = _build_grounding_prompt(grounding_mode, claims)
+
         prompt = f"""다음 검증된 claim들을 기반으로 질문에 답변하세요.
 claim의 statement와 evidence만 사용하여 정확한 답변을 생성하세요.{conflict_warning}
+{grounding_instruction}
 
 검증된 Claim 목록:
 {claims_context}{graph_context}
@@ -2687,6 +3207,354 @@ def find_clock_crossings(event):
             'error': str(e),
             'execution_time_ms': int((time.time() - req_start) * 1000)
         })
+
+
+def graph_export(event):
+    """POST /rag/graph-export — Neptune 그래프 부분집합 JSON 내보내기 (Requirements 32.1~32.8)
+
+    3가지 scope 지원:
+    - chip: root_module의 직접 자식 인스턴스 + 모듈 간 CONNECTS_TO 엣지 aggregation
+    - module: root_module 내부 인스턴스/포트/바인딩 상세 그래프
+    - signal: signal_filter 매칭 신호의 전파 경로 (trace_signal_path 로직 재사용)
+    """
+    req_start = time.time()
+    body = parse_body(event)
+
+    scope = body.get('scope', '')
+    root_module = body.get('root_module', '')
+    depth = int(body.get('depth', 3))
+    signal_filter = body.get('signal_filter', '')
+
+    # 입력 파라미터 검증
+    valid_scopes = ('chip', 'module', 'signal')
+    if not scope or scope not in valid_scopes:
+        return response(400, {'error': f'scope는 필수이며 {valid_scopes} 중 하나여야 합니다'})
+    if not root_module:
+        return response(400, {'error': 'root_module은 필수입니다'})
+    if scope == 'signal' and not signal_filter:
+        return response(400, {'error': 'scope="signal"일 때 signal_filter는 필수입니다'})
+
+    # depth 범위 제한
+    depth = max(1, min(depth, 10))
+
+    neptune_endpoint = os.environ.get('NEPTUNE_ENDPOINT', '')
+    if not neptune_endpoint:
+        # Neptune 미구성 시 빈 그래프 + neptune_fallback=true 반환
+        return response(200, {
+            'nodes': [],
+            'edges': [],
+            'metadata': {
+                'scope': scope,
+                'root_module': root_module,
+                'depth': depth,
+                'node_count': 0,
+                'edge_count': 0,
+                'generated_at': datetime.utcnow().isoformat() + 'Z',
+                'neptune_fallback': True,
+                'truncated': False
+            }
+        })
+
+    try:
+        import requests as req_lib
+        auth = _get_neptune_auth()
+        neptune_url = f"https://{neptune_endpoint}:8182/openCypher"
+
+        nodes = []
+        edges = []
+
+        if scope == 'chip':
+            nodes, edges = _graph_export_chip(req_lib, neptune_url, auth, root_module)
+        elif scope == 'module':
+            nodes, edges = _graph_export_module(req_lib, neptune_url, auth, root_module)
+        elif scope == 'signal':
+            nodes, edges = _graph_export_signal(req_lib, neptune_url, auth, root_module, signal_filter, depth)
+
+        # 노드 상한 1,000개 — degree 기준 상위 노드 선택
+        truncated = False
+        if len(nodes) > 1000:
+            truncated = True
+            nodes, edges = _truncate_graph_by_degree(nodes, edges, limit=1000)
+
+        return response(200, {
+            'nodes': nodes,
+            'edges': edges,
+            'metadata': {
+                'scope': scope,
+                'root_module': root_module,
+                'depth': depth,
+                'node_count': len(nodes),
+                'edge_count': len(edges),
+                'generated_at': datetime.utcnow().isoformat() + 'Z',
+                'neptune_fallback': False,
+                'truncated': truncated
+            }
+        })
+
+    except Exception as e:
+        # Neptune 타임아웃/실패 시 빈 그래프 + neptune_fallback=true 반환 (HTTP 200)
+        logger.error(f"graph_export failed: {e}")
+        return response(200, {
+            'nodes': [],
+            'edges': [],
+            'metadata': {
+                'scope': scope,
+                'root_module': root_module,
+                'depth': depth,
+                'node_count': 0,
+                'edge_count': 0,
+                'generated_at': datetime.utcnow().isoformat() + 'Z',
+                'neptune_fallback': True,
+                'truncated': False
+            }
+        })
+
+
+def _graph_export_chip(req_lib, neptune_url, auth, root_module):
+    """scope="chip": root_module의 직접 자식 인스턴스 + 모듈 간 CONNECTS_TO 엣지 aggregation"""
+    cypher_query = {
+        "query": (
+            "MATCH (root:Module {name: $root_module})-[:INSTANTIATES]->(child:Module) "
+            "OPTIONAL MATCH (child)-[:HAS_PORT]->(p:Port)-[:CONNECTS_TO]->(s:Signal) "
+            "RETURN root.name AS root_name, child.name AS child_name, "
+            "collect(DISTINCT {port: p.name, signal: s.name}) AS connections "
+            "LIMIT 1000"
+        ),
+        "parameters": {"root_module": root_module}
+    }
+
+    resp = req_lib.post(neptune_url, auth=auth, json=cypher_query, timeout=30)
+    resp.raise_for_status()
+    data = resp.json()
+
+    nodes = []
+    edges = []
+    seen_nodes = set()
+    edge_counter = 0
+
+    for row in data.get('results', []):
+        root_name = row.get('root_name', root_module)
+        child_name = row.get('child_name', '')
+        connections = row.get('connections', [])
+
+        # root 노드 추가
+        if root_name and root_name not in seen_nodes:
+            nodes.append({
+                'id': root_name,
+                'label': root_name,
+                'type': 'Module',
+                'properties': {}
+            })
+            seen_nodes.add(root_name)
+
+        # child 노드 추가
+        if child_name and child_name not in seen_nodes:
+            nodes.append({
+                'id': child_name,
+                'label': child_name,
+                'type': 'Module',
+                'properties': {'connection_count': len([c for c in connections if c.get('port')])}
+            })
+            seen_nodes.add(child_name)
+
+        # INSTANTIATES 엣지
+        if root_name and child_name:
+            edge_counter += 1
+            edges.append({
+                'id': f"e{edge_counter}",
+                'source': root_name,
+                'target': child_name,
+                'label': 'INSTANTIATES',
+                'properties': {}
+            })
+
+        # CONNECTS_TO 엣지 (모듈 간 aggregation)
+        for conn in connections:
+            port_name = conn.get('port')
+            signal_name = conn.get('signal')
+            if port_name and signal_name:
+                signal_id = f"{child_name}.{signal_name}"
+                if signal_id not in seen_nodes:
+                    nodes.append({
+                        'id': signal_id,
+                        'label': signal_name,
+                        'type': 'Signal',
+                        'properties': {}
+                    })
+                    seen_nodes.add(signal_id)
+                edge_counter += 1
+                edges.append({
+                    'id': f"e{edge_counter}",
+                    'source': f"{child_name}.{port_name}" if f"{child_name}.{port_name}" in seen_nodes else child_name,
+                    'target': signal_id,
+                    'label': 'CONNECTS_TO',
+                    'properties': {}
+                })
+
+    return nodes, edges
+
+
+def _graph_export_module(req_lib, neptune_url, auth, root_module):
+    """scope="module": root_module 내부 인스턴스/포트/바인딩 상세 그래프"""
+    cypher_query = {
+        "query": (
+            "MATCH (m:Module {name: $root_module})-[:HAS_PORT]->(p:Port) "
+            "OPTIONAL MATCH (p)-[:CONNECTS_TO]->(s:Signal) "
+            "RETURN m.name AS module_name, p.name AS port_name, "
+            "labels(p) AS port_labels, p.direction AS port_direction, p.width AS port_width, "
+            "s.name AS signal_name "
+            "LIMIT 1000"
+        ),
+        "parameters": {"root_module": root_module}
+    }
+
+    resp = req_lib.post(neptune_url, auth=auth, json=cypher_query, timeout=30)
+    resp.raise_for_status()
+    data = resp.json()
+
+    nodes = []
+    edges = []
+    seen_nodes = set()
+    edge_counter = 0
+
+    for row in data.get('results', []):
+        module_name = row.get('module_name', root_module)
+        port_name = row.get('port_name', '')
+        port_direction = row.get('port_direction', '')
+        port_width = row.get('port_width', '')
+        signal_name = row.get('signal_name', '')
+
+        # module 노드 추가
+        if module_name and module_name not in seen_nodes:
+            nodes.append({
+                'id': module_name,
+                'label': module_name,
+                'type': 'Module',
+                'properties': {}
+            })
+            seen_nodes.add(module_name)
+
+        # port 노드 추가
+        port_id = f"{module_name}.{port_name}"
+        if port_name and port_id not in seen_nodes:
+            nodes.append({
+                'id': port_id,
+                'label': port_name,
+                'type': 'Port',
+                'properties': {
+                    'direction': port_direction or '',
+                    'width': port_width or ''
+                }
+            })
+            seen_nodes.add(port_id)
+            # HAS_PORT 엣지
+            edge_counter += 1
+            edges.append({
+                'id': f"e{edge_counter}",
+                'source': module_name,
+                'target': port_id,
+                'label': 'HAS_PORT',
+                'properties': {}
+            })
+
+        # signal 노드 + CONNECTS_TO 엣지
+        if signal_name:
+            signal_id = f"{module_name}.{signal_name}"
+            if signal_id not in seen_nodes:
+                nodes.append({
+                    'id': signal_id,
+                    'label': signal_name,
+                    'type': 'Signal',
+                    'properties': {}
+                })
+                seen_nodes.add(signal_id)
+            edge_counter += 1
+            edges.append({
+                'id': f"e{edge_counter}",
+                'source': port_id,
+                'target': signal_id,
+                'label': 'CONNECTS_TO',
+                'properties': {}
+            })
+
+    return nodes, edges
+
+
+def _graph_export_signal(req_lib, neptune_url, auth, root_module, signal_filter, depth):
+    """scope="signal": signal_filter 매칭 신호의 전파 경로 (trace_signal_path 로직 재사용)"""
+    depth = max(1, min(depth, 10))
+    cypher_query = {
+        "query": (
+            "MATCH path = (m:Module {name: $root_module})-[:HAS_PORT]->(p:Port)"
+            "-[:CONNECTS_TO*1.." + str(depth) + "]->(target) "
+            "WHERE p.name CONTAINS $signal_filter "
+            "RETURN [n IN nodes(path) | {name: n.name, type: labels(n)[0], properties: properties(n)}] AS path_nodes, "
+            "[r IN relationships(path) | {type: type(r), source: startNode(r).name, target: endNode(r).name}] AS path_edges "
+            "LIMIT 50"
+        ),
+        "parameters": {"root_module": root_module, "signal_filter": signal_filter}
+    }
+
+    resp = req_lib.post(neptune_url, auth=auth, json=cypher_query, timeout=30)
+    resp.raise_for_status()
+    data = resp.json()
+
+    nodes = []
+    edges = []
+    seen_nodes = set()
+    edge_counter = 0
+
+    for row in data.get('results', []):
+        path_nodes = row.get('path_nodes', [])
+        path_edges = row.get('path_edges', [])
+
+        for node_info in path_nodes:
+            node_name = node_info.get('name', '')
+            node_type = node_info.get('type', 'Unknown')
+            node_props = node_info.get('properties', {})
+            if node_name and node_name not in seen_nodes:
+                nodes.append({
+                    'id': node_name,
+                    'label': node_name,
+                    'type': node_type,
+                    'properties': node_props if isinstance(node_props, dict) else {}
+                })
+                seen_nodes.add(node_name)
+
+        for edge_info in path_edges:
+            edge_counter += 1
+            edges.append({
+                'id': f"e{edge_counter}",
+                'source': edge_info.get('source', ''),
+                'target': edge_info.get('target', ''),
+                'label': edge_info.get('type', 'CONNECTS_TO'),
+                'properties': {}
+            })
+
+    return nodes, edges
+
+
+def _truncate_graph_by_degree(nodes, edges, limit=1000):
+    """노드를 degree(연결 수) 기준으로 상위 limit개만 유지하고, 관련 엣지만 반환"""
+    # 각 노드의 degree 계산
+    degree_map = {}
+    for node in nodes:
+        degree_map[node['id']] = 0
+    for edge in edges:
+        if edge['source'] in degree_map:
+            degree_map[edge['source']] += 1
+        if edge['target'] in degree_map:
+            degree_map[edge['target']] += 1
+
+    # degree 기준 상위 limit개 노드 선택
+    sorted_nodes = sorted(nodes, key=lambda n: degree_map.get(n['id'], 0), reverse=True)
+    kept_nodes = sorted_nodes[:limit]
+    kept_node_ids = {n['id'] for n in kept_nodes}
+
+    # 유지된 노드에 연결된 엣지만 보존
+    kept_edges = [e for e in edges if e['source'] in kept_node_ids and e['target'] in kept_node_ids]
+
+    return kept_nodes, kept_edges
 
 
 def _bedrock_kb_fallback(query, pipeline_start, step_times, topics_identified):
@@ -3408,6 +4276,171 @@ Evidence: {evidence}
             'claims_pending': claims_pending,
             'total_processed': total_processed
         }
+
+
+# ============================================================================
+# Parser Contribution API (Task 20.4)
+# Requirements: 26.4, 26.5, 26.8
+# ============================================================================
+
+def parser_contribution(event, context):
+    """파서별 기여도 측정 — pipeline_id 기준으로 parser_source별 claim 통계 반환.
+
+    Input: pipeline_id (required)
+    Output: per-parser claims_total, claims_hit_in_search, hit_ratio, avg_search_score
+
+    Requirements: 26.4, 26.5, 26.8
+    """
+    pipeline_id = event.get('pipeline_id', '')
+    if not pipeline_id:
+        return {'error': 'pipeline_id is required'}
+
+    if not RTL_OPENSEARCH_ENDPOINT:
+        return {'error': 'RTL_OPENSEARCH_ENDPOINT not configured', 'pipeline_id': pipeline_id}
+
+    try:
+        import requests
+        from requests_aws4auth import AWS4Auth
+
+        session = boto3.Session()
+        credentials = session.get_credentials()
+        aoss_region = os.environ.get('BEDROCK_REGION', 'us-east-1')
+        auth = AWS4Auth(
+            credentials.access_key,
+            credentials.secret_key,
+            aoss_region,
+            'aoss',
+            session_token=credentials.token,
+        )
+
+        url = f"{RTL_OPENSEARCH_ENDPOINT}/{RTL_OPENSEARCH_INDEX}/_search"
+
+        # Query all claims for this pipeline_id, aggregate by parser_source
+        search_body = {
+            "size": 0,
+            "query": {
+                "bool": {
+                    "must": [
+                        {"term": {"pipeline_id": pipeline_id}},
+                    ],
+                    "must_not": [
+                        {"term": {"parser_source": ""}},
+                    ]
+                }
+            },
+            "aggs": {
+                "by_parser": {
+                    "terms": {
+                        "field": "parser_source",
+                        "size": 20,
+                    },
+                    "aggs": {
+                        "avg_score": {
+                            "avg": {"field": "_score"}
+                        }
+                    }
+                }
+            }
+        }
+
+        resp = requests.post(
+            url, auth=auth, json=search_body,
+            headers={"Content-Type": "application/json"}, timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        # Parse aggregation results
+        parser_stats = {}
+        buckets = data.get("aggregations", {}).get("by_parser", {}).get("buckets", [])
+        for bucket in buckets:
+            parser_name = bucket.get("key", "unknown")
+            claims_total = bucket.get("doc_count", 0)
+            parser_stats[parser_name] = {
+                "claims_total": claims_total,
+                "claims_hit_in_search": 0,
+                "hit_ratio": 0.0,
+                "avg_search_score": 0.0,
+            }
+
+        # Now query with a broad text match to estimate hit ratio
+        # (claims that would actually appear in search results)
+        hit_search_body = {
+            "size": 0,
+            "query": {
+                "bool": {
+                    "must": [
+                        {"term": {"pipeline_id": pipeline_id}},
+                        {"exists": {"field": "claim_text"}},
+                    ],
+                    "must_not": [
+                        {"term": {"parser_source": ""}},
+                        {"term": {"claim_text": ""}},
+                    ]
+                }
+            },
+            "aggs": {
+                "by_parser": {
+                    "terms": {
+                        "field": "parser_source",
+                        "size": 20,
+                    }
+                }
+            }
+        }
+
+        hit_resp = requests.post(
+            url, auth=auth, json=hit_search_body,
+            headers={"Content-Type": "application/json"}, timeout=30,
+        )
+        if hit_resp.status_code == 200:
+            hit_data = hit_resp.json()
+            hit_buckets = hit_data.get("aggregations", {}).get("by_parser", {}).get("buckets", [])
+            for bucket in hit_buckets:
+                parser_name = bucket.get("key", "unknown")
+                hit_count = bucket.get("doc_count", 0)
+                if parser_name in parser_stats:
+                    parser_stats[parser_name]["claims_hit_in_search"] = hit_count
+                    total = parser_stats[parser_name]["claims_total"]
+                    parser_stats[parser_name]["hit_ratio"] = (
+                        hit_count / total if total > 0 else 0.0
+                    )
+
+        # Publish ParserHitRatio metrics to CloudWatch
+        try:
+            from botocore.config import Config
+            cw_config = Config(connect_timeout=5, read_timeout=10, retries={'max_attempts': 1})
+            cw = boto3.client('cloudwatch', region_name='ap-northeast-2', config=cw_config)
+            for parser_name, stats in parser_stats.items():
+                cw.put_metric_data(
+                    Namespace='BOS-AI/RTLParser',
+                    MetricData=[{
+                        'MetricName': 'ParserHitRatio',
+                        'Value': float(stats['hit_ratio']),
+                        'Unit': 'None',
+                        'Dimensions': [
+                            {'Name': 'parser_name', 'Value': parser_name},
+                        ],
+                        'Timestamp': datetime.utcnow(),
+                    }]
+                )
+        except Exception as metric_err:
+            logger.warning(f"ParserHitRatio metric publish failed: {metric_err}")
+
+        logger.info(json.dumps({
+            'event': 'parser_contribution_result',
+            'pipeline_id': pipeline_id,
+            'parser_count': len(parser_stats),
+        }))
+
+        return {
+            'pipeline_id': pipeline_id,
+            'parser_stats': parser_stats,
+        }
+
+    except Exception as e:
+        logger.error(f"parser_contribution failed: {e}", exc_info=True)
+        return {'error': str(e), 'pipeline_id': pipeline_id}
 
 
 # ============================================================================

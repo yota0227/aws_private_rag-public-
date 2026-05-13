@@ -19,6 +19,18 @@ lambda/**/*.zip
 lambda/**/__pycache__/
 lambda/**/*.pyc
 
+# Python cache (all locations)
+**/__pycache__/
+*.pyc
+*.pyo
+
+# Deployment packages
+**/*-deployment-package.zip
+**/package.zip
+
+# Temp files
+*.tmp.*
+
 # Go
 tests/go.sum
 vendor/
@@ -55,12 +67,17 @@ coverage/
 # RTL test data (large files, local only)
 test_rtl/Sample/
 
+# RAG result outputs (keep only review/ folder)
+test_rtl/rag_result/v*/
+test_rtl/rag_result/v*.*/**
+
 # Lambda deploy package
 **/lambda-package.zip
 
 # Temporary output files
 out*.json
-resp_*.json
+resp*.json
+response.json
 
 # Terraform plan files
 *.tfplan

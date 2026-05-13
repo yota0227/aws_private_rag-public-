@@ -48,6 +48,13 @@ INDEX_BODY = {
             "instance_list":  {"type": "text"},
             "file_path":      {"type": "keyword"},
             "parsed_summary": {"type": "text"},
+            "parent_module_name": {"type": "keyword"},
+            "sub_record_type":    {"type": "keyword"},
+            "parser_source":      {"type": "keyword"},
+            "wire_type":          {"type": "keyword"},
+            "array_dimensions":   {"type": "keyword"},
+            "struct_type_ref":    {"type": "keyword"},
+            "inferred_purpose":   {"type": "text"},
         }
     }
 }

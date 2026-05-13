@@ -1,0 +1,72 @@
+# EDC1 U-Shape Ring Topology
+# Render: d2 04_edc_ring_topology.d2 04_edc_ring_topology.svg
+
+direction: right
+
+title: {
+  label: "EDC1 Ring — U-Shape Serial Bus Topology"
+  style.font-size: 20
+}
+
+# Segment A (downward)
+seg_a: {
+  label: "Segment A (down)"
+  style.fill: "#FFF0F0"
+
+  node_a0: "Node 0\n(direct)" { style.fill: "#FFB6C1" }
+  node_a1: "Node 1\n(direct)" { style.fill: "#FFB6C1" }
+  node_a2: "Node 2\n(direct)" { style.fill: "#FFB6C1" }
+  node_a3: "Node 3\n(direct)" { style.fill: "#FFB6C1" }
+  harvested: "HARVESTED\n(bypass)" { style.fill: "#FF6347"; style.stroke-dash: 3 }
+  node_a4: "Node 4\n(direct)" { style.fill: "#FFB6C1" }
+
+  node_a0 -> node_a1: "serial_out" { style.stroke: "#333" }
+  node_a1 -> node_a2: "serial_out" { style.stroke: "#333" }
+  node_a2 -> node_a3: "serial_out" { style.stroke: "#333" }
+  node_a3 -> harvested: "bypass" { style.stroke: "#FF6347"; style.stroke-dash: 3 }
+  harvested -> node_a4: "bypass" { style.stroke: "#FF6347"; style.stroke-dash: 3 }
+}
+
+# U-turn
+uturn: {
+  label: "U-turn\n(loopback)"
+  style.fill: "#FFFACD"
+  connector: "tt_edc1_intf_connector\n(edc_loopback_conn_nodes)"
+}
+
+# Segment B (upward)
+seg_b: {
+  label: "Segment B (up)"
+  style.fill: "#F0FFF0"
+
+  node_b0: "Node 5\n(direct)" { style.fill: "#98FB98" }
+  node_b1: "Node 6\n(direct)" { style.fill: "#98FB98" }
+  node_b2: "Node 7\n(direct)" { style.fill: "#98FB98" }
+  node_b3: "Node 8\n(direct)" { style.fill: "#98FB98" }
+  node_b4: "Node 9\n(direct)" { style.fill: "#98FB98" }
+
+  node_b4 -> node_b3: "serial_out" { style.stroke: "#333" }
+  node_b3 -> node_b2: "serial_out" { style.stroke: "#333" }
+  node_b2 -> node_b1: "serial_out" { style.stroke: "#333" }
+  node_b1 -> node_b0: "serial_out" { style.stroke: "#333" }
+}
+
+# APB Interface
+apb: {
+  label: "APB4 Host"
+  style.fill: "#E8E8E8"
+  biu: "tt_edc1_biu_soc_apb4_wrap\n(5 IRQs: fatal/crit/cor/sent/rcvd)"
+}
+
+# Connections
+seg_a.node_a4 -> uturn.connector: "end of Seg A" { style.stroke: "#333" }
+uturn.connector -> seg_b.node_b4: "start of Seg B" { style.stroke: "#333" }
+seg_b.node_b0 -> seg_a.node_a0: "ring complete" { style.stroke: "#333"; style.stroke-dash: 5 }
+apb.biu -> seg_a.node_a0: "config/status" { style.stroke: "#666" }
+
+# Protocol info
+protocol: {
+  label: "Protocol: toggle-handshake\nData: 16-bit + parity\nSignals: req_tgl, ack_tgl, data[15:0], data_p\nBypass: edc_mux_demux_sel"
+  style.fill: "#F5F5F5"
+  style.font-size: 11
+}

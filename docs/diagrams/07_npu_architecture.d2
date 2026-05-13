@@ -1,0 +1,182 @@
+# Trinity N1B0 NPU Architecture — Full Chip Block Diagram
+# Render: d2 07_npu_architecture.d2 07_npu_architecture.svg
+
+direction: down
+
+title: {
+  label: "Trinity N1B0 NPU — Full Chip Architecture"
+  near: top-center
+  style.font-size: 20
+  style.bold: true
+}
+
+# External interfaces (top)
+external: {
+  label: "External Interfaces"
+  style.fill: "#F5F5F5"
+  style.stroke: "#999"
+
+  axi: {
+    label: "AXI Bus\n(39 ports)\ni_axi_clk"
+    style.fill: "#FFE4B5"
+  }
+  apb: {
+    label: "APB Register\n(8 ports)\nx4 columns"
+    style.fill: "#FFE4B5"
+  }
+  edc_apb: {
+    label: "EDC APB\n(16 ports)\n5 IRQs"
+    style.fill: "#FFE4B5"
+  }
+  prtn: {
+    label: "PRTN Power\n(14 ports)\nISO_EN[11:0]"
+    style.fill: "#FFE4B5"
+  }
+}
+
+# Clock/Reset domain
+clocks: {
+  label: "Clock & Reset"
+  style.fill: "#F0E6FF"
+
+  i_noc_clk: "i_noc_clk (1-bit global)" { style.fill: "#DDA0DD" }
+  i_ai_clk: "i_ai_clk[3:0] (per-column)" { style.fill: "#DDA0DD" }
+  i_dm_clk: "i_dm_clk[3:0] (per-column)" { style.fill: "#DDA0DD" }
+  i_tensix_reset: "i_tensix_reset_n[11:0] (per-tile)" { style.fill: "#E6B8E6" }
+  i_dm_reset: "i_dm_core_reset_n[13:0][7:0]" { style.fill: "#E6B8E6" }
+
+  clock_mesh: {
+    label: "clock_routing_t[4][5]\n(8-field struct mesh)"
+    style.fill: "#DDA0DD"
+    style.font-size: 11
+  }
+}
+
+# Main chip area
+chip: {
+  label: "Trinity N1B0 Die (4x5 = 20 tiles)"
+  style.fill: "#FAFAFA"
+  style.stroke: "#333"
+  style.stroke-width: 2
+
+  # NoC Fabric
+  noc: {
+    label: "NoC 2D Mesh Fabric\n4x5, DOR/Tendril/Dynamic routing\nflit[4][5][2][2], SECDED ECC"
+    style.fill: "#FFF8DC"
+    style.stroke: "#DAA520"
+    style.stroke-width: 2
+
+    col0: {
+      label: "Column 0 (X=0)"
+      style.fill: "#F0F8FF"
+      t0: "TENSIX EP=0\n(FPU+SFPU+TDMA+L1)" { style.fill: "#87CEEB" }
+      t1: "TENSIX EP=1" { style.fill: "#87CEEB" }
+      t2: "TENSIX EP=2" { style.fill: "#87CEEB" }
+      d_e: "DISPATCH_E EP=3" { style.fill: "#90EE90" }
+      niu_ne: "NOC2AXI_NE EP=4\n(Corner NIU)" { style.fill: "#FFD700" }
+      t0 -> t1
+      t1 -> t2
+      t2 -> d_e
+      d_e -> niu_ne
+    }
+
+    col1: {
+      label: "Column 1 (X=1)"
+      style.fill: "#F0F8FF"
+      t5: "TENSIX EP=5" { style.fill: "#87CEEB" }
+      t6: "TENSIX EP=6" { style.fill: "#87CEEB" }
+      t7: "TENSIX EP=7" { style.fill: "#87CEEB" }
+      rtr8: "ROUTER EP=8" { style.fill: "#D3D3D3" }
+      niu_rne: "NIU+RTR EP=9\n(Composite)" { style.fill: "#FFA500" }
+      t5 -> t6
+      t6 -> t7
+      t7 -> rtr8
+      rtr8 -> niu_rne
+    }
+
+    col2: {
+      label: "Column 2 (X=2)"
+      style.fill: "#F0F8FF"
+      t10: "TENSIX EP=10" { style.fill: "#87CEEB" }
+      t11: "TENSIX EP=11" { style.fill: "#87CEEB" }
+      t12: "TENSIX EP=12" { style.fill: "#87CEEB" }
+      rtr13: "ROUTER EP=13" { style.fill: "#D3D3D3" }
+      niu_rnw: "NIU+RTR EP=14\n(Composite)" { style.fill: "#FFA500" }
+      t10 -> t11
+      t11 -> t12
+      t12 -> rtr13
+      rtr13 -> niu_rnw
+    }
+
+    col3: {
+      label: "Column 3 (X=3)"
+      style.fill: "#F0F8FF"
+      t15: "TENSIX EP=15" { style.fill: "#87CEEB" }
+      t16: "TENSIX EP=16" { style.fill: "#87CEEB" }
+      t17: "TENSIX EP=17" { style.fill: "#87CEEB" }
+      d_w: "DISPATCH_W EP=18" { style.fill: "#90EE90" }
+      niu_nw: "NOC2AXI_NW EP=19\n(Corner NIU)" { style.fill: "#FFD700" }
+      t15 -> t16
+      t16 -> t17
+      t17 -> d_w
+      d_w -> niu_nw
+    }
+
+    # Horizontal NoC mesh
+    col0.t0 -- col1.t5: "" { style.stroke-dash: 3 }
+    col1.t5 -- col2.t10: "" { style.stroke-dash: 3 }
+    col2.t10 -- col3.t15: "" { style.stroke-dash: 3 }
+    col0.d_e -- col1.rtr8: "" { style.stroke-dash: 3 }
+    col1.rtr8 -- col2.rtr13: "" { style.stroke-dash: 3 }
+    col2.rtr13 -- col3.d_w: "" { style.stroke-dash: 3 }
+    col0.niu_ne -- col1.niu_rne: "" { style.stroke-dash: 3 }
+    col1.niu_rne -- col2.niu_rnw: "" { style.stroke-dash: 3 }
+    col2.niu_rnw -- col3.niu_nw: "" { style.stroke-dash: 3 }
+  }
+
+  # EDC Ring
+  edc: {
+    label: "EDC1 Ring (U-shape)\nSerial bus, toggle-handshake\n16-bit + parity, harvest bypass"
+    style.fill: "#FFF0F0"
+    style.stroke: "#FF6347"
+    style.stroke-dash: 5
+  }
+
+  # Dispatch feedthrough
+  dispatch_wires: {
+    label: "Dispatch Feedthrough Wires\nde_to_t6_coloumn[4][4]\nt6_to_de[4][3]\nde_to_t6_east/west[4]"
+    style.fill: "#F0FFF0"
+    style.stroke: "#228B22"
+    style.stroke-dash: 3
+  }
+}
+
+# Overlay subsystem
+overlay: {
+  label: "Overlay (RISC-V Subsystem)"
+  style.fill: "#F5FFF5"
+  style.stroke: "#228B22"
+
+  cpu: "CPU Cluster\n14 DM complexes x 8 cores\n= 112 RISC-V cores" { style.fill: "#98FB98" }
+  l1: "L1 Cache\nECC (EDC daisy-chain)\nMulti-bank, superarb" { style.fill: "#98FB98" }
+  idma: "iDMA Engine\n6 protocols\n(AXI/OBI/TL/INIT/STREAM)" { style.fill: "#98FB98" }
+  fds: "FDS\nFreq/Droop Sensor\n(106in/41out per tile)" { style.fill: "#98FB98" }
+}
+
+# Connections
+external.axi -> chip.noc.col0.niu_ne: "AXI"
+external.axi -> chip.noc.col3.niu_nw: "AXI"
+external.apb -> chip.noc.col0.d_e: "APB"
+external.edc_apb -> chip.edc: "APB4"
+external.prtn -> chip: "PRTN"
+clocks -> chip: "clock mesh"
+chip.noc -> overlay: "NoC + DM bus"
+
+# Specs
+specs: {
+  label: "Key Parameters\n──────────────\nSizeX=4, SizeY=5\nNumTensix=12, NumNoc2Axi=4\nNumDispatch=2, NumDmComplexes=14\nDMCoresPerCluster=8\nEnableDynamicRouting=1\ntile_t: 8 types\nEP = X*5+Y (20 endpoints)"
+  near: bottom-right
+  style.fill: "#FFFFF0"
+  style.font-size: 11
+  style.border-radius: 8
+}

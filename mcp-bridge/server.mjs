@@ -165,6 +165,37 @@ mcpServer.tool(
 );
 
 // Tool: RTL 파싱 데이터 검색 (search_archive with source=rtl_parsed)
+// v9.1: Client-side dedup for search results
+function dedupResults(results, maxResults) {
+  const seen = new Set();
+  const deduped = [];
+  for (const r of results) {
+    const fp = getResultFingerprint(r);
+    if (seen.has(fp)) continue;
+    seen.add(fp);
+    deduped.push(r);
+    if (deduped.length >= maxResults) break;
+  }
+  if (deduped.length < results.length) {
+    console.log(`[DEDUP] ${results.length} → ${deduped.length} (removed ${results.length - deduped.length} duplicates)`);
+  }
+  return deduped;
+}
+
+function getResultFingerprint(r) {
+  const type = r.analysis_type || "";
+  if (type === "claim") {
+    return "claim:" + (r.claim_text || "").substring(0, 200);
+  } else if (type === "hdd_section") {
+    return "hdd:" + (r.topic || "") + ":" + (r.hdd_section_title || "");
+  } else if (type === "module_parse" || type === "module_parse_chunk") {
+    return "mp:" + (r.module_name || "") + ":" + type + ":" + (r.sub_record_type || "");
+  } else {
+    const basename = (r.file_path || "").split("/").pop() || "";
+    return "other:" + (r.module_name || "") + ":" + basename;
+  }
+}
+
 mcpServer.tool(
   "search_rtl",
   "RTL 파싱된 데이터를 검색합니다. 모듈명, 포트, 인스턴스, 토픽 등으로 검색 가능합니다. Trinity/N1B0 등 업로드된 RTL 코드의 구조 정보를 조회합니다.",
@@ -175,11 +206,13 @@ mcpServer.tool(
     max_results: { type: "number", description: "최대 결과 수 (기본값: 5)" }
   },
   async (params) => {
+    const startTime = Date.now();
     try {
+      const requestedMax = params.max_results || 5;
       const body = {
         query: params.query || "",
         source: "rtl_parsed",
-        max_results: params.max_results || 5
+        max_results: Math.min(requestedMax * 3, 200)  // over-fetch for dedup
       };
       if (params.pipeline_id) body.pipeline_id = params.pipeline_id;
       if (params.topic) body.topic = params.topic;
@@ -189,8 +222,11 @@ mcpServer.tool(
         return { content: [{ type: "text", text: "오류: " + resp.error }], isError: true };
       }
 
-      const results = resp.results || [];
+      const rawResults = resp.results || [];
       const totalHits = resp.total_hits || 0;
+
+      // v9.1: Client-side dedup — remove duplicate results by content fingerprint
+      const results = dedupResults(rawResults, requestedMax);
 
       if (results.length === 0) {
         return { content: [{ type: "text", text: `"${params.query}" 검색 결과가 없습니다. (total_hits: ${totalHits})` }] };
@@ -202,16 +238,17 @@ mcpServer.tool(
         if (r.topic) text += ` | 토픽: ${Array.isArray(r.topic) ? r.topic.join(", ") : r.topic}`;
         if (r.analysis_type) text += ` | 유형: ${r.analysis_type}`;
         if (r.pipeline_id) text += ` | 파이프라인: ${r.pipeline_id}`;
-        if (r.claim_text) text += `\n    Claim: ${r.claim_text.substring(0, 300)}`;
+        if (r.claim_text) text += `\n    Claim: ${r.claim_text.substring(0, 500)}`;
         if (r.claim_type) text += ` [${r.claim_type}]`;
         if (r.hdd_section_title) text += `\n    HDD: ${r.hdd_section_title}`;
-        if (r.hdd_content) text += `\n    ${r.hdd_content.substring(0, 300)}`;
-        if (r.port_list) text += `\n    포트: ${r.port_list.substring(0, 200)}${r.port_list.length > 200 ? "..." : ""}`;
-        if (r.instance_list) text += `\n    인스턴스: ${r.instance_list.substring(0, 200)}${r.instance_list.length > 200 ? "..." : ""}`;
+        if (r.hdd_content) text += `\n    ${r.hdd_content.substring(0, 800)}`;
+        if (r.port_list) text += `\n    포트: ${r.port_list.substring(0, 800)}${r.port_list.length > 800 ? "..." : ""}`;
+        if (r.instance_list) text += `\n    인스턴스: ${r.instance_list.substring(0, 800)}${r.instance_list.length > 800 ? "..." : ""}`;
         if (r.parameter_list) text += `\n    파라미터: ${r.parameter_list}`;
         if (r.file_path) text += `\n    파일: ${r.file_path}`;
       });
 
+      text += `\nexecution_time_ms: ${Date.now() - startTime}`;
       return { content: [{ type: "text", text }] };
     } catch(err) {
       return { content: [{ type: "text", text: "RTL 검색 실패: " + err.message }], isError: true };
