@@ -67,6 +67,10 @@ coverage/
 # RTL test data (large files, local only)
 test_rtl/Sample/
 
+# RAG result outputs (keep only review/ folder)
+test_rtl/rag_result/v*/
+test_rtl/rag_result/v*.*/**
+
 # Lambda deploy package
 **/lambda-package.zip
 

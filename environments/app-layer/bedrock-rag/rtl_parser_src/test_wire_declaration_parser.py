@@ -77,6 +77,38 @@ trinity_clock_routing_t clock_routing_out[SizeX][SizeY];
         self.assertIn("trinity_clock_routing_t", claim["claim_text"])
         self.assertIn("of type", claim["claim_text"])
 
+    def test_three_dimension_preservation(self):
+        """Req 8.1/8.2: de_to_t6_coloumn[SizeX][SizeY-1][2] → dims = [SizeX, SizeY-1, 2]"""
+        rtl = "tt_chip_global_pkg::de_to_t6_t de_to_t6_coloumn[SizeX][SizeY-1][2];"
+        claims = extract_wire_declarations(rtl, "trinity_top", "test.sv", "pipe1")
+        self.assertEqual(len(claims), 1)
+        claim_text = claims[0]["claim_text"]
+        self.assertIn("de_to_t6_coloumn", claim_text)
+        self.assertIn("SizeX", claim_text)
+        self.assertIn("SizeY-1", claim_text)
+        self.assertIn("2", claim_text)
+        # Verify all 3 dimensions are in the dimensions list
+        self.assertIn("[SizeX, SizeY-1, 2]", claim_text)
+
+    def test_packed_and_array_dimensions_separated(self):
+        """Req 8.3: Packed dims should not appear in array dims."""
+        rtl = "de_to_t6_t [NumDispatchCorners-1:0] de_to_t6_coloumn[SizeX][SizeY-1][2];"
+        claims = extract_wire_declarations(rtl, "trinity_top", "test.sv", "pipe1")
+        self.assertEqual(len(claims), 1)
+        claim_text = claims[0]["claim_text"]
+        # Array dimensions should be [SizeX, SizeY-1, 2] — packed dim excluded
+        self.assertIn("[SizeX, SizeY-1, 2]", claim_text)
+        # Packed dimension should NOT appear in the dimensions list
+        self.assertNotIn("NumDispatchCorners", claim_text)
+
+    def test_multiple_packed_dimensions_separated(self):
+        """Multiple packed dims should not leak into array dims."""
+        rtl = "de_to_t6_t [3:0][7:0] de_to_t6_coloumn[SizeX][SizeY-1][2];"
+        claims = extract_wire_declarations(rtl, "trinity_top", "test.sv", "pipe1")
+        self.assertEqual(len(claims), 1)
+        claim_text = claims[0]["claim_text"]
+        self.assertIn("[SizeX, SizeY-1, 2]", claim_text)
+
 
 class TestDimensionParsing(unittest.TestCase):
     """Test dimension parsing: [SizeX][SizeY-1][2] → ['SizeX', 'SizeY-1', '2']"""

@@ -26,6 +26,7 @@ up to 3 levels deep; exceeding 3 levels triggers a truncation warning.
 import re
 import hashlib
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,11 @@ def extract_package_constants(rtl_content: str, file_path: str = "",
     claims.extend(_extract_parameters(content, pkg_name, file_path, pipeline_id))
     claims.extend(_extract_functions(rtl_content, pkg_name, file_path, pipeline_id))
     claims.extend(_extract_tasks(rtl_content, pkg_name, file_path, pipeline_id))
+
+    # Phase 8: EP Index Table 계산 (SizeX, SizeY, tile_t 기반)
+    if os.environ.get("PARSER_EP_TABLE_ENABLED", "true").lower() == "true":
+        ep_claims = _compute_ep_index_table(content, pkg_name, file_path, pipeline_id)
+        claims.extend(ep_claims)
 
     return claims
 
@@ -507,12 +513,15 @@ def _extract_functions(rtl_content, pkg_name, file_path, pipeline_id):
 
     # Match function declarations:
     #   [automatic|static] function [return_type] func_name ( args );
+    #   function [automatic|static] [return_type] func_name ( args );
     #     ... body ...
     #   endfunction
     # The return type may include packed dimensions like [N:0].
+    # Qualifier can appear before OR after the 'function' keyword.
     func_pattern = re.compile(
+        r"(?:(automatic|static)\s+)?"  # qualifier before 'function'
         r"\bfunction\s+"
-        r"(automatic\s+|static\s+)?"
+        r"(automatic\s+|static\s+)?"   # qualifier after 'function'
         r"((?:(?:void|int|integer|logic|bit|byte|shortint|longint|string|real)"
         r"(?:\s+(?:unsigned|signed))?"
         r"(?:\s*\[[^\]]*\])*"
@@ -524,10 +533,13 @@ def _extract_functions(rtl_content, pkg_name, file_path, pipeline_id):
     )
 
     for m in func_pattern.finditer(clean):
-        qualifier = m.group(1).strip() if m.group(1) else ""
-        return_type = re.sub(r"\s+", " ", m.group(2).strip())
-        func_name = m.group(3)
-        raw_args = m.group(4).strip()
+        # Qualifier can be in group(1) (before function) or group(2) (after)
+        pre_qual = m.group(1).strip() if m.group(1) else ""
+        post_qual = m.group(2).strip() if m.group(2) else ""
+        qualifier = pre_qual or post_qual
+        return_type = re.sub(r"\s+", " ", m.group(3).strip())
+        func_name = m.group(4)
+        raw_args = m.group(5).strip()
 
         # Skip nested function declarations (inside module/class bodies)
         # by checking if we're inside a module/class scope
@@ -584,20 +596,26 @@ def _extract_tasks(rtl_content, pkg_name, file_path, pipeline_id):
 
     # Match task declarations:
     #   [automatic|static] task task_name ( args );
+    #   task [automatic|static] task_name ( args );
     #     ... body ...
     #   endtask
+    # Qualifier can appear before OR after the 'task' keyword.
     task_pattern = re.compile(
+        r"(?:(automatic|static)\s+)?"  # qualifier before 'task'
         r"\btask\s+"
-        r"(automatic\s+|static\s+)?"
+        r"(automatic\s+|static\s+)?"   # qualifier after 'task'
         r"(\w+)"      # task name
         r"\s*\(([^)]*)\)\s*;",  # argument list
         re.DOTALL
     )
 
     for m in task_pattern.finditer(clean):
-        qualifier = m.group(1).strip() if m.group(1) else ""
-        task_name = m.group(2)
-        raw_args = m.group(3).strip()
+        # Qualifier can be in group(1) (before task) or group(2) (after)
+        pre_qual = m.group(1).strip() if m.group(1) else ""
+        post_qual = m.group(2).strip() if m.group(2) else ""
+        qualifier = pre_qual or post_qual
+        task_name = m.group(3)
+        raw_args = m.group(4).strip()
 
         # Skip nested task declarations inside module/class bodies
         pre_text = clean[:m.start()]
@@ -804,6 +822,90 @@ def _summarize_body(body):
     return "; ".join(parts)
 
 
+# ---------------------------------------------------------------------------
+# Phase 8: EP Index Table 계산 (Requirements 27.1~27.7)
+# ---------------------------------------------------------------------------
+
+# N1B0 variant: (X, Y) → tile_t member
+_N1B0_TILE_MAP = {
+    (0, 4): "NOC2AXI_NE_OPT",
+    (1, 4): "NOC2AXI_ROUTER_NE_OPT",
+    (2, 4): "NOC2AXI_ROUTER_NW_OPT",
+    (3, 4): "NOC2AXI_NW_OPT",
+    (0, 3): "DISPATCH_E",
+    (3, 3): "DISPATCH_W",
+    (1, 3): "ROUTER",
+    (2, 3): "ROUTER",
+}
+
+
+def _compute_ep_index_table(content, pkg_name, file_path, pipeline_id):
+    """Compute EP Index Table from SizeX, SizeY, tile_t enum.
+
+    EndpointIndex = x * SizeY + y
+    Generates one claim per EP + one summary claim.
+    """
+    claims = []
+
+    # Extract SizeX, SizeY from localparams
+    size_x_match = re.search(r"\blocalparam\b[^;]*\bSizeX\s*=\s*(\d+)", content)
+    size_y_match = re.search(r"\blocalparam\b[^;]*\bSizeY\s*=\s*(\d+)", content)
+
+    if not size_x_match or not size_y_match:
+        logger.warning("EP Table: SizeX or SizeY not found, skipping EP table generation")
+        return claims
+
+    size_x = int(size_x_match.group(1))
+    size_y = int(size_y_match.group(1))
+
+    if size_x <= 0 or size_y <= 0:
+        logger.warning("EP Table: invalid SizeX=%d or SizeY=%d", size_x, size_y)
+        return claims
+
+    # Generate per-EP claims
+    ep_entries = []
+    for x in range(size_x):
+        for y in range(size_y):
+            ep = x * size_y + y
+            tile_type = _get_tile_type(x, y)
+            claim_text = (
+                f"Endpoint EP={ep} at position (X={x}, Y={y}) "
+                f"is tile type {tile_type}"
+            )
+            claims.append(_make_claim(
+                claim_text, "structural", pkg_name,
+                "PackageConfig", file_path, pipeline_id,
+                parser_source="ep_index_table",
+            ))
+            ep_entries.append(f"EP{ep}=({x},{y}) {tile_type}")
+
+    # Generate summary claim
+    total = size_x * size_y
+    summary_text = (
+        f"EP Index Table: {size_x}\u00d7{size_y}={total} endpoints. "
+        + ", ".join(ep_entries[:10])
+    )
+    if total > 10:
+        summary_text += f", ... ({total - 10} more)"
+    claims.append(_make_claim(
+        summary_text, "structural", pkg_name,
+        "PackageConfig", file_path, pipeline_id,
+        parser_source="ep_index_table",
+    ))
+
+    logger.info("EP Table: generated %d claims for %dx%d grid", len(claims), size_x, size_y)
+    return claims
+
+
+def _get_tile_type(x, y):
+    """Determine tile type for position (x, y) based on N1B0 layout."""
+    if (x, y) in _N1B0_TILE_MAP:
+        return _N1B0_TILE_MAP[(x, y)]
+    if y <= 2:
+        return "TENSIX"
+    return "UNKNOWN"
+
+
 def _make_claim(claim_text, claim_type, module_name, topic,
                 file_path, pipeline_id, parser_source=""):
     """Create a claim dict in the standard format for OpenSearch indexing."""
@@ -825,3 +927,141 @@ def _make_claim(claim_text, claim_type, module_name, topic,
     if parser_source:
         claim["parser_source"] = parser_source
     return claim
+
+
+# ---------------------------------------------------------------------------
+# Legacy compatibility functions (used by analysis_handler.py)
+# These return structured dicts rather than claim-format lists.
+# ---------------------------------------------------------------------------
+
+# Chip-config related parameter name patterns
+_CHIP_PARAM_PATTERNS = [
+    "size", "num", "width", "depth", "count", "max", "min",
+    "tensix", "noc", "grid", "tile", "cluster", "core",
+]
+
+
+def extract_package_params(rtl_content):
+    """Extract localparams, parameters, and enums as structured dicts.
+
+    Returns:
+        dict with keys: localparams, parameters, enums
+    """
+    if not rtl_content:
+        return {"localparams": {}, "parameters": {}, "enums": {}}
+
+    content = re.sub(r"//[^\n]*", "", rtl_content)
+    content = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
+
+    localparams = {}
+    lp_pattern = re.compile(
+        r"\blocalparam\s+(?:int\b|integer\b|logic\b|bit\b|string\b|shortint\b|longint\b|byte\b)?\s*"
+        r"(?:unsigned\s+)?"
+        r"(?:\[[^\]]*\]\s*)?"
+        r"(\w+)\s*=\s*([^;]+);",
+        re.MULTILINE
+    )
+    for m in lp_pattern.finditer(content):
+        localparams[m.group(1)] = m.group(2).strip()
+
+    parameters = {}
+    param_pattern = re.compile(
+        r"\bparameter\s+(?:int\b|integer\b|logic\b|bit\b|string\b|shortint\b|longint\b|byte\b)?\s*"
+        r"(?:unsigned\s+)?"
+        r"(?:\[[^\]]*\]\s*)?"
+        r"(\w+)\s*=\s*([^;,\n]+)",
+        re.MULTILINE
+    )
+    for m in param_pattern.finditer(content):
+        parameters[m.group(1)] = m.group(2).strip()
+
+    enums = extract_enum_mapping(rtl_content)
+
+    return {"localparams": localparams, "parameters": parameters, "enums": enums}
+
+
+def identify_chip_config(params):
+    """Identify chip-configuration parameters from extracted params.
+
+    Args:
+        params: dict from extract_package_params() with localparams/parameters/enums
+
+    Returns:
+        dict with keys: chip_params, grid_size
+    """
+    if not params:
+        return {"chip_params": {}, "grid_size": {}}
+
+    chip_params = {}
+    grid_size = {}
+
+    all_params = {}
+    for name, value in params.get("localparams", {}).items():
+        all_params[name] = {"value": value, "type": "localparam"}
+    for name, value in params.get("parameters", {}).items():
+        all_params[name] = {"value": value, "type": "parameter"}
+
+    for name, info in all_params.items():
+        name_lower = name.lower()
+        if any(pat in name_lower for pat in _CHIP_PARAM_PATTERNS):
+            chip_params[name] = info
+
+    # Extract grid size from SizeX/SizeY
+    if "SizeX" in chip_params:
+        grid_size["x"] = chip_params["SizeX"]["value"]
+    if "SizeY" in chip_params:
+        grid_size["y"] = chip_params["SizeY"]["value"]
+
+    return {"chip_params": chip_params, "grid_size": grid_size}
+
+
+def extract_enum_mapping(rtl_content):
+    """Extract typedef enum declarations as name→value mappings.
+
+    Returns:
+        dict mapping enum_type_name → {member_name: value, ...}
+    """
+    if not rtl_content:
+        return {}
+
+    content = re.sub(r"//[^\n]*", "", rtl_content)
+    content = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
+
+    result = {}
+    enum_pattern = re.compile(
+        r"typedef\s+enum\s*(?:logic\s*(?:\[[^\]]*\]\s*)?)?\{([^}]+)\}\s*(\w+)\s*;",
+        re.DOTALL
+    )
+
+    for m in enum_pattern.finditer(content):
+        body = m.group(1)
+        enum_name = m.group(2)
+        members = {}
+        next_value = 0
+
+        for line in body.split(","):
+            line = line.strip()
+            if not line:
+                continue
+            # Match: MEMBER = VALUE or just MEMBER
+            assign_match = re.match(r"(\w+)\s*=\s*(.+)", line)
+            if assign_match:
+                member_name = assign_match.group(1)
+                raw_value = assign_match.group(2).strip()
+                # Try to parse as integer
+                try:
+                    int_val = int(raw_value, 0)
+                    members[member_name] = raw_value
+                    next_value = int_val + 1
+                except ValueError:
+                    members[member_name] = raw_value
+                    next_value += 1
+            else:
+                member_name = re.match(r"(\w+)", line)
+                if member_name:
+                    members[member_name.group(1)] = next_value
+                    next_value += 1
+
+        result[enum_name] = members
+
+    return result
