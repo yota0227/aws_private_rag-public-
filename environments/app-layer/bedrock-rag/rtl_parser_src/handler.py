@@ -45,6 +45,7 @@ RTL_OPENSEARCH_ENDPOINT = os.environ.get("RTL_OPENSEARCH_ENDPOINT", "")
 RTL_OPENSEARCH_INDEX = os.environ.get("RTL_OPENSEARCH_INDEX", "rtl-knowledge-base-index")
 ERROR_TABLE_NAME = os.environ.get("ERROR_TABLE_NAME", "bos-ai-rtl-parse-errors")
 DYNAMODB_EXTRACTION_TABLE = os.environ.get("DYNAMODB_EXTRACTION_TABLE", "rag-extraction-tasks")
+CLAIM_DB_TABLE = os.environ.get("CLAIM_DB_TABLE", "")
 BEDROCK_REGION = os.environ.get("BEDROCK_REGION", "us-east-1")
 NEPTUNE_ENDPOINT = os.environ.get("NEPTUNE_ENDPOINT", "")
 TITAN_MODEL_ID = "amazon.titan-embed-text-v2:0"
@@ -1363,6 +1364,60 @@ def _index_to_opensearch(metadata: dict, embedding: list):
         logger.info(json.dumps({"event": "opensearch_indexed", "file_path": metadata.get("file_path", "")}))
     except Exception as e:
         logger.error(json.dumps({"event": "opensearch_error", "error": str(e)}))
+
+    # DynamoDB Claim DB에도 저장 (governance workflow용)
+    _store_claim_to_dynamodb(metadata)
+
+
+def _store_claim_to_dynamodb(metadata: dict):
+    """Claim을 DynamoDB Claim DB에 저장 (status=verified, approval_status=approved).
+
+    HDD 자동 생성 시 verified+approved claim만 사용하므로,
+    파서가 생성한 structural claim은 자동 승인 처리한다.
+    """
+    if not CLAIM_DB_TABLE:
+        return
+
+    # claim 필드가 없으면 저장하지 않음 (module_parse 레코드는 제외)
+    claim_text = metadata.get("claim_text", "")
+    if not claim_text:
+        return
+
+    try:
+        from datetime import datetime, timezone
+        import uuid
+
+        table = dynamodb.Table(CLAIM_DB_TABLE)
+        now = datetime.now(timezone.utc).isoformat()
+
+        claim_id = metadata.get("claim_id") or str(uuid.uuid4())
+        item = {
+            "claim_id": claim_id,
+            "version": 1,
+            "is_latest": True,
+            "claim_text": claim_text,
+            "claim_type": metadata.get("claim_type", "structural"),
+            "topic": metadata.get("topic", ""),
+            "module_name": metadata.get("module_name", ""),
+            "file_path": metadata.get("file_path", ""),
+            "pipeline_id": metadata.get("pipeline_id", ""),
+            "parser_source": metadata.get("parser_source", ""),
+            "status": "verified",
+            "approval_status": "approved",
+            "approved_by": "system:auto_approve",
+            "approved_at": now,
+            "last_verified_at": now,
+            "created_at": now,
+            "created_by": "system:rtl_parser",
+        }
+
+        table.put_item(Item=item)
+    except Exception as e:
+        logger.warning(json.dumps({
+            "event": "claim_db_write_error",
+            "error": str(e),
+            "claim_id": metadata.get("claim_id", ""),
+        }))
 
 
 # ---------------------------------------------------------------------------

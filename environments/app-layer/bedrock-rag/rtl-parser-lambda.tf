@@ -179,7 +179,7 @@ resource "aws_iam_role_policy" "rtl_parser_bedrock" {
   })
 }
 
-# IAM Policy: DynamoDB - 에러 테이블 PutItem + UpdateItem + Query (분석 파이프라인 상태 추적)
+# IAM Policy: DynamoDB - 에러 테이블 + Claim DB PutItem/UpdateItem/Query
 resource "aws_iam_role_policy" "rtl_parser_dynamodb" {
   name = "rtl-parser-dynamodb-access"
   role = aws_iam_role.rtl_parser_lambda.id
@@ -194,7 +194,10 @@ resource "aws_iam_role_policy" "rtl_parser_dynamodb" {
           "dynamodb:UpdateItem",
           "dynamodb:Query"
         ]
-        Resource = [aws_dynamodb_table.extraction_tasks.arn]
+        Resource = [
+          aws_dynamodb_table.extraction_tasks.arn,
+          aws_dynamodb_table.claim_db.arn
+        ]
       }
     ]
   })
