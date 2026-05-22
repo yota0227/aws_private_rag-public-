@@ -20,7 +20,7 @@
     - 기존 Logging VPC Resolver는 아직 삭제하지 않음 (병행 운영)
     - _요구사항: 1.1, 1.2, 1.7_
 
-  - [ ]* 1.3 Property 1 테스트 작성: Resolver Inbound SG는 온프렘 DNS만 허용
+  - [x]* 1.3 Property 1 테스트 작성: Resolver Inbound SG는 온프렘 DNS만 허용
     - `tests/properties/security_group_test.go` 파일 생성
     - **Property 1: Resolver Inbound Security Group은 온프렘 DNS만 허용**
     - rapid 라이브러리로 랜덤 CIDR/포트 생성 → 192.128.0.0/16 port 53만 허용 검증
@@ -50,13 +50,13 @@
     - Private RAG VPC 라우팅 테이블에 S3 prefix list 경로 추가
     - _요구사항: 9.4_
 
-  - [ ]* 2.4 Property 2 테스트 작성: VPC Endpoint SG는 허용된 CIDR만 허용
+  - [x]* 2.4 Property 2 테스트 작성: VPC Endpoint SG는 허용된 CIDR만 허용
     - `tests/properties/security_group_test.go`에 추가
     - **Property 2: VPC Endpoint Security Group은 허용된 CIDR만 허용**
     - rapid 라이브러리로 랜덤 CIDR/포트 생성 → 10.10.0.0/16, 192.128.0.0/16 port 443만 허용 검증
     - **검증 대상: 요구사항 2.5, 7.5**
 
-  - [ ]* 2.5 Property 9 테스트 작성: VPC Endpoint Private DNS 설정 일관성
+  - [x]* 2.5 Property 9 테스트 작성: VPC Endpoint Private DNS 설정 일관성
     - `tests/properties/vpc_endpoint_test.go` 파일 생성
     - **Property 9: VPC Endpoint Private DNS 설정 일관성**
     - execute-api만 Private DNS 비활성화, 나머지는 활성화 검증
@@ -91,7 +91,7 @@
     - 서울 리전(ap-northeast-2) provider alias 추가
     - _요구사항: 2.1_
 
-  - [ ]* 4.4 Lambda 배치 유닛 테스트 작성
+  - [x]* 4.4 Lambda 배치 유닛 테스트 작성
     - `tests/unit/resolver_test.go` 또는 `tests/unit/lambda_test.go` 파일 생성
     - Lambda가 서울 VPC에 배포되고 버지니아 VPC에는 없는지 확인
     - Lambda SG의 Outbound 규칙이 올바른지 확인
@@ -110,13 +110,13 @@
     - 각 엔드포인트를 서울 Lambda(document-processor)로 프록시
     - _요구사항: 2.3, 2.6, 2.7, 2.8, 2.9, 2.10_
 
-  - [ ]* 5.2 Property 3 테스트 작성: Private API Gateway는 VPC Endpoint 외부 요청 거부
+  - [x]* 5.2 Property 3 테스트 작성: Private API Gateway는 VPC Endpoint 외부 요청 거부
     - `tests/properties/vpc_endpoint_test.go`에 추가
     - **Property 3: Private API Gateway는 VPC Endpoint 외부 요청을 거부**
     - Resource Policy의 Deny/Allow 조건 검증
     - **검증 대상: 요구사항 2.10**
 
-  - [ ]* 5.3 API Gateway 유닛 테스트 작성
+  - [x]* 5.3 API Gateway 유닛 테스트 작성
     - `tests/unit/api_gateway_test.go` 파일 생성
     - API Gateway Resource Policy가 VPC Endpoint만 허용하는지 확인
     - 엔드포인트 경로와 메서드가 올바른지 확인
@@ -134,19 +134,19 @@
     - API Gateway 커스텀 도메인: rag.corp.bos-semi.com 설정
     - _요구사항: 3.1, 3.2, 3.3, 3.4_
 
-  - [ ]* 6.2 Property 4 테스트 작성: Private Hosted Zone DNS 격리
+  - [x]* 6.2 Property 4 테스트 작성: Private Hosted Zone DNS 격리
     - `tests/properties/dns_isolation_test.go` 파일 생성
     - **Property 4: Private Hosted Zone DNS 격리**
     - PHZ가 Private RAG VPC에만 연결되어 있는지 검증
     - **검증 대상: 요구사항 3.3**
 
-  - [ ]* 6.3 Property 5 테스트 작성: 조건부 포워딩 정확성
+  - [x]* 6.3 Property 5 테스트 작성: 조건부 포워딩 정확성
     - `tests/properties/dns_isolation_test.go`에 추가
     - **Property 5: 조건부 포워딩 정확성**
     - *.corp.bos-semi.com만 Route53 Resolver로 전달되는지 검증
     - **검증 대상: 요구사항 4.1, 4.2**
 
-  - [ ]* 6.4 Private Hosted Zone 유닛 테스트 작성
+  - [x]* 6.4 Private Hosted Zone 유닛 테스트 작성
     - `tests/unit/private_hosted_zone_test.go` 파일 생성
     - PHZ가 올바른 VPC에만 연결되어 있는지 확인
     - Alias 레코드가 VPC Endpoint DNS를 가리키는지 확인
@@ -181,7 +181,7 @@
     - IAM Role 생성 (Replication 전용)
     - _요구사항: 9.5, 9.6_
 
-  - [ ]* 8.3 S3 파이프라인 유닛 테스트 작성
+  - [x]* 8.3 S3 파이프라인 유닛 테스트 작성
     - `tests/unit/s3_pipeline_test.go` 파일 생성
     - S3 버킷 암호화 설정 확인
     - Bucket Policy가 VPC Endpoint만 허용하는지 확인
@@ -202,20 +202,20 @@
     - _요구사항: 4.1, 4.2, 4.3, 4.4, 4.5, 6.4_
 
 - [x] 10. 네트워크 보안 격리 검증 (라우팅 및 보안)
-  - [ ]* 10.1 Property 6 테스트 작성: Private RAG VPC 라우팅 정확성
+  - [x]* 10.1 Property 6 테스트 작성: Private RAG VPC 라우팅 정확성
     - `tests/properties/routing_test.go` 파일 생성
     - **Property 6: Private RAG VPC 라우팅 정확성**
     - rapid 라이브러리로 랜덤 목적지 IP 생성 → 올바른 next-hop (TGW, VPC Peering) 검증
     - 0.0.0.0/0 기본 경로가 없는지 검증
     - **검증 대상: 요구사항 5.2**
 
-  - [ ]* 10.2 Property 7 테스트 작성: Private RAG VPC 인터넷 격리
+  - [x]* 10.2 Property 7 테스트 작성: Private RAG VPC 인터넷 격리
     - `tests/properties/routing_test.go`에 추가
     - **Property 7: Private RAG VPC 인터넷 격리**
     - IGW 미연결, 0.0.0.0/0 → IGW/NAT 경로 없음 검증
     - **검증 대상: 요구사항 5.4**
 
-  - [ ]* 10.3 Property 8 테스트 작성: 비인가 CIDR 차단
+  - [x]* 10.3 Property 8 테스트 작성: 비인가 CIDR 차단
     - `tests/properties/security_group_test.go`에 추가
     - **Property 8: 비인가 CIDR 차단**
     - rapid 라이브러리로 허용 목록 외 랜덤 CIDR 생성 → 차단 검증

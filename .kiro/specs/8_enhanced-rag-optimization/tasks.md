@@ -19,7 +19,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 필수 태그: Project=BOS-AI, Environment=prod, ManagedBy=terraform, Layer=app
     - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 12.2_
 
-  - [ ]* 1.2 Property 23 테스트 작성: RTL S3 버킷 보안 구성
+  - [x]* 1.2 Property 23 테스트 작성: RTL S3 버킷 보안 구성
     - **Property 23: RTL S3 보안 구성**
     - **Validates: Requirements 1.1, 1.2, 1.5, 1.6, 12.2**
     - `tests/properties/enhanced_rag_optimization_test.go`에 작성
@@ -33,7 +33,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 필수 태그 적용
     - _Requirements: 2.1, 2.8, 2.10, 13.1, 13.2, 13.4, 13.5, 13.6_
 
-  - [ ]* 1.4 Property 24 테스트 작성: RTL Parser Lambda Terraform 구성
+  - [x]* 1.4 Property 24 테스트 작성: RTL Parser Lambda Terraform 구성
     - **Property 24: RTL Parser Lambda 구성**
     - **Validates: Requirements 2.8, 13.1, 13.2**
     - Python 3.12 런타임, 2048MB 메모리, 300초 타임아웃, Frontend VPC, IAM 최소 권한 검증
@@ -50,17 +50,17 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 모듈화 구조 유지 (향후 PyVerilog/AST 교체 대비, ECR 컨테이너 마이그레이션 준비)
     - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.10, 2.11, 13.7_
 
-  - [ ]* 1.6 Property 1 테스트 작성: RTL 파싱 라운드트립
+  - [x]* 1.6 Property 1 테스트 작성: RTL 파싱 라운드트립
     - **Property 1: RTL 파싱 라운드트립**
     - **Validates: Requirements 2.2, 2.4, 2.9**
     - 유효한 Verilog/SystemVerilog 모듈 선언에 대해 parse → serialize → re-parse 동일 결과 검증
 
-  - [ ]* 1.7 Property 2 테스트 작성: 토큰 Truncation 상한
+  - [x]* 1.7 Property 2 테스트 작성: 토큰 Truncation 상한
     - **Property 2: 토큰 Truncation 상한**
     - **Validates: Requirements 2.11**
     - 임의 텍스트에 대해 truncate_to_tokens 출력이 8,000 토큰 이하, 짧은 입력은 동일 출력 검증
 
-  - [ ]* 1.8 Property 3 테스트 작성: RTL 파싱 실패 에러 레코드
+  - [x]* 1.8 Property 3 테스트 작성: RTL 파싱 실패 에러 레코드
     - **Property 3: RTL 파싱 실패 에러 레코드**
     - **Validates: Requirements 2.6, 2.7**
     - 파싱 불가 콘텐츠에 대해 에러 레코드 생성 + parsed_summary에 원본 전체 미포함 검증
@@ -77,7 +77,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 필드 매핑: embedding(knn_vector, 1024, faiss, l2), module_name(keyword), parent_module(keyword), port_list(text), parameter_list(text), instance_list(text), file_path(keyword), parsed_summary(text)
     - _Requirements: 3.2, 3.3, 3.4_
 
-  - [ ]* 1.11 Property 4 테스트 작성: RTL OpenSearch 인덱스 매핑 완전성
+  - [x]* 1.11 Property 4 테스트 작성: RTL OpenSearch 인덱스 매핑 완전성
     - **Property 4: OpenSearch 인덱스 매핑 완전성**
     - **Validates: Requirements 3.3, 3.4**
     - 8개 필드 존재 및 올바른 타입, knn_vector dimension=1024, engine=faiss, space_type=l2 검증
@@ -88,7 +88,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - RTL_S3_Bucket `rtl-sources/*` 접두사에 대한 동일 5개 액션 거부
     - _Requirements: 12.1, 13.9_
 
-  - [ ]* 1.13 Property 22 테스트 작성: IAM Explicit Deny
+  - [x]* 1.13 Property 22 테스트 작성: IAM Explicit Deny
     - **Property 22: IAM Explicit Deny로 Source of Truth 보호**
     - **Validates: Requirements 13.9**
     - Lambda_Handler IAM 정책에 Source of Truth 버킷 PutObject/DeleteObject/DeleteObjectVersion/BypassGovernanceRetention/PutObjectRetention Explicit Deny 존재 검증
@@ -110,7 +110,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 필수 태그 적용
     - _Requirements: 4.1, 4.2, 4.5, 4.6, 4.7, 13.3, 13.4, 13.6_
 
-  - [ ]* 3.2 Property 5 테스트 작성: Claim_DB Terraform 구성 완전성
+  - [x]* 3.2 Property 5 테스트 작성: Claim_DB Terraform 구성 완전성
     - **Property 5: Claim_DB Terraform 구성 완전성**
     - **Validates: Requirements 4.1, 4.2, 4.5, 4.6, 4.7**
     - PK/SK, 5 GSI 키 스키마, PAY_PER_REQUEST, PITR, KMS CMK 검증
@@ -124,27 +124,27 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - approval_status 필드 지원: verified 전이 시 pending_review 설정
     - _Requirements: 4.3, 4.4, 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8, 5.9, 5.10, 14.1, 14.2_
 
-  - [ ]* 3.4 Property 6 테스트 작성: Claim 필드 유효성 검증
+  - [x]* 3.4 Property 6 테스트 작성: Claim 필드 유효성 검증
     - **Property 6: Claim 필드 유효성 검증**
     - **Validates: Requirements 5.1, 5.6, 5.7, 7.2**
     - evidence 빈 배열 거부, confidence 범위, topic 형식, statement 길이, source_chunk 길이 검증
 
-  - [ ]* 3.5 Property 7 테스트 작성: Claim 상태 전이 규칙
+  - [x]* 3.5 Property 7 테스트 작성: Claim 상태 전이 규칙
     - **Property 7: Claim 상태 전이 규칙**
     - **Validates: Requirements 5.2, 5.3**
     - 6가지 허용 전이 성공, 불허 전이 HTTP 409, 초기 status=draft 검증
 
-  - [ ]* 3.6 Property 8 테스트 작성: Claim 버전 불변성
+  - [x]* 3.6 Property 8 테스트 작성: Claim 버전 불변성
     - **Property 8: Claim 버전 불변성**
     - **Validates: Requirements 5.4**
     - 업데이트 시 version+1, 이전 version 레코드 유지(삭제 안 됨) 검증
 
-  - [ ]* 3.7 Property 9 테스트 작성: Optimistic Locking 동시성 제어
+  - [x]* 3.7 Property 9 테스트 작성: Optimistic Locking 동시성 제어
     - **Property 9: Optimistic Locking 동시성 제어**
     - **Validates: Requirements 5.9, 5.10**
     - ConditionExpression 포함, ConditionalCheckFailedException 시 최대 3회 재시도 검증
 
-  - [ ]* 3.8 Property 10 테스트 작성: Contradiction Score 기반 상태 변경
+  - [x]* 3.8 Property 10 테스트 작성: Contradiction Score 기반 상태 변경
     - **Property 10: Contradiction Score 기반 상태 변경**
     - **Validates: Requirements 5.5, 5.8**
     - contradiction_score >= 0.7 시 기존 claim conflicted + derived_from 기록, deprecated cascading 검증
@@ -158,12 +158,12 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 파일 경로에서 topic 자동 추출 (예: `documents/soc/ucie/phy_spec.md` → `ucie/phy`)
     - _Requirements: 6.1, 6.2, 6.3, 6.4, 6.5, 6.6_
 
-  - [ ]* 3.10 Property 13 테스트 작성: 문서 메타데이터 확장 구조
+  - [x]* 3.10 Property 13 테스트 작성: 문서 메타데이터 확장 구조
     - **Property 13: 문서 메타데이터 확장 구조**
     - **Validates: Requirements 6.2, 6.5**
     - topic/variant/doc_version/source 필드 존재 및 기본값, source 허용 값 검증
 
-  - [ ]* 3.11 Property 14 테스트 작성: 파일 경로에서 Topic 자동 추출
+  - [x]* 3.11 Property 14 테스트 작성: 파일 경로에서 Topic 자동 추출
     - **Property 14: 파일 경로에서 Topic 자동 추출**
     - **Validates: Requirements 6.6**
     - documents/{team}/{category}/{filename} 형식에서 유효한 계층적 topic 생성 검증
@@ -178,7 +178,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - `handler()` 라우팅에 `action == 'ingest_claims'` 분기 추가
     - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5, 7.6, 7.7_
 
-  - [ ]* 3.13 Property 15 테스트 작성: Claim Ingestion 페이지네이션 및 카운팅
+  - [x]* 3.13 Property 15 테스트 작성: Claim Ingestion 페이지네이션 및 카운팅
     - **Property 15: Ingestion 페이지네이션 및 카운팅**
     - **Validates: Requirements 7.3, 7.4, 7.7**
     - 100건 상한, 응답 필드 존재, has_more 시 continuation_token, 신규 claim status=draft/version=1 검증
@@ -204,7 +204,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 모든 도구 응답에 `execution_time_ms` 필드 포함
     - _Requirements: 8.1, 8.2, 8.3, 8.6_
 
-  - [ ]* 5.3 Property 21 테스트 작성: MCP Tool 응답 실행 시간 포함
+  - [x]* 5.3 Property 21 테스트 작성: MCP Tool 응답 실행 시간 포함
     - **Property 21: MCP Tool 응답 실행 시간 포함**
     - **Validates: Requirements 8.6**
     - 모든 MCP Tool 응답에 execution_time_ms 존재 및 양의 정수 검증
@@ -219,12 +219,12 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 기존 `handle_query()` 수정: Verification Pipeline 우선 실행, 폴백 시 기존 Bedrock_KB 검색
     - _Requirements: 9.1, 9.2, 9.3, 9.4, 9.5, 9.6, 9.7, 9.8, 9.9_
 
-  - [ ]* 5.5 Property 16 테스트 작성: Verification Pipeline 응답 구조
+  - [x]* 5.5 Property 16 테스트 작성: Verification Pipeline 응답 구조
     - **Property 16: Verification Pipeline 응답 구조**
     - **Validates: Requirements 9.2, 9.3, 9.6, 9.7**
     - verification_metadata 필드 존재, topics_identified 최대 3개, claim 없으면 fallback=true, verified claim만 사용 검증
 
-  - [ ]* 5.6 Property 17 테스트 작성: 충돌 경고 포함
+  - [x]* 5.6 Property 17 테스트 작성: 충돌 경고 포함
     - **Property 17: 충돌 경고 포함**
     - **Validates: Requirements 9.4**
     - conflicted claim 존재 시 has_conflicts=true + 답변에 충돌 경고 메시지 포함 검증
@@ -250,7 +250,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - publishable 계산: status='verified' AND approval_status='approved'인 경우만 true
     - _Requirements: 14.1, 14.2, 14.3, 14.4, 14.6_
 
-  - [ ]* 7.2 Property 18 테스트 작성: Human Review Gate 승인 생명주기
+  - [x]* 7.2 Property 18 테스트 작성: Human Review Gate 승인 생명주기
     - **Property 18: Human Review Gate 승인 생명주기**
     - **Validates: Requirements 14.2, 14.3, 14.4, 14.5, 14.6, 14.7**
     - verified 전이 시 pending_review, approve 시 approved, reject 시 rejected, publishable 조건, 미승인 claim HTTP 403 검증
@@ -288,17 +288,17 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - `handler()` 라우팅에 `action == 'cross_check_claims'` 분기 추가
     - _Requirements: 11.1, 11.2, 11.3, 11.4, 11.5, 11.6, 11.7, 11.8, 11.9, 11.10_
 
-  - [ ]* 9.2 Property 11 테스트 작성: Validation Risk Score 계산 및 상태 전이
+  - [x]* 9.2 Property 11 테스트 작성: Validation Risk Score 계산 및 상태 전이
     - **Property 11: Validation Risk Score 계산 및 상태 전이**
     - **Validates: Requirements 11.5, 11.6, 11.7, 11.8**
     - 공식 정확성, 임계값별 상태 전이(< 0.3 verified, 0.3~0.7 draft, >= 0.7 conflicted) 검증
 
-  - [ ]* 9.3 Property 12 테스트 작성: Rule-Based Checker 검증
+  - [x]* 9.3 Property 12 테스트 작성: Rule-Based Checker 검증
     - **Property 12: Rule-Based Checker 검증**
     - **Validates: Requirements 11.4**
     - S3 존재 확인, statement 길이, topic 형식 검증 → 모두 통과 시 score_3=1.0, 실패 시 < 1.0 검증
 
-  - [ ]* 9.4 Property 19 테스트 작성: Cross-Check 결과 카운팅 일관성
+  - [x]* 9.4 Property 19 테스트 작성: Cross-Check 결과 카운팅 일관성
     - **Property 19: Cross-Check 결과 카운팅 일관성**
     - **Validates: Requirements 11.9**
     - claims_verified + claims_conflicted + claims_pending == total_processed 검증
@@ -314,7 +314,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - ingest_claims, cross_check_claims, verification_pipeline 함수에 메트릭 발행 호출 통합
     - _Requirements: 15.1, 15.2, 15.3, 15.4, 15.5, 15.6, 15.7_
 
-  - [ ]* 9.6 Property 20 테스트 작성: KPI 메트릭 계산 공식
+  - [x]* 9.6 Property 20 테스트 작성: KPI 메트릭 계산 공식
     - **Property 20: KPI 메트릭 계산 공식**
     - **Validates: Requirements 15.2, 15.3, 15.4, 15.5, 15.6, 15.7**
     - 7개 메트릭 계산 공식 정확성, BOS-AI/ClaimDB 네임스페이스 발행 검증
@@ -370,7 +370,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - Neptune Fallback 발생 시 `verification_metadata.neptune_fallback = true` 설정
     - _Requirements: 16.12_
 
-  - [ ]* 11.7 Property 25 테스트 작성: Neptune 통합 질의 Fallback 및 병렬 호출
+  - [x]* 11.7 Property 25 테스트 작성: Neptune 통합 질의 Fallback 및 병렬 호출
     - **Property 25: Neptune 통합 질의 Fallback 및 병렬 호출**
     - **Validates: Requirements 16.3, 16.5, 16.12, 16.15**
     - 3개 DB 병렬 비동기 호출, 개별 Timeout 30초, Neptune 실패 시 Fallback + neptune_fallback=true, Neptune SG 8182 포트 제한 검증
@@ -403,7 +403,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - `extract_package_constants()` 함수 내에서 `_extract_functions()`, `_extract_tasks()` 호출 통합
     - _Requirements: 17.1, 17.2, 17.3, 17.4, 17.5, 17.6, 17.7_
 
-  - [ ]* 14.2 Property 26 테스트 작성: Function/Task 추출 라운드트립
+  - [x]* 14.2 Property 26 테스트 작성: Function/Task 추출 라운드트립
     - **Property 26: Function/Task 추출 라운드트립**
     - **Validates: Requirements 17.1, 17.2, 17.3, 17.6**
     - 유효한 SystemVerilog function/task 선언에 대해 추출 후 claim_text 파싱으로 원본 시그니처 복원 검증
@@ -415,7 +415,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 모든 claim에 `parser_source='package_struct_parser'` 설정
     - _Requirements: 20.1, 20.2, 20.3, 20.4, 20.5_
 
-  - [ ]* 14.4 Property 30 테스트 작성: Struct 필드 비트폭 추출
+  - [x]* 14.4 Property 30 테스트 작성: Struct 필드 비트폭 추출
     - **Property 30: Struct 필드 비트폭 추출**
     - **Validates: Requirements 20.1, 20.2, 20.4, 20.5**
     - typedef struct 정의에서 필드 비트폭, 인라인 주석, 타입 참조가 claim에 포함되는지 검증
@@ -427,7 +427,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 부모/자식 struct 모두에 대해 claim 생성
     - _Requirements: 21.1, 21.2, 21.3, 21.4_
 
-  - [ ]* 14.6 Property 31 테스트 작성: 중첩 Struct 완전성
+  - [x]* 14.6 Property 31 테스트 작성: 중첩 Struct 완전성
     - **Property 31: 중첩 Struct 완전성**
     - **Validates: Requirements 21.1, 21.2, 21.3, 21.4**
     - 부모/자식 struct claim 모두 생성, 관계 추적 가능, 3단계 초과 시 truncation 경고 검증
@@ -444,7 +444,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 모든 claim에 `parser_source='generate_block_parser'` 설정
     - _Requirements: 18.1, 18.2, 18.3, 18.4, 18.5, 18.6, 18.7_
 
-  - [ ]* 15.2 Property 27 테스트 작성: Generate 블록 토폴로지 패턴 인식
+  - [x]* 15.2 Property 27 테스트 작성: Generate 블록 토폴로지 패턴 인식
     - **Property 27: Generate 블록 토폴로지 패턴 인식**
     - **Validates: Requirements 18.1, 18.2, 18.4, 18.6**
     - generate for/if 블록에서 올바른 토폴로지 유형 식별, claim_text에 패턴/신호/차원/크기 포함, 파라미터 참조 보존 검증
@@ -460,12 +460,12 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 모든 claim에 `parser_source='always_block_parser'` 설정
     - _Requirements: 19.1, 19.2, 19.3, 19.4, 19.5, 19.6, 19.7_
 
-  - [ ]* 15.4 Property 28 테스트 작성: 클럭 도메인 추출 및 집계
+  - [x]* 15.4 Property 28 테스트 작성: 클럭 도메인 추출 및 집계
     - **Property 28: 클럭 도메인 추출 및 집계**
     - **Validates: Requirements 19.1, 19.2, 19.3, 19.6**
     - always_ff에서만 클럭 도메인 추출(always_comb 제외), 모듈당 집계, 도메인 매핑 정확성 검증
 
-  - [ ]* 15.5 Property 29 테스트 작성: 클럭 도메인 크로싱 감지
+  - [x]* 15.5 Property 29 테스트 작성: 클럭 도메인 크로싱 감지
     - **Property 29: 클럭 도메인 크로싱 감지**
     - **Validates: Requirements 19.4**
     - 2개 이상 도메인 시 CDC claim 생성, 1개 이하 시 CDC claim 미생성 검증
@@ -488,12 +488,12 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - Python `eval()` 사용 금지 (코드 인젝션 방지)
     - _Requirements: 22.1, 22.2, 22.3, 22.4, 22.5, 22.6_
 
-  - [ ]* 17.2 Property 32 테스트 작성: 비트폭 표현식 평가
+  - [x]* 17.2 Property 32 테스트 작성: 비트폭 표현식 평가
     - **Property 32: 비트폭 표현식 평가**
     - **Validates: Requirements 22.1, 22.2, 22.3, 22.4**
     - 순수 정수 산술식 + 해석 가능 파라미터 → 수학적 올바른 결과, 미해석 파라미터 → 원본 유지 검증
 
-  - [ ]* 17.3 Property 33 테스트 작성: 안전한 비트폭 평가 (코드 인젝션 방지)
+  - [x]* 17.3 Property 33 테스트 작성: 안전한 비트폭 평가 (코드 인젝션 방지)
     - **Property 33: 안전한 비트폭 평가**
     - **Validates: Requirements 22.6**
     - 정수 리터럴/지원 연산자/파라미터 참조 외 구문 거부, 악의적 입력 시 ValueError 검증
@@ -508,7 +508,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 각 Sub_Record를 개별 임베딩 + OpenSearch 인덱싱
     - _Requirements: 23.1, 23.2, 23.3, 23.4, 23.5_
 
-  - [ ]* 18.2 Property 34 테스트 작성: 대형 모듈 청킹 불변식
+  - [x]* 18.2 Property 34 테스트 작성: 대형 모듈 청킹 불변식
     - **Property 34: 대형 모듈 청킹 불변식**
     - **Validates: Requirements 23.1, 23.2, 23.3**
     - 50+ 포트 → 3가지 Sub_Record 생성 + 필드 포함 + 기존 레코드 유지, 50 미만 → Sub_Record 미생성 검증
@@ -522,7 +522,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 응답 `metadata.query_type`에 분류 결과 포함
     - _Requirements: 24.1, 24.2, 24.3, 24.4, 24.5, 24.6, 24.7, 24.8_
 
-  - [ ]* 18.4 Property 35 테스트 작성: 질의 유형별 동적 Boost 매핑
+  - [x]* 18.4 Property 35 테스트 작성: 질의 유형별 동적 Boost 매핑
     - **Property 35: 질의 유형별 동적 Boost 매핑**
     - **Validates: Requirements 24.1, 24.2, 24.3, 24.4, 24.5, 24.6, 24.8**
     - classify_query_type 5가지 유형 분류, get_dynamic_boosts 가중치 정확성, 미매칭 시 general_query 폴백 검증
@@ -541,12 +541,12 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - `rag_query` API에서도 `grounding_mode` 수용
     - _Requirements: 25.1, 25.2, 25.3, 25.4, 25.5, 25.6, 25.7, 25.8_
 
-  - [ ]* 19.2 Property 36 테스트 작성: Hybrid Grounding 태그 일관성
+  - [x]* 19.2 Property 36 테스트 작성: Hybrid Grounding 태그 일관성
     - **Property 36: Hybrid Grounding 태그 일관성**
     - **Validates: Requirements 25.2, 25.3, 25.4, 25.5**
     - GROUNDED 태그에 claim_id 각주, INFERRED 태그에 경고, grounded_ratio + inferred_ratio = 1.0, inferred > 0.5 시 경고 검증
 
-  - [ ]* 19.3 Property 37 테스트 작성: Grounding 모드 동작
+  - [x]* 19.3 Property 37 테스트 작성: Grounding 모드 동작
     - **Property 37: Grounding 모드 동작**
     - **Validates: Requirements 25.6, 25.8**
     - strict 모드 GROUNDED만 + KB 부족 시 NOT IN KB, hybrid 모드 양쪽 태그, free 모드 태그 없음 검증
@@ -560,12 +560,12 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 기존 `_make_claim()` 및 각 파서의 claim 생성에 `parser_source` 필드 추가
     - _Requirements: 26.1, 26.2, 26.3, 26.6_
 
-  - [ ]* 20.2 Property 38 테스트 작성: 파서 Feature Flag 제어
+  - [x]* 20.2 Property 38 테스트 작성: 파서 Feature Flag 제어
     - **Property 38: 파서 Feature Flag 제어**
     - **Validates: Requirements 26.1, 26.2**
     - feature flag false → 파서 미실행 + claim 미인덱싱, true → 정상 실행 검증
 
-  - [ ]* 20.3 Property 39 테스트 작성: 파서 출처 귀속
+  - [x]* 20.3 Property 39 테스트 작성: 파서 출처 귀속
     - **Property 39: 파서 출처 귀속**
     - **Validates: Requirements 26.6**
     - 모든 파서 생성 claim에 parser_source 필드 존재 + 빈 문자열 아님 검증
@@ -792,12 +792,12 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - `_process_rtl_file()` 함수에서 port_binding_parser 호출 후 Neptune 적재 호출 통합
     - _Requirements: 31.1, 31.2, 31.3, 31.4, 31.5, 31.6, 31.7, 31.8_
 
-  - [ ]* 29.3 Property 40 테스트 작성: Port Binding 추출 완전성
+  - [x]* 29.3 Property 40 테스트 작성: Port Binding 추출 완전성
     - **Property 40: Port Binding 추출 완전성**
     - **Validates: Requirements 30.1, 30.2, 30.4, 30.8**
     - `.port(signal)` 패턴 추출, 파라미터 블록 제외, is_unconnected=false 시 signal_expr 비어있지 않음, port_name 비어있지 않음 검증
 
-  - [ ]* 29.4 Property 41 테스트 작성: Neptune CONNECTS_TO 적재 보존
+  - [x]* 29.4 Property 41 테스트 작성: Neptune CONNECTS_TO 적재 보존
     - **Property 41: Neptune CONNECTS_TO 적재 보존**
     - **Validates: Requirements 31.1, 31.7, 31.8**
     - is_unconnected=false 바인딩 수 == CONNECTS_TO 엣지 수, MERGE로 중복 미생성, Neptune 실패 시 OpenSearch 인덱싱 계속 검증
@@ -849,7 +849,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - D3.js 로컬 복사본 선택적 참조 구조 (`docs/diagrams/vendor/d3.v7.min.js` fallback)
     - _Requirements: 33.1, 33.2, 33.3, 33.4, 33.5, 33.6, 33.7, 33.8, 33.9_
 
-  - [ ]* 30.5 Property 42 테스트 작성: Graph Export API 응답 구조
+  - [x]* 30.5 Property 42 테스트 작성: Graph Export API 응답 구조
     - **Property 42: Graph Export API 응답 구조**
     - **Validates: Requirements 32.1, 32.5, 32.6, 32.7**
     - 응답에 nodes/edges/metadata 필드 존재, scope 유효값 검증, 노드 상한 1000개, Neptune 실패 시 neptune_fallback=true + 빈 그래프 검증
@@ -887,12 +887,12 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 응답에 `execution_time_ms`, `sections_regenerated`, `sections_skipped`, `unresolved_placeholder_count` 포함
     - _Requirements: 34.8_
 
-  - [ ]* 31.5 Property 43 테스트 작성: Placeholder 복구 완전성
+  - [x]* 31.5 Property 43 테스트 작성: Placeholder 복구 완전성
     - **Property 43: Placeholder 복구 완전성**
     - **Validates: Requirements 34.1, 34.2, 34.9**
     - 재생성 후 마크다운에 `{MODULE_*}`/`{INSTANCE_*}`/`{SIGNAL_*}`/`{PORT_*}` 패턴 미존재 또는 HTML 주석 형태만 존재, unresolved_placeholders 배열 정확성 검증
 
-  - [ ]* 31.6 Property 44 테스트 작성: Topic 전파 무한 루프 방지
+  - [x]* 31.6 Property 44 테스트 작성: Topic 전파 무한 루프 방지
     - **Property 44: Topic 전파 무한 루프 방지**
     - **Validates: Requirements 34.5, 34.7**
     - 순환 parent_topics 구조에서 max_propagation_depth=5 초과 시 재생성 건너뛰기 + WARNING 로그, stale 마킹 정확성 검증

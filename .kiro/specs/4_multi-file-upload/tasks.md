@@ -74,17 +74,17 @@ Terraform IaC 변경 → Lambda 백엔드 핸들러 → 웹 UI → MCP 브릿지
     - _Requirements: 10.1_
     - _Design: 2_
 
-  - [ ]* 3.4 Property 테스트: presign_upload 입력 검증
+  - [x]* 3.4 Property 테스트: presign_upload 입력 검증
     - **Property 11: Pre-signed URL 입력 검증**
     - hypothesis로 filename/team/category 조합 생성, 누락 시 400 응답 검증
     - **Validates: Requirements 10.7**
 
-  - [ ]* 3.5 Property 테스트: Pre-signed URL S3 키 경로 생성
+  - [x]* 3.5 Property 테스트: Pre-signed URL S3 키 경로 생성
     - **Property 10: Pre-signed URL S3 키 경로 생성**
     - hypothesis로 유효한 filename/team/category 조합 생성, s3_key 형식 검증
     - **Validates: Requirements 10.2**
 
-  - [ ]* 3.6 Property 테스트: skip_sync에 의한 KB Sync 제어
+  - [x]* 3.6 Property 테스트: skip_sync에 의한 KB Sync 제어
     - **Property 8: skip_sync 파라미터에 의한 KB Sync 제어**
     - hypothesis로 skip_sync boolean 생성, KB Sync 호출 여부 검증
     - **Validates: Requirements 5.1, 5.2, 5.4**
@@ -96,7 +96,7 @@ Terraform IaC 변경 → Lambda 백엔드 핸들러 → 웹 UI → MCP 브릿지
     - _Requirements: 3.3_
     - _Design: 데이터 모델 — 압축 해제 시 파일명 변환 규칙_
 
-  - [ ]* 4.2 Property 테스트: 경로 평탄화 변환
+  - [x]* 4.2 Property 테스트: 경로 평탄화 변환
     - **Property 5: 경로 평탄화 변환**
     - hypothesis로 다양한 경로 문자열 생성, `/` → `_` 변환 및 구성 요소 보존 검증
     - **Validates: Requirements 3.3**
@@ -137,22 +137,22 @@ Terraform IaC 변경 → Lambda 백엔드 핸들러 → 웹 UI → MCP 브릿지
     - _Requirements: 7.1, 7.6_
     - _Design: 2_
 
-  - [ ]* 4.7 Property 테스트: Extraction Task 상태 머신
+  - [x]* 4.7 Property 테스트: Extraction Task 상태 머신
     - **Property 9: Extraction Task 상태 머신**
     - hypothesis로 상태 전이 시퀀스 생성, 유효한 전이만 허용되는지 검증
     - **Validates: Requirements 3.1, 7.2, 7.3, 7.4, 7.5**
 
-  - [ ]* 4.8 Property 테스트: 비지원 파일 건너뛰기
+  - [x]* 4.8 Property 테스트: 비지원 파일 건너뛰기
     - **Property 6: 비지원 파일 건너뛰기**
     - hypothesis로 지원/비지원 파일 혼합 목록 생성, 건너뛰기 동작 검증
     - **Validates: Requirements 3.5**
 
-  - [ ]* 4.9 Property 테스트: 압축 해제 결과 카운트 불변식
+  - [x]* 4.9 Property 테스트: 압축 해제 결과 카운트 불변식
     - **Property 7: 압축 해제 결과 카운트 불변식**
     - hypothesis로 다양한 파일 조합 생성, success + skipped + error == total 검증
     - **Validates: Requirements 3.6**
 
-  - [ ]* 4.10 Property 테스트: Extraction 상태 조회 라운드트립
+  - [x]* 4.10 Property 테스트: Extraction 상태 조회 라운드트립
     - **Property 12: Extraction 상태 조회 라운드트립**
     - hypothesis로 DynamoDB 레코드 생성 후 GET 조회, 데이터 일치 검증
     - **Validates: Requirements 7.7**
@@ -191,22 +191,22 @@ Terraform IaC 변경 → Lambda 백엔드 핸들러 → 웹 UI → MCP 브릿지
     - _Requirements: 1.3, 1.5_
     - _Design: 3.1_
 
-  - [ ]* 6.5 Property 테스트: 파일 큐 병합 시 중복 방지
+  - [x]* 6.5 Property 테스트: 파일 큐 병합 시 중복 방지
     - **Property 1: 파일 큐 병합 시 중복 방지**
     - fast-check로 두 파일 목록 생성, 병합 후 중복 없음 + 모든 고유 파일 존재 검증
     - **Validates: Requirements 1.2, 1.3**
 
-  - [ ]* 6.6 Property 테스트: 파일 제거 후 큐 무결성
+  - [x]* 6.6 Property 테스트: 파일 제거 후 큐 무결성
     - **Property 2: 파일 제거 후 큐 무결성**
     - fast-check로 큐 + 유효 인덱스 생성, 제거 후 길이 감소 + 파일 부재 검증
     - **Validates: Requirements 1.5**
 
-  - [ ]* 6.7 Property 테스트: 디렉토리 재귀 탐색 및 필터링
+  - [x]* 6.7 Property 테스트: 디렉토리 재귀 탐색 및 필터링
     - **Property 3: 디렉토리 재귀 탐색 및 필터링**
     - fast-check로 파일 트리 구조 생성, 숨김/시스템 파일 제외 검증
     - **Validates: Requirements 2.2, 2.3, 2.4**
 
-  - [ ]* 6.8 Property 테스트: 파일 유효성 검증
+  - [x]* 6.8 Property 테스트: 파일 유효성 검증
     - **Property 4: 파일 유효성 검증 (형식 + 크기)**
     - fast-check로 다양한 파일명/크기 생성, 허용/거부 판정 검증
     - **Validates: Requirements 6.1, 6.2, 6.3, 6.4**
@@ -243,7 +243,7 @@ Terraform IaC 변경 → Lambda 백엔드 핸들러 → 웹 UI → MCP 브릿지
     - _Requirements: 9.1, 9.3_
     - _Design: 3.4_
 
-  - [ ]* 7.5 Property 테스트: 업로드 오류 복원력
+  - [x]* 7.5 Property 테스트: 업로드 오류 복원력
     - **Property 13: 업로드 오류 복원력**
     - fast-check로 성공/실패 파일 목록 생성, 실패 시에도 나머지 계속 진행 + 성공수+실패수==전체수 검증
     - **Validates: Requirements 4.5**
