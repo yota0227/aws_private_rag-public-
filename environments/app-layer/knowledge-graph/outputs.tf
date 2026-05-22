@@ -11,9 +11,9 @@ output "neptune_cluster_reader_endpoint" {
   value       = module.neptune.neptune_cluster_reader_endpoint
 }
 
-output "neptune_readonly_role_arn" {
-  description = "Neptune Read-Only IAM Role ARN (Lambda Handler용)"
-  value       = aws_iam_role.neptune_readonly.arn
+output "neptune_cluster_id" {
+  description = "Neptune 클러스터 ID"
+  value       = module.neptune.neptune_cluster_id
 }
 
 output "neptune_security_group_id" {

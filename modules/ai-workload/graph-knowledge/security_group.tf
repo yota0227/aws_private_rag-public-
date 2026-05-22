@@ -1,39 +1,28 @@
-# Neptune 전용 Security Group
-# CRITICAL: SG-to-SG 규칙만 허용 — CIDR 기반 인바운드 금지
+# Neptune 전용 Security Group — Virginia Backend VPC
+# Seoul Lambda(10.10.0.0/16)가 VPC Peering 경유로 Neptune 8182 접근
+#
 # Requirements: 16.3, 16.15
 
-# Neptune Security Group — 8182 포트를 특정 Lambda SG에서만 허용
 resource "aws_security_group" "neptune" {
-  name        = "sg-neptune-${var.project_name}-${var.environment}"
-  description = "Neptune Graph DB SG - Allow TCP 8182 from RTL Parser Lambda and Lambda Handler only"
+  name        = "neptune-${var.project_name}-${var.environment}"
+  description = "Neptune Graph DB SG - Allow TCP 8182 from Seoul VPC via Peering"
   vpc_id      = var.vpc_id
 
   tags = merge(local.tags, {
-    Name    = "sg-neptune-${var.project_name}-${var.environment}"
+    Name    = "neptune-${var.project_name}-${var.environment}"
     Purpose = "Neptune Graph DB Access Control"
   })
 }
 
-# 인바운드: RTL Parser Lambda SG → Neptune 8182 (Write 용도)
-resource "aws_security_group_rule" "neptune_ingress_rtl_parser" {
-  type                     = "ingress"
-  from_port                = 8182
-  to_port                  = 8182
-  protocol                 = "tcp"
-  description              = "RTL Parser Lambda to Neptune Gremlin/openCypher (Write)"
-  security_group_id        = aws_security_group.neptune.id
-  source_security_group_id = var.rtl_parser_lambda_sg_id
-}
-
-# 인바운드: Lambda Handler SG → Neptune 8182 (Read-Only 용도)
-resource "aws_security_group_rule" "neptune_ingress_lambda_handler" {
-  type                     = "ingress"
-  from_port                = 8182
-  to_port                  = 8182
-  protocol                 = "tcp"
-  description              = "Lambda Handler to Neptune Read-Only query access"
-  security_group_id        = aws_security_group.neptune.id
-  source_security_group_id = var.lambda_handler_sg_id
+# 인바운드: Seoul Frontend VPC CIDR → Neptune 8182 (VPC Peering 경유)
+resource "aws_security_group_rule" "neptune_ingress_seoul_lambda" {
+  type              = "ingress"
+  from_port         = 8182
+  to_port           = 8182
+  protocol          = "tcp"
+  description       = "Seoul Lambda to Neptune via VPC Peering (RTL Parser Write + Handler Read)"
+  security_group_id = aws_security_group.neptune.id
+  cidr_blocks       = [var.seoul_vpc_cidr]
 }
 
 # 아웃바운드: 모든 트래픽 허용

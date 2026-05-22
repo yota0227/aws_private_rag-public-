@@ -8,7 +8,11 @@
         "rag_query",
         "get_evidence",
         "list_verified_claims",
-        "rag_categories"
+        "rag_categories",
+        "find_instantiation_tree",
+        "find_instantiation_tree",
+        "find_instantiation_tree",
+        "graph_export"
       ]
     }
   }

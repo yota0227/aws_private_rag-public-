@@ -728,6 +728,306 @@ def _extract_instance_positions(block_content, block_label, genvar_ranges,
     return claims
 
 
+# ---------------------------------------------------------------------------
+# Phase 9.4: Generate Block Label Extraction (Req 6.1-6.5)
+# ---------------------------------------------------------------------------
+
+def _extract_generate_block_labels(clean_content):
+    """Extract all labeled generate block labels with hierarchy paths.
+
+    Scans clean (comment-stripped) RTL content for labeled generate blocks
+    (both for and if), builds parent-child relationships, and associates
+    module instantiations with their enclosing generate block.
+
+    Args:
+        clean_content: Comment-stripped RTL source code string.
+
+    Returns:
+        List of dicts, each with keys:
+            - label: str — the block label name
+            - parent_label: str or None — parent block label (None if top-level)
+            - hierarchy_path: str — full path (e.g., "gen_outer/gen_inner")
+            - block_type: str — "for" or "if"
+            - instances: list[str] — module instantiations inside this block
+    """
+    # Step 1: Find all labeled begin blocks with their positions and types
+    labeled_blocks = _find_labeled_blocks_with_positions(clean_content)
+
+    if not labeled_blocks:
+        return []
+
+    # Step 2: Determine nesting (parent-child) relationships by position
+    _assign_parents(labeled_blocks)
+
+    # Step 3: Build hierarchy paths
+    _build_hierarchy_paths(labeled_blocks)
+
+    # Step 4: Extract instances within each block's body
+    _assign_instances_to_blocks(labeled_blocks, clean_content)
+
+    # Step 5: Return structured results
+    results = []
+    for block in labeled_blocks:
+        results.append({
+            "label": block["label"],
+            "parent_label": block["parent_label"],
+            "hierarchy_path": block["hierarchy_path"],
+            "block_type": block["block_type"],
+            "instances": block["instances"],
+        })
+
+    return results
+
+
+def _find_labeled_blocks_with_positions(clean_content):
+    """Find all labeled generate blocks with their start/end positions.
+
+    Detects both:
+      - for (genvar ...) begin : label_name
+      - if (condition) begin : label_name
+
+    Returns list of dicts with keys: label, block_type, start, end, body_start.
+    """
+    blocks = []
+
+    # Pattern for: for (...) begin : label
+    for_pattern = re.compile(
+        r"\bfor\s*\([^)]*\)\s*begin\s*:\s*(\w+)",
+        re.DOTALL,
+    )
+    # Pattern for: if (...) begin : label
+    if_pattern = re.compile(
+        r"\bif\s*\([^)]*\)\s*begin\s*:\s*(\w+)",
+        re.DOTALL,
+    )
+
+    for m in for_pattern.finditer(clean_content):
+        label = m.group(1)
+        body_start = m.end()
+        end_pos = _find_matching_end(clean_content, body_start)
+        blocks.append({
+            "label": label,
+            "block_type": "for",
+            "start": m.start(),
+            "body_start": body_start,
+            "end": end_pos,
+            "parent_label": None,
+            "hierarchy_path": "",
+            "instances": [],
+        })
+
+    for m in if_pattern.finditer(clean_content):
+        label = m.group(1)
+        body_start = m.end()
+        end_pos = _find_matching_end(clean_content, body_start)
+        blocks.append({
+            "label": label,
+            "block_type": "if",
+            "start": m.start(),
+            "body_start": body_start,
+            "end": end_pos,
+            "parent_label": None,
+            "hierarchy_path": "",
+            "instances": [],
+        })
+
+    # Sort by start position for consistent processing
+    blocks.sort(key=lambda b: b["start"])
+    return blocks
+
+
+def _find_matching_end(content, body_start):
+    """Find the position of the matching 'end' keyword for a begin block.
+
+    Counts begin/end nesting starting from body_start.
+    Returns the position after the matching 'end'.
+    """
+    if body_start >= len(content):
+        return len(content)
+
+    rest = content[body_start:]
+    depth = 1
+    token_pattern = re.compile(r"\b(begin|end)\b")
+    for m in token_pattern.finditer(rest):
+        if m.group(1) == "begin":
+            depth += 1
+        else:
+            depth -= 1
+            if depth == 0:
+                return body_start + m.end()
+    return len(content)
+
+
+def _assign_parents(labeled_blocks):
+    """Assign parent_label based on positional nesting.
+
+    A block B is a child of block A if B.start > A.body_start and B.end <= A.end.
+    The immediate parent is the innermost enclosing block.
+    """
+    for i, block in enumerate(labeled_blocks):
+        # Find the innermost enclosing block
+        best_parent = None
+        best_span = float('inf')
+        for j, candidate in enumerate(labeled_blocks):
+            if i == j:
+                continue
+            # candidate encloses block if block is within candidate's body
+            if (candidate["body_start"] <= block["start"]
+                    and block["end"] <= candidate["end"]):
+                span = candidate["end"] - candidate["body_start"]
+                if span < best_span:
+                    best_span = span
+                    best_parent = candidate
+        if best_parent:
+            block["parent_label"] = best_parent["label"]
+
+
+def _build_hierarchy_paths(labeled_blocks):
+    """Build hierarchy_path for each block based on parent relationships.
+
+    E.g., if gen_inner's parent is gen_outer, path = "gen_outer/gen_inner".
+    """
+    # Build a lookup by label
+    label_map = {b["label"]: b for b in labeled_blocks}
+
+    for block in labeled_blocks:
+        path_parts = []
+        current = block
+        while current:
+            path_parts.append(current["label"])
+            parent_label = current["parent_label"]
+            current = label_map.get(parent_label) if parent_label else None
+        path_parts.reverse()
+        block["hierarchy_path"] = "/".join(path_parts)
+
+
+def _assign_instances_to_blocks(labeled_blocks, clean_content):
+    """Find module instantiations within each block's body and assign them.
+
+    Instance pattern: module_type instance_name (
+    Excludes SystemVerilog keywords.
+    """
+    _KEYWORDS = {
+        "if", "for", "begin", "end", "assign", "always", "initial",
+        "generate", "endgenerate", "module", "endmodule", "wire",
+        "logic", "reg", "input", "output", "inout", "parameter",
+        "localparam", "genvar", "else", "case", "endcase", "function",
+        "endfunction", "task", "endtask", "typedef", "struct", "enum",
+        "interface", "endinterface", "class", "endclass", "package",
+        "endpackage", "import", "export", "virtual", "static",
+    }
+
+    instance_pattern = re.compile(r'(\w+)\s+(\w+)\s*\(')
+
+    for block in labeled_blocks:
+        body_start = block["body_start"]
+        body_end = block["end"]
+        body_text = clean_content[body_start:body_end]
+
+        # Determine child block ranges (relative to body_text)
+        child_ranges = []
+        for other in labeled_blocks:
+            if other["parent_label"] == block["label"]:
+                child_start = other["body_start"] - body_start
+                child_end = other["end"] - body_start
+                child_ranges.append((child_start, child_end))
+
+        instances = []
+        for m in instance_pattern.finditer(body_text):
+            module_type = m.group(1)
+            instance_name = m.group(2)
+
+            if module_type in _KEYWORDS or instance_name in _KEYWORDS:
+                continue
+            if not module_type or not instance_name:
+                continue
+            if module_type[0].isdigit() or instance_name[0].isdigit():
+                continue
+
+            # Skip instances inside child blocks
+            if child_ranges:
+                pos = m.start()
+                in_child = False
+                for cs, ce in child_ranges:
+                    if cs <= pos < ce:
+                        in_child = True
+                        break
+                if in_child:
+                    continue
+
+            instances.append(instance_name)
+
+        block["instances"] = instances
+
+
+def extract_generate_block_label_claims(rtl_content, module_name="",
+                                        file_path="", pipeline_id=""):
+    """Extract generate block label hierarchy claims from RTL content.
+
+    Public API that combines _extract_generate_block_labels with claim
+    generation. Produces claims with claim_type="structural" and
+    topic="Hierarchy".
+
+    Args:
+        rtl_content: Raw RTL source code string.
+        module_name: Name of the module being parsed.
+        file_path: Source file path for claim metadata.
+        pipeline_id: Pipeline identifier for claim metadata.
+
+    Returns:
+        List of claim dicts ready for OpenSearch indexing.
+    """
+    claims = []
+
+    # Strip comments for reliable pattern matching
+    clean = _strip_comments(rtl_content)
+
+    # Extract module name from content if not provided
+    if not module_name:
+        mod_match = re.search(r"\bmodule\s+(\w+)\s*(?:#\s*\(|[\(\;])", clean)
+        module_name = mod_match.group(1) if mod_match else "unknown"
+
+    # Extract labeled blocks with hierarchy
+    labeled_blocks = _extract_generate_block_labels(clean)
+
+    if not labeled_blocks:
+        return claims
+
+    for block in labeled_blocks:
+        label = block["label"]
+        block_type = block["block_type"]
+        hierarchy_path = block["hierarchy_path"]
+        instances = block["instances"]
+
+        # Build claim text
+        if instances:
+            instances_str = ", ".join(instances)
+            claim_text = (
+                f"Module '{module_name}' generate block '{label}' "
+                f"({block_type}) contains instances: {instances_str}"
+            )
+        else:
+            claim_text = (
+                f"Module '{module_name}' generate block '{label}' "
+                f"({block_type}) at hierarchy path '{hierarchy_path}'"
+            )
+
+        # Add hierarchy info if nested
+        if block["parent_label"]:
+            claim_text += (
+                f" [nested under '{block['parent_label']}', "
+                f"path: {hierarchy_path}]"
+            )
+
+        claims.append(_make_claim(
+            claim_text, "structural", module_name,
+            "Hierarchy", file_path, pipeline_id,
+            parser_source="generate_block_parser",
+        ))
+
+    return claims
+
+
 def _extract_noc_repeaters(block_content, block_label, genvar_ranges,
                            module_name, file_path, pipeline_id):
     """Extract NoC repeater instances with NUM parameter and placement info.

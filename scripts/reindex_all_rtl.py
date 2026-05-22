@@ -16,7 +16,10 @@ BUCKET = "bos-ai-rtl-src-533335672315"
 PREFIX_TEMPLATE = "rtl-sources/{pipeline_id}/"
 LAMBDA_NAME = "lambda-rtl-parser-seoul-dev"
 REGION = "ap-northeast-2"
-RTL_EXTENSIONS = (".sv", ".v", ".svh", ".vh")
+RTL_EXTENSIONS = (".sv", ".v", ".svh", ".vh",
+                  ".json", ".svd", ".h", ".hpp", ".c", ".cpp",
+                  ".md", ".rst", ".txt", ".sdc", ".dts", ".csv",
+                  ".py", ".tcl", ".yaml", ".yml", ".f")
 
 
 def list_rtl_files(s3, bucket, prefix):

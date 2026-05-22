@@ -50,6 +50,16 @@ resource "aws_opensearchserverless_vpc_endpoint" "seoul" {
   security_group_ids = [aws_security_group.opensearch.id]
 }
 
+# AOSS-native VPC Endpoint in Virginia Backend VPC (same region as collection)
+# Seoul Lambda → VPC Peering → Virginia AOSS-native Endpoint → OpenSearch data plane
+# Required: AOSS-native endpoints only access collections in the same region
+resource "aws_opensearchserverless_vpc_endpoint" "virginia" {
+  name               = "vpce-opensearch-virginia-${var.environment}"
+  vpc_id             = local.us_vpc_id
+  subnet_ids         = local.us_private_subnet_ids
+  security_group_ids = [data.terraform_remote_state.network.outputs.us_opensearch_security_group_id]
+}
+
 output "opensearch_collection_arn" {
   description = "Virginia OpenSearch collection ARN"
   value       = data.aws_opensearchserverless_collection.virginia.arn
@@ -63,6 +73,11 @@ output "opensearch_collection_endpoint" {
 output "opensearch_seoul_vpc_endpoint_id" {
   description = "Seoul OpenSearch VPC Endpoint ID"
   value       = aws_opensearchserverless_vpc_endpoint.seoul.id
+}
+
+output "opensearch_virginia_vpc_endpoint_id" {
+  description = "Virginia OpenSearch AOSS-native VPC Endpoint ID (data plane)"
+  value       = aws_opensearchserverless_vpc_endpoint.virginia.id
 }
 
 output "opensearch_security_group_id" {

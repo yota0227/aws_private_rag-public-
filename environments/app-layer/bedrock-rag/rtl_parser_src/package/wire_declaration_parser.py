@@ -113,11 +113,13 @@ def extract_wire_declarations(rtl_content, module_name="", file_path="",
     # Pattern C: pkg::type_name signal_name[dims]; (no wire/logic keyword)
     # e.g.: trinity_pkg::trinity_clock_routing_t clock_routing_out[SizeX][SizeY];
     #        tt_chip_global_pkg::de_to_t6_t [...] de_to_t6_coloumn[...];
+    #        de_to_t6_t [3:0][7:0] de_to_t6_coloumn[SizeX][SizeY-1][2];
+    # Groups: 1=type name, 2=packed dimensions (0+), 3=signal name, 4=array dimensions (1+)
     pattern_c = re.compile(
-        r'^[ \t]*((?:\w+::)?\w+_t)\s+'  # type with optional pkg:: prefix, ending with _t
-        r'(?:\[[^\]]+\]\s*)?'            # optional packed dimension (e.g., [NumDispatchCorners-1:0])
-        r'(\w+)\s*'                      # signal name
-        r'((?:\[[^\]]+\])+)\s*;',        # one or more array dimensions
+        r'^[ \t]*((?:\w+::)?\w+_t)\s+'       # Group 1: type with optional pkg:: prefix, ending with _t
+        r'((?:\[[^\]]+\]\s*)*)'              # Group 2: zero or more packed dimensions (e.g., [3:0][7:0])
+        r'(\w+)\s*'                          # Group 3: signal name
+        r'((?:\[[^\]]+\])+)\s*;',            # Group 4: one or more array dimensions
         re.MULTILINE,
     )
 
@@ -190,8 +192,9 @@ def extract_wire_declarations(rtl_content, module_name="", file_path="",
     # Process Pattern C matches (implicit wire with _t type)
     for m in pattern_c.finditer(clean):
         struct_type = m.group(1)
-        signal_name = m.group(2)
-        dim_str = m.group(3)
+        # Group 2 is packed dimensions (not used for array claim, but separates packed from array)
+        signal_name = m.group(3)
+        dim_str = m.group(4)
 
         if not signal_name:
             continue

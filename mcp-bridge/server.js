@@ -248,11 +248,11 @@ function createMcpServer() {
 
   mcp.tool(
     "search_rtl",
-    "RTL 파싱된 데이터를 검색합니다. 모듈명, 포트, 인스턴스, 토픽 등으로 검색 가능합니다. Trinity/N1B0 등 업로드된 RTL 코드의 구조 정보를 조회합니다.",
+    "RTL 및 SoC 설계 데이터를 검색합니다. 모듈명, 포트, 인스턴스, 토픽 등으로 검색 가능합니다. RTL 코드뿐 아니라 firmware 헤더, 레지스터맵(SVD/JSON), 설계 문서(MD/RST), timing constraint(SDC), device tree(DTS), filelist hierarchy 등도 검색됩니다.",
     {
-      query: z.string().describe("검색어 (모듈명, 신호명, 키워드 등)"),
-      pipeline_id: z.string().optional().describe("파이프라인 ID 필터 (예: tt_20260221). 생략 시 전체 검색"),
-      topic: z.string().optional().describe("토픽 필터 (예: NoC, FPU, EDC, Overlay). 생략 시 전체 검색"),
+      query: z.string().describe("검색어 (모듈명, 신호명, 레지스터명, 키워드 등)"),
+      pipeline_id: z.string().optional().describe("파이프라인 ID 필터 (예: tt_20260221, tt_20260516). 생략 시 전체 검색"),
+      topic: z.string().optional().describe("토픽 필터 (예: NoC, FPU, EDC, Overlay, Hierarchy). 생략 시 전체 검색"),
       max_results: z.number().optional().default(50).describe("최대 결과 수 (기본값: 50)")
     },
     async (args, extra) => {
@@ -282,6 +282,20 @@ function createMcpServer() {
           if (r.topic) text += " | 토픽: " + (Array.isArray(r.topic) ? r.topic.join(", ") : r.topic);
           if (r.analysis_type) text += " | 유형: " + r.analysis_type;
           if (r.pipeline_id) text += " | 파이프라인: " + r.pipeline_id;
+          // Signal path edge rendering
+          if (r.analysis_type === "signal_path_edge") {
+            text += "\n    " + (r.edge_type || "") + ": `" + (r.src || "") + "` → `" + (r.dst || "") + "`";
+            if (r.category) text += " [" + r.category + "]";
+            if (r.raw_text) text += "\n    evidence: " + r.raw_text.substring(0, 300);
+          }
+          // Phase 2/3: 보조 파일 타입 렌더링
+          if (r.analysis_type === "filelist_hierarchy") {
+            text += "\n    📂 " + (r.claim_text || "");
+            if (r.instance_list) text += "\n    파일: " + r.instance_list.substring(0, 300) + (r.instance_list.length > 300 ? "..." : "");
+          }
+          if (["config_data", "register_map", "firmware_header", "firmware_source", "documentation", "design_constraint", "device_tree", "script", "structured_data"].indexOf(r.analysis_type) >= 0) {
+            text += "\n    📄 [" + r.analysis_type + "] " + (r.parsed_summary || "").substring(0, 300);
+          }
           if (r.claim_text) text += "\n    Claim: " + r.claim_text.substring(0, 500);
           if (r.claim_type) text += " [" + r.claim_type + "]";
           if (r.hdd_section_title) text += "\n    HDD: " + r.hdd_section_title;
@@ -513,22 +527,20 @@ function createMcpServer() {
         let text = "🔍 신호 전파 경로 추적\n";
         text += "  모듈: " + args.module_name + "\n";
         text += "  신호: " + args.signal_name + "\n";
-        text += "  경로 노드 수: " + (resp.path_nodes ? resp.path_nodes.length : 0) + "\n";
-        if (resp.path_nodes && resp.path_nodes.length > 0) {
-          text += "\n--- 경로 노드 ---\n";
-          resp.path_nodes.forEach((node, i) => {
-            text += "  [" + (i+1) + "] " + (node.type || "unknown") + ": " + (node.name || "unknown");
-            if (node.module) text += " (모듈: " + node.module + ")";
-            text += "\n";
+        const paths = resp.signal_path || [];
+        text += "  경로 수: " + paths.length + "\n";
+        if (paths.length > 0) {
+          text += "\n--- 경로 ---\n";
+          paths.forEach((p, i) => {
+            if (p.nodes && p.nodes.length > 0) {
+              text += "  [" + (i+1) + "] " + p.nodes.map(n => (n.name || n)).join(" → ") + "\n";
+            } else if (p.hierarchy) {
+              text += "  [" + (i+1) + "] " + (Array.isArray(p.hierarchy) ? p.hierarchy.join(" → ") : p.hierarchy) + "\n";
+            } else {
+              text += "  [" + (i+1) + "] " + JSON.stringify(p) + "\n";
+            }
           });
-        }
-        if (resp.path_edges && resp.path_edges.length > 0) {
-          text += "\n--- 경로 엣지 ---\n";
-          resp.path_edges.forEach((edge, i) => {
-            text += "  [" + (i+1) + "] " + (edge.from || "?") + " —[" + (edge.type || "?") + "]→ " + (edge.to || "?") + "\n";
-          });
-        }
-        if (!resp.path_nodes?.length && !resp.path_edges?.length) {
+        } else {
           text += "\n해당 신호의 전파 경로를 찾을 수 없습니다.";
         }
         text += "\n\nexecution_time_ms: " + execution_time_ms;
@@ -557,21 +569,20 @@ function createMcpServer() {
         let text = "🌳 인스턴스화 트리\n";
         text += "  루트 모듈: " + args.module_name + "\n";
         text += "  탐색 깊이: " + args.depth + "\n";
-        text += "  총 노드 수: " + (resp.total_nodes || 0) + "\n";
-        if (resp.tree) {
+        const treeData = resp.instantiation_tree || resp.tree || resp.nodes || [];
+        text += "  총 노드 수: " + treeData.length + "\n";
+        if (treeData.length > 0) {
           text += "\n--- 트리 구조 ---\n";
-          const renderTree = (node, indent) => {
-            text += indent + (node.instance_name ? node.instance_name + ": " : "") + (node.module_name || "unknown") + "\n";
-            if (node.children && node.children.length > 0) {
-              node.children.forEach((child) => { renderTree(child, indent + "  "); });
+          treeData.forEach((node, i) => {
+            if (node.hierarchy && Array.isArray(node.hierarchy)) {
+              const indent = "  ".repeat(node.depth || 1);
+              text += indent + node.hierarchy.join(" → ") + "\n";
+            } else if (node.module_name) {
+              const indent = "  ".repeat((node.depth || 0) + 1);
+              text += indent + (node.instance_name ? node.instance_name + ": " : "") + node.module_name + "\n";
+            } else {
+              text += "  " + JSON.stringify(node) + "\n";
             }
-          };
-          renderTree(resp.tree, "  ");
-        } else if (resp.nodes && resp.nodes.length > 0) {
-          text += "\n--- 트리 노드 ---\n";
-          resp.nodes.forEach((node, i) => {
-            const indent = "  ".repeat((node.depth || 0) + 1);
-            text += indent + (node.instance_name ? node.instance_name + ": " : "") + (node.module_name || "unknown") + "\n";
           });
         } else {
           text += "\n해당 모듈의 인스턴스화 트리를 찾을 수 없습니다.";
