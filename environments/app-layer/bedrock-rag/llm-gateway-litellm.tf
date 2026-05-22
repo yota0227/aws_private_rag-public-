@@ -90,7 +90,8 @@ resource "aws_secretsmanager_secret_version" "postgres_password" {
 # =============================================================================
 
 resource "aws_sns_topic" "llm_gateway_alerts" {
-  name = "llm-gateway-alerts"
+  provider = aws.seoul
+  name     = "llm-gateway-alerts"
 
   tags = merge(local.llm_gateway_tags, {
     Name = "llm-gateway-alerts"
@@ -226,6 +227,7 @@ data "aws_vpc" "logging" {
 # =============================================================================
 
 resource "aws_security_group" "litellm" {
+  provider    = aws.seoul
   name        = "litellm-bos-ai-seoul-prod"
   description = "Security group for LiteLLM EC2 - LLM Gateway proxy"
   vpc_id      = data.aws_vpc.logging.id
@@ -237,6 +239,7 @@ resource "aws_security_group" "litellm" {
 
 # Inbound: TCP 4000 from Frontend VPC (API Gateway integration) — Req 13.1
 resource "aws_security_group_rule" "litellm_inbound_frontend_vpc" {
+  provider          = aws.seoul
   type              = "ingress"
   from_port         = 4000
   to_port           = 4000
@@ -248,6 +251,7 @@ resource "aws_security_group_rule" "litellm_inbound_frontend_vpc" {
 
 # Inbound: TCP 4000 from On-prem (direct TGW access) — Req 13.2
 resource "aws_security_group_rule" "litellm_inbound_onprem" {
+  provider          = aws.seoul
   type              = "ingress"
   from_port         = 4000
   to_port           = 4000
@@ -259,6 +263,7 @@ resource "aws_security_group_rule" "litellm_inbound_onprem" {
 
 # Outbound: TCP 443 to 0.0.0.0/0 (OpenAI via NAT, Bedrock via TGW) — Req 13.3
 resource "aws_security_group_rule" "litellm_outbound_https" {
+  provider          = aws.seoul
   type              = "egress"
   from_port         = 443
   to_port           = 443
@@ -343,12 +348,12 @@ resource "aws_launch_template" "litellm" {
     subnet_id                   = data.aws_subnets.logging_private.ids[0]
   }
 
-  # Root EBS volume 20GB gp3 encrypted (Requirement 1.4, 22.2)
+  # Root EBS volume 30GB gp3 encrypted (Requirement 1.4, 22.2)
   block_device_mappings {
     device_name = "/dev/xvda"
 
     ebs {
-      volume_size           = 20
+      volume_size           = 30
       volume_type           = "gp3"
       encrypted             = true
       delete_on_termination = true
@@ -427,6 +432,7 @@ resource "aws_instance" "litellm" {
 # =============================================================================
 
 resource "aws_cloudwatch_log_group" "litellm" {
+  provider          = aws.seoul
   name              = "/llm-gateway/litellm"
   retention_in_days = 30
 
@@ -441,6 +447,7 @@ resource "aws_cloudwatch_log_group" "litellm" {
 
 # CPU Utilization > 80% for 5 minutes
 resource "aws_cloudwatch_metric_alarm" "litellm_cpu_high" {
+  provider            = aws.seoul
   alarm_name          = "litellm-cpu-utilization-high"
   alarm_description   = "LiteLLM EC2 CPU utilization exceeds 80% for 5 minutes"
   comparison_operator = "GreaterThanThreshold"
@@ -465,6 +472,7 @@ resource "aws_cloudwatch_metric_alarm" "litellm_cpu_high" {
 
 # StatusCheckFailed > 0 for 2 consecutive periods
 resource "aws_cloudwatch_metric_alarm" "litellm_status_check_failed" {
+  provider            = aws.seoul
   alarm_name          = "litellm-status-check-failed"
   alarm_description   = "LiteLLM EC2 status check failed for 2 consecutive periods"
   comparison_operator = "GreaterThanThreshold"

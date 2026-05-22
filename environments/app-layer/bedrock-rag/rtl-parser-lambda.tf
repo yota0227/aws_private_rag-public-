@@ -361,6 +361,8 @@ resource "aws_lambda_function" "rtl_parser" {
       STEP_FUNCTIONS_ARN       = "arn:aws:states:ap-northeast-2:${data.aws_caller_identity.current.account_id}:stateMachine:analysis-orchestrator-${var.environment}"
       CLAUDE_MODEL_ID          = "anthropic.claude-3-haiku-20240307-v1:0"
       CLAIM_DB_TABLE           = aws_dynamodb_table.claim_db.name
+      QDRANT_ENDPOINT          = "http://10.20.1.217:6333"
+      QDRANT_COLLECTION        = "rtl-knowledge-base"
     }
   }
 

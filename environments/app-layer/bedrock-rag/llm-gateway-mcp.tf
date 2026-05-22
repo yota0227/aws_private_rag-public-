@@ -146,6 +146,7 @@ data "aws_subnets" "frontend_private" {
 # =============================================================================
 
 data "aws_ami" "al2023_mcp" {
+  provider    = aws.seoul
   most_recent = true
   owners      = ["amazon"]
 
@@ -170,6 +171,7 @@ data "aws_ami" "al2023_mcp" {
 # =============================================================================
 
 resource "aws_security_group" "mcp_server" {
+  provider    = aws.seoul
   name        = "mcp-server-bos-ai-seoul-prod"
   description = "Security group for MCP Server EC2 - LLM Gateway"
   vpc_id      = data.aws_vpc.frontend.id
@@ -181,6 +183,7 @@ resource "aws_security_group" "mcp_server" {
 
 # Inbound: TCP 3000 from Frontend VPC — Req 14.1
 resource "aws_security_group_rule" "mcp_inbound_frontend_vpc" {
+  provider          = aws.seoul
   type              = "ingress"
   from_port         = 3000
   to_port           = 3000
@@ -192,6 +195,7 @@ resource "aws_security_group_rule" "mcp_inbound_frontend_vpc" {
 
 # Outbound: TCP 443 to 0.0.0.0/0 (Lambda VPC Endpoint, Secrets Manager) — Req 14.2
 resource "aws_security_group_rule" "mcp_outbound_https" {
+  provider          = aws.seoul
   type              = "egress"
   from_port         = 443
   to_port           = 443
@@ -206,6 +210,7 @@ resource "aws_security_group_rule" "mcp_outbound_https" {
 # =============================================================================
 
 resource "aws_launch_template" "mcp_server" {
+  provider      = aws.seoul
   name_prefix   = "lt-mcp-server-bos-ai-seoul-prod-"
   image_id      = data.aws_ami.al2023_mcp.id
   instance_type = "t3.small"
@@ -217,6 +222,7 @@ resource "aws_launch_template" "mcp_server" {
   network_interfaces {
     associate_public_ip_address = false
     security_groups             = [aws_security_group.mcp_server.id]
+    subnet_id                   = data.aws_subnets.frontend_private.ids[0]
   }
 
   metadata_options {
@@ -270,12 +276,12 @@ resource "aws_launch_template" "mcp_server" {
 # =============================================================================
 
 resource "aws_instance" "mcp_server" {
+  provider = aws.seoul
+
   launch_template {
     id      = aws_launch_template.mcp_server.id
     version = aws_launch_template.mcp_server.latest_version
   }
-
-  subnet_id = data.aws_subnets.frontend_private.ids[0]
 
   tags = merge(local.llm_gateway_tags, {
     Name = "ec2-mcp-server-bos-ai-seoul-prod"
@@ -287,6 +293,7 @@ resource "aws_instance" "mcp_server" {
 # =============================================================================
 
 resource "aws_cloudwatch_log_group" "mcp_server" {
+  provider          = aws.seoul
   name              = "/llm-gateway/mcp-server"
   retention_in_days = 30
 
@@ -300,6 +307,7 @@ resource "aws_cloudwatch_log_group" "mcp_server" {
 # =============================================================================
 
 resource "aws_cloudwatch_metric_alarm" "mcp_cpu_high" {
+  provider            = aws.seoul
   alarm_name          = "alarm-mcp-server-cpu-high-bos-ai-seoul-prod"
   alarm_description   = "MCP Server EC2 CPU utilization exceeds 80% for 5 minutes"
   comparison_operator = "GreaterThanThreshold"
@@ -327,6 +335,7 @@ resource "aws_cloudwatch_metric_alarm" "mcp_cpu_high" {
 # =============================================================================
 
 resource "aws_cloudwatch_metric_alarm" "mcp_status_check_failed" {
+  provider            = aws.seoul
   alarm_name          = "alarm-mcp-server-status-check-bos-ai-seoul-prod"
   alarm_description   = "MCP Server EC2 status check failed for 2 consecutive periods"
   comparison_operator = "GreaterThanThreshold"

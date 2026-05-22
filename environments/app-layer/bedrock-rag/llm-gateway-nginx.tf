@@ -162,6 +162,7 @@ resource "aws_launch_template" "nginx" {
     associate_public_ip_address = false
     security_groups             = [aws_security_group.nginx.id]
     subnet_id                   = "subnet-0ec356f8f9af0ffca"
+    private_ip_address          = "10.10.1.62"
   }
 
   block_device_mappings {
