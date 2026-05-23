@@ -87,3 +87,22 @@ response.json
 reindex_log*.txt
 tmp_*.json
 reindex_response.json
+
+# Backups (state is in S3)
+backups/
+
+# Duplicate directories
+modules/modules/
+tests/tests/
+scripts/scripts/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Terraform plan files (may contain secrets)
+*.tfplan
+
+# Lambda deployment packages (built locally)
+*-deployment-package.zip
+lambda_current.zip

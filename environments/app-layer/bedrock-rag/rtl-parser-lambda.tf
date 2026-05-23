@@ -388,6 +388,50 @@ resource "aws_lambda_function" "rtl_parser" {
 # Outputs
 # ----------------------------------------------------------------------------
 
+# ----------------------------------------------------------------------------
+# Lambda Event Invoke Config — 비동기 재시도 비활성화 + DLQ (비용 폭발 방지)
+# ----------------------------------------------------------------------------
+
+resource "aws_sqs_queue" "rtl_parser_dlq" {
+  provider = aws.seoul
+  name     = "rtl-parser-dlq"
+
+  message_retention_seconds = 1209600  # 14일 보존
+
+  tags = merge(local.common_tags, {
+    Name    = "sqs-rtl-parser-dlq-seoul-${var.environment}"
+    Purpose = "RTL Parser Lambda failed event capture"
+  })
+}
+
+resource "aws_lambda_function_event_invoke_config" "rtl_parser" {
+  provider      = aws.seoul
+  function_name = aws_lambda_function.rtl_parser.function_name
+
+  maximum_retry_attempts = 0
+
+  destination_config {
+    on_failure {
+      destination = aws_sqs_queue.rtl_parser_dlq.arn
+    }
+  }
+}
+
+# DLQ에 메시지를 보낼 수 있도록 Lambda 역할에 SQS 권한 추가
+resource "aws_iam_role_policy" "rtl_parser_dlq" {
+  name = "rtl-parser-dlq-send"
+  role = aws_iam_role.rtl_parser_lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["sqs:SendMessage"]
+      Resource = [aws_sqs_queue.rtl_parser_dlq.arn]
+    }]
+  })
+}
+
 output "rtl_parser_lambda_arn" {
   description = "RTL Parser Lambda function ARN"
   value       = aws_lambda_function.rtl_parser.arn

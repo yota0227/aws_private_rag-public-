@@ -551,7 +551,7 @@ def _publish_parser_metric(metric_name, value, unit, parser_name, cloudwatch=Non
 # Batch Embed + Index (v9.5 — 성능 최적화)
 # ---------------------------------------------------------------------------
 
-EMBED_CONCURRENCY = 10  # Bedrock Titan TPS 한도 내 병렬 호출 수
+EMBED_CONCURRENCY = 5  # Bedrock Titan TPS 한도 내 병렬 호출 수
 QDRANT_BATCH_SIZE = 50  # Qdrant batch upsert 크기
 
 
