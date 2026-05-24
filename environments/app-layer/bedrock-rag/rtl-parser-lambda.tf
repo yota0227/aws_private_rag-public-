@@ -43,6 +43,15 @@ resource "aws_security_group" "rtl_parser_lambda" {
     prefix_list_ids = ["pl-78a54011"]
   }
 
+  # Outbound: Qdrant REST API to Virginia Backend VPC via VPC Peering
+  egress {
+    description = "Qdrant REST API to Virginia Backend VPC via VPC Peering"
+    from_port   = 6333
+    to_port     = 6333
+    protocol    = "tcp"
+    cidr_blocks = ["10.20.0.0/16"]
+  }
+
   tags = merge(local.common_tags, {
     Name    = "sg-rtl-parser-lambda-${var.environment}"
     Purpose = "RTL Parser Lambda Security Group"
@@ -260,6 +269,33 @@ resource "aws_iam_role_policy" "rtl_parser_sfn" {
   })
 }
 
+# IAM Policy: Secrets Manager - Qdrant API Key 조회 (KMS 복호화 포함)
+resource "aws_iam_role_policy" "rtl_parser_qdrant_secret" {
+  name = "rtl-parser-qdrant-secret-access"
+  role = aws_iam_role.rtl_parser_lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["secretsmanager:GetSecretValue"]
+        Resource = ["arn:aws:secretsmanager:ap-northeast-2:533335672315:secret:qdrant/api-key-*"]
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
+        Resource = ["arn:aws:kms:ap-northeast-2:533335672315:key/*"]
+        Condition = {
+          StringEquals = {
+            "kms:ViaService" = "secretsmanager.ap-northeast-2.amazonaws.com"
+          }
+        }
+      }
+    ]
+  })
+}
+
 # ----------------------------------------------------------------------------
 # KMS Key for RTL Parser Lambda Environment Variables
 # ----------------------------------------------------------------------------
@@ -363,6 +399,7 @@ resource "aws_lambda_function" "rtl_parser" {
       CLAIM_DB_TABLE           = aws_dynamodb_table.claim_db.name
       QDRANT_ENDPOINT          = "http://10.20.1.217:6333"
       QDRANT_COLLECTION        = "rtl-knowledge-base"
+      QDRANT_API_KEY_SECRET_ARN = "arn:aws:secretsmanager:ap-northeast-2:533335672315:secret:qdrant/api-key-t9KnjZ"
     }
   }
 

@@ -243,9 +243,7 @@ resource "aws_launch_template" "mcp_server" {
   }
 
   user_data = base64encode(templatefile("${path.module}/templates/mcp-server-user-data.sh.tpl", {
-    aws_region   = "ap-northeast-2"
-    package_json = file("${path.module}/templates/mcp-server/package.json")
-    server_js    = file("${path.module}/templates/mcp-server/server.js")
+    aws_region = "ap-northeast-2"
   }))
 
   tag_specifications {

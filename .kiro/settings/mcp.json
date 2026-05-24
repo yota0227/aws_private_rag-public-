@@ -1,19 +1,8 @@
 {
   "mcpServers": {
     "bos-ai-rag": {
-      "url": "http://localhost:3100/mcp",
-      "autoApprove": [
-        "search_rtl",
-        "search_archive",
-        "rag_query",
-        "get_evidence",
-        "list_verified_claims",
-        "rag_categories",
-        "find_instantiation_tree",
-        "find_instantiation_tree",
-        "find_instantiation_tree",
-        "graph_export"
-      ]
+      "url": "http://localhost:3000/mcp",
+      "disabled": false
     }
   }
 }

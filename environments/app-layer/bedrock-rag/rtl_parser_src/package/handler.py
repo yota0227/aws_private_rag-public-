@@ -91,6 +91,28 @@ s3_client = boto3.client("s3")
 dynamodb = boto3.resource("dynamodb")
 bedrock_runtime = boto3.client("bedrock-runtime", region_name=BEDROCK_REGION)
 
+# ---------------------------------------------------------------------------
+# Qdrant API 키 초기화 (Secrets Manager → KMS 복호화 → qdrant_client 주입)
+# ---------------------------------------------------------------------------
+
+def _init_qdrant_api_key():
+    """Secrets Manager에서 Qdrant API 키를 읽어 qdrant_client 모듈에 주입."""
+    secret_arn = os.environ.get("QDRANT_API_KEY_SECRET_ARN", "")
+    if not secret_arn:
+        return
+    try:
+        sm = boto3.client("secretsmanager", region_name="ap-northeast-2")
+        resp = sm.get_secret_value(SecretId=secret_arn)
+        api_key = resp.get("SecretString", "")
+        if api_key:
+            import qdrant_client as _qc
+            _qc.QDRANT_API_KEY = api_key
+            logger.info(json.dumps({"event": "qdrant_api_key_loaded"}))
+    except Exception as e:
+        logger.error(json.dumps({"event": "qdrant_api_key_load_error", "error": str(e)}))
+
+_init_qdrant_api_key()
+
 
 # ---------------------------------------------------------------------------
 # DFX 자동 추출 (Requirements 4.1, 4.2, 4.3)

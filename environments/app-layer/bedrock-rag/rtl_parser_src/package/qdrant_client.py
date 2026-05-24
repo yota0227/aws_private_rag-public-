@@ -14,6 +14,16 @@ logger = logging.getLogger(__name__)
 
 QDRANT_ENDPOINT = os.environ.get("QDRANT_ENDPOINT", "")
 QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION", "rtl-knowledge-base")
+QDRANT_API_KEY = os.environ.get("QDRANT_API_KEY", "")
+
+
+def _make_request(url: str, data: bytes, method: str) -> urllib.request.Request:
+    """Create a urllib Request with Content-Type and optional API key header."""
+    req = urllib.request.Request(url, data=data, method=method)
+    req.add_header("Content-Type", "application/json")
+    if QDRANT_API_KEY:
+        req.add_header("api-key", QDRANT_API_KEY)
+    return req
 
 
 def index_document(metadata: dict, embedding: list) -> bool:
@@ -69,8 +79,7 @@ def index_document(metadata: dict, embedding: list) -> bool:
     }).encode()
 
     url = f"{QDRANT_ENDPOINT}/collections/{QDRANT_COLLECTION}/points?wait=false"
-    req = urllib.request.Request(url, data=body, method="PUT")
-    req.add_header("Content-Type", "application/json")
+    req = _make_request(url, body, "PUT")
 
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
@@ -126,8 +135,7 @@ def search(query_vector: list = None, query_text: str = "", max_results: int = 2
 
         body = json.dumps(search_body).encode()
         url = f"{QDRANT_ENDPOINT}/collections/{QDRANT_COLLECTION}/points/search"
-        req = urllib.request.Request(url, data=body, method="POST")
-        req.add_header("Content-Type", "application/json")
+        req = _make_request(url, body, "POST")
 
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
@@ -174,8 +182,7 @@ def search(query_vector: list = None, query_text: str = "", max_results: int = 2
         }).encode()
 
         url = f"{QDRANT_ENDPOINT}/collections/{QDRANT_COLLECTION}/points/scroll"
-        req = urllib.request.Request(url, data=body, method="POST")
-        req.add_header("Content-Type", "application/json")
+        req = _make_request(url, body, "POST")
 
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
@@ -279,8 +286,7 @@ def batch_index_documents(items: list) -> int:
     # Batch upsert (Qdrant accepts multiple points in one PUT)
     body = json.dumps({"points": points}).encode()
     url = f"{QDRANT_ENDPOINT}/collections/{QDRANT_COLLECTION}/points?wait=false"
-    req = urllib.request.Request(url, data=body, method="PUT")
-    req.add_header("Content-Type", "application/json")
+    req = _make_request(url, body, "PUT")
 
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
