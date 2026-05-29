@@ -34,23 +34,16 @@ rm -rf /opt/mcp-server
 mkdir -p /tmp/mcp-unpack
 tar -xzf /tmp/mcp-server.tar.gz -C /tmp/mcp-unpack
 mv /tmp/mcp-unpack/mcp-server-build /opt/mcp-server
+
+# Override server.js with auth-removed version
+aws s3 cp "s3://$${S3_BUCKET}/deploy/mcp-server-noauth.js" /opt/mcp-server/server.js --region "$REGION" || true
 log "MCP Server deployed: $(ls /opt/mcp-server)"
 
 # =============================================================================
-# 3. Retrieve MCP API Key (실패해도 계속)
+# 3. Skip API Key retrieval (auth removed — network isolation is sufficient)
 # =============================================================================
-log "Retrieving MCP API key..."
 MCP_API_KEY=""
-for i in 1 2 3; do
-  MCP_API_KEY=$(aws secretsmanager get-secret-value \
-    --secret-id "llm-gateway/mcp-api-key" \
-    --region "$REGION" \
-    --query 'SecretString' \
-    --output text 2>/dev/null) && [ -n "$MCP_API_KEY" ] && break
-  sleep $((i * 2))
-done
-[ -z "$MCP_API_KEY" ] && MCP_API_KEY="PLACEHOLDER"
-log "API key ready"
+log "Auth disabled — network isolation mode"
 
 # =============================================================================
 # 4. Create systemd service

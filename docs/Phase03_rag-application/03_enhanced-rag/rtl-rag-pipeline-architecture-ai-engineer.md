@@ -4,6 +4,7 @@
 |------|------|----------|
 | v1.0 | 2026-05-04 | 초판. 원본(rtl-rag-pipeline-architecture.md)에서 AI Engineer 관점으로 분리 |
 | v2.0 | 2026-05-08 | v9.2 기준 업데이트. 8종 파서 반영, Layer 4~5 부분 커버, 동적 Boost/청킹/Hybrid Grounding 구현 완료 |
+| v3.0 | 2026-05-29 | **v9.4a 기준 전면 업데이트.** AOSS→Qdrant 전환, 10종 파서(Signal Path Graph/Port Binding/DFX Auto Extractor 추가), 21종 파일 지원, LLM Gateway(LiteLLM On-Prem + MCP EC2 + Nginx), Lambda 512MB/300s/concurrency 20, Neptune Full Ingestion Pipeline, Graph Evidence Provider |
 
 **대상:** AI/RAG Engineer (파이프라인 구현·개선 담당)
 **목적:** RTL 코드를 어떻게 바라보고, 어떤 전략으로 전처리하여 KB를 구축하는지 이해한다. 이를 바탕으로 파서와 검색 파이프라인을 개선한다.
@@ -48,18 +49,19 @@ HDD 한 문서에는 여러 층위의 정보가 필요하다. 각 층위마다 *
 │  Layer 3: 인터페이스 분류 (Interface)             │  ← ✅ 패턴 매칭으로 분류
 │  포트의 기능별 그룹핑 (Power, AXI, Clock 등)      │
 ├─────────────────────────────────────────────────┤
-│  Layer 4: 동작 (Behavior)                        │  ← ⚠️ 부분 지원 (v9)
+│  Layer 4: 동작 (Behavior)                        │  ← ⚠️ 부분 지원 (v9~v9.4a)
 │  클럭 도메인 추출, CDC 경고                       │     FSM/데이터패스는 미지원
 ├─────────────────────────────────────────────────┤
-│  Layer 5: 연결 (Connectivity)                    │  ← ⚠️ 부분 지원 (v9~v9.2)
-│  generate 토폴로지, wire 배열, 인스턴스 위치      │     assign 구동 관계는 미지원
+│  Layer 5: 연결 (Connectivity)                    │  ← ⚠️ 부분 지원 (v9~v9.4a)
+│  generate 토폴로지, wire 배열, 인스턴스 위치,     │     assign 부분 지원 (Signal Path Graph)
+│  port binding, signal path edges                 │     full semantic analysis는 미지원
 ├─────────────────────────────────────────────────┤
 │  Layer 6: 설계 의도 (Intent)                     │  ← ❌ RTL에 없음. Spec 문서 필요
 │  "왜 이렇게 설계했는가", 비교 테이블, 제약 조건    │
 └─────────────────────────────────────────────────┘
 ```
 
-**v9.2 파이프라인은 Layer 1~3을 완전 커버하고, Layer 4~5를 부분 커버한다.** Layer 6은 Spec RAG가 필요하다.
+**v9.4a 파이프라인은 Layer 1~3을 완전 커버하고, Layer 4~5를 부분 커버한다.** Layer 5의 assign 문은 Signal Path Graph로 edge 추출이 가능해졌으나, full semantic analysis는 미지원. Layer 6은 Spec RAG가 필요하다.
 
 ---
 
@@ -111,6 +113,22 @@ RTL 소스 (.sv / .v / .svh)
 │  2f. Bitwidth Evaluator (v9 신규)                     │
 │      → 파라미터 표현식을 정수로 평가 (SizeX-1 → 3)    │
 │      → ast.NodeVisitor 기반 안전한 파서               │
+│                                                       │
+│  2g. Port Binding Parser (v9.3 신규)                  │
+│      → .port(signal) 바인딩 매핑 추출                 │
+│      → param override 감지                            │
+│      → claim 레코드 생성 (~25건)                      │
+│                                                       │
+│  2h. Signal Path Graph (v9.4a 신규)                   │
+│      → assign/port/wire 기반 신호 흐름 edge 추출      │
+│      → 모듈 간 연결 그래프 구축                       │
+│      → signal_path_edge 레코드 생성 (~500건)          │
+│                                                       │
+│  2i. DFX Auto Extractor (v9.3 신규)                   │
+│      → *_dfx 패턴 모듈 자동 감지                      │
+│      → clock in/out 수, IJTAG ifdef 추출              │
+│      → manual claim 우선, 자동 추출 보완              │
+│      → claim 레코드 생성 (~8건)                       │
 └──────────────┬───────────────────────────────────────┘
                │
                ▼
@@ -119,9 +137,11 @@ RTL 소스 (.sv / .v / .svh)
 │                                                       │
 │  Titan Embeddings v2 (1024차원)                       │
 │      → 각 레코드를 벡터로 변환                         │
+│      → 병렬 5 concurrent + batch upsert 50건          │
 │                                                       │
-│  OpenSearch Serverless 인덱싱                         │
-│      → 벡터 검색 + 키워드 검색 하이브리드              │
+│  Qdrant 인덱싱 (EC2, Virginia 10.20.1.217:6333)       │
+│      → 벡터 검색 + 질의 유형별 동적 Boost              │
+│      → content dedup 적용                             │
 └──────────────┬───────────────────────────────────────┘
                │
                ▼
@@ -279,25 +299,27 @@ KB에는 3가지 타입의 레코드가 공존한다:
 
 ## 5. 현재 한계와 개선 방향
 
-### 5.1 파서가 못 잡는 RTL 구조 (v9.2 기준 — 남은 갭)
+### 5.1 파서가 못 잡는 RTL 구조 (v9.4a 기준 — 남은 갭)
 
 | RTL 구조 | 예시 | 담고 있는 정보 | 상태 |
 |----------|------|---------------|------|
 | `always_ff` 블록 | `always_ff @(posedge clk)` | 클럭 도메인 | ✅ 해결 (Always Block Parser) |
 | `always_comb` 블록 | `always_comb begin ... end` | FSM, mux 선택 | ❌ 미지원 |
-| `assign` 문 | `assign o_data = sel ? a : b;` | 신호 구동 관계 | ❌ 미지원 |
+| `assign` 문 | `assign o_data = sel ? a : b;` | 신호 구동 관계 | ⚠️ 부분 지원 (Signal Path Graph — edge 추출, full semantic 미지원) |
 | `generate for` | `for (genvar i=0; i<SizeX; i++)` | 토폴로지, 인스턴스 위치 | ✅ 해결 (Generate Block Parser) |
 | `generate if` | `if (FEATURE_EN) begin ... end` | 조건부 bypass | ✅ 해결 (Generate Block Parser) |
 | `function` / `task` | `function automatic int ...` | 인덱스 계산 | ✅ 해결 (Package Function Extractor) |
 | wire 선언 | `struct_t sig [SizeX][SizeY]` | 배선 구조 | ✅ 해결 (Wire Declaration Parser) |
+| port binding | `.port(signal)` 연결 | 인스턴스 포트 매핑 | ✅ 해결 (Port Binding Parser, v9.3) |
+| DFX 모듈 | `*_dfx` 패턴 | clock in/out, IJTAG | ✅ 해결 (DFX Auto Extractor, v9.3) |
 | `interface` / `modport` | `interface axi_if` | 구조화된 포트 번들 | ❌ 미지원 |
 
-### 5.2 파서 아키텍처 (v9.2 현재)
+### 5.2 파서 아키텍처 (v9.4a 현재)
 
-v9.2에서 파서 분리가 완료되었다. 각 파서는 독립적으로 feature flag로 제어 가능하다.
+v9.4a에서 파서가 10종으로 확장되었다. 각 파서는 독립적으로 feature flag로 제어 가능하다.
 
 ```
-v9.2 파서 아키텍처 (8종)
+v9.4a 파서 아키텍처 (10종)
 ─────────────────────────
 ① 기본 모듈 파서          → module_parse 레코드 (구조)
 ② Package Parser          → claim (localparam, enum, struct, function, EP Table)
@@ -307,23 +329,31 @@ v9.2 파서 아키텍처 (8종)
 ⑥ Bitwidth Evaluator      → 내부 유틸 (표현식 → 정수 평가)
 ⑦ Wire Declaration Parser → claim (wire 배열, struct 참조, 목적 유추)
 ⑧ 대형 모듈 청킹          → module_parse_chunk (50+ 포트 모듈 분할)
+⑨ Port Binding Parser     → claim (인스턴스 .port(signal) 바인딩, param override)  ← v9.3 신규
+⑩ Signal Path Graph       → signal_path_edge (assign/port/wire edges, 신호 흐름)  ← v9.4a 신규
+⑪ DFX Auto Extractor      → claim (clock in/out, IJTAG ifdef, *_dfx 패턴)         ← v9.3 신규
+⑫ Module Parameter Extractor → claim (비-패키지 모듈 top-level parameter)          ← v9.4 신규
 ```
+
+> **참고:** ⑥ Bitwidth Evaluator와 ⑧ 대형 모듈 청킹은 독립 파서가 아닌 내부 유틸리티이므로, 외부 기준으로는 "10종 파서"로 카운트한다 (①~⑤ + ⑦ + ⑨~⑫).
 
 **Feature Flag 제어:** 환경 변수 `PARSER_*_ENABLED` (기본값 모두 `true`)로 A/B 테스트 가능.
 
 **파서별 기여도 측정:** CloudWatch `BOS-AI/RTLParser` 네임스페이스에 `ParserClaimCount`, `ParserExecutionTime`, `ParserHitRatio` 메트릭 발행.
 
-### 5.3 검색 측 (v9.2 구현 완료)
+### 5.3 검색 측 (v9.4a 구현 완료)
 
-| 영역 | v1.0 상태 | v9.2 상태 |
+| 영역 | v1.0 상태 | v9.4a 상태 |
 |------|----------|----------|
-| 임베딩 | Titan v2 단일 모델 | Titan v2 (변경 없음) |
+| 벡터 DB | OpenSearch Serverless (AOSS) | ✅ **Qdrant on EC2** (Virginia, 10.20.1.217:6333) |
+| 임베딩 | Titan v2 순차 1건씩 | ✅ Titan v2 **병렬 5 concurrent** + batch upsert 50건 |
 | 청킹 | 모듈 단위 (1 모듈 = 1 레코드) | ✅ 대형 모듈 분할 (50+ 포트 → 3 Sub_Record) |
-| 하이브리드 검색 | 벡터 + 키워드 고정 비율 | ✅ 질의 유형별 동적 Boost (5가지 유형) |
-| 그래프 검색 | 미구현 | ✅ Neptune Graph DB (인스턴스 트리, 신호 경로, CDC) |
+| 하이브리드 검색 | 벡터 + 키워드 고정 비율 | ✅ 질의 유형 분류 + 동적 Boost (5가지 유형) + content dedup |
+| 그래프 검색 | 미구현 | ✅ Neptune Graph DB (3-tier instance model, 8 edge types) |
 | Grounding | No Grounding only | ✅ Hybrid Grounding (strict/hybrid/free 3모드) |
+| HDD 생성 | Claim-only evidence | ✅ **Graph Evidence Provider** (Neptune → HDD) |
 
-### 5.4 동적 Boost 상세 (v9.2)
+### 5.4 동적 Boost 상세 (v9.4a)
 
 | 질의 유형 | claim boost | module_parse boost | 매칭 키워드 |
 |-----------|------------|-------------------|------------|
@@ -338,21 +368,27 @@ v9.2 파서 아키텍처 (8종)
 ## 6. 시스템 아키텍처 (참고)
 
 ```
-On-Premises                          AWS Seoul                    AWS Virginia
-─────────────                        ─────────                    ────────────
-엔지니어                              API Gateway (Private)        OpenSearch Serverless
-  ↓                                     ↓                           (벡터 인덱스)
-Obot → MCP Bridge (server02:3100)    Main Lambda
-         ↓ HTTPS                        ↓                         Bedrock
-       VPN → TGW → VPC Endpoint     RTL Parser Lambda              Titan Embed v2
-                                     ┌─────────────┐               Claude 3 Haiku
-                                     │ 기본 파서     │
-                                     │ Package 파서  │
-                                     │ Port 분류기   │
-                                     │ 임베딩        │
-                                     │ 인덱싱        │
-                                     └─────────────┘
+On-Premises (192.128.0.0/16)         AWS Seoul (10.10.0.0/16)             AWS Virginia (10.20.0.0/16)
+─────────────────────────────        ─────────────────────────            ────────────────────────────
+엔지니어                              Nginx Proxy (10.10.1.62:443)         Qdrant EC2 (10.20.1.217:6333)
+  ↓                                     ↓                                   (벡터 인덱스)
+Codex/Claude Code/Kiro               API Gateway (Private REST)
+  ↓                                     ↓                                 Bedrock
+LiteLLM On-Prem (192.128.10.102)     MCP Server EC2 (10.10.1.10:3000)      Titan Embed v2
+  (OpenAI-compatible API)               ↓                                   Claude 3 Haiku/Sonnet
+                                     RTL Parser Lambda
+                                     ┌─────────────────┐                  Neptune Graph DB
+                                     │ 10종 파서         │                   (3-tier instance model,
+                                     │ 512MB/300s/C20   │                    8 edge types)
+                                     │ 임베딩 병렬 5     │
+                                     │ batch upsert 50  │
+                                     └─────────────────┘
 ```
+
+**네트워크 경로:**
+- LLM: On-prem client → `llm.corp.bos-semi.com` (192.128.10.102:4000) → 직접 접근
+- MCP: On-prem client → `mcp.corp.bos-semi.com` (10.10.1.62:443) → VPN → TGW → Nginx → API GW → MCP EC2 (10.10.1.10:3000)
+- 벡터 검색: Lambda (Seoul) → VPC Peering → Qdrant EC2 (Virginia, 10.20.1.217:6333)
 
 **인프라 상세는 별도 문서 참조:** 네트워크, VPC, IAM 등은 인프라 문서에서 다룬다. 이 문서는 파이프라인 로직에 집중한다.
 
