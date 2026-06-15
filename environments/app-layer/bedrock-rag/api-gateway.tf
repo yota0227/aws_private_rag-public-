@@ -1010,7 +1010,6 @@ resource "aws_api_gateway_deployment" "main" {
       aws_api_gateway_integration.find_clock_crossings_lambda.id,
       aws_api_gateway_integration.graph_export_lambda.id,
       aws_api_gateway_integration.hdd_regenerate_stale_lambda.id,
-      aws_api_gateway_integration.llm_proxy_http.id,
       aws_api_gateway_integration.mcp_proxy_http.id,
     ]))
   }
