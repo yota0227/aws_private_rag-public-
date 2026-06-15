@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "bos-ai-rag": {
+      "url": "http://192.128.20.241:3100/sse"
+    }
+  }
+}

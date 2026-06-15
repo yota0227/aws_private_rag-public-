@@ -31,6 +31,25 @@ import os
 logger = logging.getLogger(__name__)
 
 
+class StructFieldCountMismatchError(Exception):
+    """Raised when extracted struct field count doesn't match source declaration.
+
+    Attributes:
+        expected: expected field count (from source)
+        actual: actual extracted field count
+        body_snippet: first 100 chars of the struct body for diagnostics
+    """
+
+    def __init__(self, expected: int, actual: int, body_snippet: str = ""):
+        self.expected = expected
+        self.actual = actual
+        self.body_snippet = body_snippet
+        super().__init__(
+            f"Struct field count mismatch: expected {expected} fields "
+            f"but extracted {actual}. Body: {body_snippet}"
+        )
+
+
 def is_package_file(file_path: str) -> bool:
     """Check if a file is a SystemVerilog package file."""
     return file_path.endswith("_pkg.sv") or file_path.endswith("_pkg.v")
@@ -63,6 +82,165 @@ def extract_package_constants(rtl_content: str, file_path: str = "",
         claims.extend(ep_claims)
 
     return claims
+
+
+def extract_module_parameters(rtl_content: str, module_name: str,
+                              file_path: str = "",
+                              pipeline_id: str = "") -> list:
+    """Extract top-level module parameter declarations.
+
+    Handles two patterns:
+      Pattern 1: module module_name #( parameter TYPE NAME = VALUE, ... ) (ports);
+      Pattern 2: module body internal parameter TYPE NAME = VALUE;
+
+    Expression default values (e.g., DEPTH = WIDTH * 2) are stored as-is.
+
+    Args:
+        rtl_content: raw RTL file content
+        module_name: name of the module to extract parameters from
+        file_path: source file path
+        pipeline_id: pipeline identifier
+
+    Returns:
+        List of claim dicts with topic "TopLevelParameter"
+    """
+    claims = []
+
+    # Strip comments for reliable parsing
+    content = re.sub(r"//[^\n]*", "", rtl_content)
+    content = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
+
+    # Locate the module declaration
+    # Pattern: module <module_name> [#(...)] (...); ... endmodule
+    module_pattern = re.compile(
+        r"\bmodule\s+" + re.escape(module_name) + r"\b",
+        re.DOTALL
+    )
+    module_match = module_pattern.search(content)
+    if not module_match:
+        return claims
+
+    module_start = module_match.start()
+
+    # Find endmodule for this module
+    endmodule_match = re.search(r"\bendmodule\b", content[module_start:])
+    if endmodule_match:
+        module_body = content[module_start:module_start + endmodule_match.end()]
+    else:
+        module_body = content[module_start:]
+
+    extracted_params = {}  # name -> value (preserves order of first occurrence)
+
+    # --- Pattern 1: #( parameter ... ) parameter port list ---
+    # Find the #(...) section after module name
+    after_name = module_body[len("module") + len(module_name) + 1:]
+    param_port_match = re.search(r"#\s*\((.*?)\)\s*\(", after_name, re.DOTALL)
+    if param_port_match:
+        param_block = param_port_match.group(1)
+        # Extract individual parameters from the #(...) block
+        _extract_params_from_block(param_block, extracted_params)
+
+    # --- Pattern 2: Internal parameter declarations ---
+    # Find parameters declared inside the module body (after the port list)
+    internal_param_pattern = re.compile(
+        r"\bparameter\s+"
+        r"(?:(?:int|integer|logic|bit|string|shortint|longint|byte|real|"
+        r"signed|unsigned)\s+)*"
+        r"(?:\[[^\]]*\]\s*)?"
+        r"(\w+)\s*=\s*([^;,]+)",
+        re.MULTILINE
+    )
+
+    # Determine where the port list ends (after the first top-level semicolon)
+    # to avoid re-extracting #() params
+    port_end_match = re.search(r"\)\s*;", after_name)
+    if port_end_match:
+        body_after_ports = after_name[port_end_match.end():]
+    else:
+        body_after_ports = after_name
+
+    for m in internal_param_pattern.finditer(body_after_ports):
+        param_name = m.group(1)
+        param_value = m.group(2).strip().rstrip(",")
+        if param_name not in extracted_params:
+            extracted_params[param_name] = param_value
+
+    # --- Generate claims for all extracted parameters ---
+    for param_name, param_value in extracted_params.items():
+        claim_text = (
+            f"Module '{module_name}' defines parameter "
+            f"{param_name} = {param_value}"
+        )
+        claims.append(_make_claim(
+            claim_text, "structural", module_name,
+            "TopLevelParameter", file_path, pipeline_id,
+            parser_source="package_extractor",
+        ))
+
+    logger.info(
+        "Extracted %d module parameters from '%s' in %s",
+        len(claims), module_name, file_path,
+    )
+    return claims
+
+
+def _extract_params_from_block(param_block: str, extracted_params: dict):
+    """Extract parameters from a #(...) parameter port list block.
+
+    Handles comma-separated parameter declarations like:
+        parameter int AXI_SLV_OUTSTANDING_READS = 64,
+        parameter DEPTH = WIDTH * 2,
+        parameter logic [7:0] INIT_VAL = 8'hFF
+
+    Args:
+        param_block: text inside #(...)
+        extracted_params: dict to populate with name -> value mappings
+    """
+    # Split by 'parameter' keyword to get individual declarations
+    segments = re.split(r"\bparameter\b", param_block)
+
+    for segment in segments:
+        segment = segment.strip()
+        if not segment:
+            continue
+
+        # Match: [TYPE] [packed_dim] NAME = VALUE [, ...]
+        param_match = re.match(
+            r"(?:(?:int|integer|logic|bit|string|shortint|longint|byte|real|"
+            r"signed|unsigned)\s+)*"
+            r"(?:\[[^\]]*\]\s*)?"
+            r"(\w+)\s*=\s*(.+)",
+            segment,
+            re.DOTALL
+        )
+        if param_match:
+            param_name = param_match.group(1)
+            raw_value = param_match.group(2).strip()
+            param_value = _extract_param_value(raw_value)
+            extracted_params[param_name] = param_value
+
+
+def _extract_param_value(raw_value: str) -> str:
+    """Extract parameter value, handling expressions and nested parentheses.
+
+    Stops at a comma that is not inside parentheses (top-level comma separator).
+    Preserves expression strings as-is.
+    """
+    depth = 0
+    end_idx = len(raw_value)
+    for i, ch in enumerate(raw_value):
+        if ch == '(':
+            depth += 1
+        elif ch == ')':
+            depth -= 1
+        elif ch == ',' and depth == 0:
+            end_idx = i
+            break
+
+    result = raw_value[:end_idx].strip()
+    # Remove trailing whitespace/newlines
+    result = re.sub(r"\s+$", "", result)
+    return result
 
 
 def _extract_localparams(content, pkg_name, file_path, pipeline_id):
@@ -177,7 +355,14 @@ def _extract_structs(content, pkg_name, file_path, pipeline_id,
     for m in pattern.finditer(content):
         body = m.group(1)
         struct_name = m.group(2)
-        parsed_fields = _parse_struct_fields(body, raw_struct_bodies.get(struct_name, ""))
+        try:
+            parsed_fields = _parse_struct_fields(body, raw_struct_bodies.get(struct_name, ""))
+        except StructFieldCountMismatchError as e:
+            logger.error(
+                "Struct '%s' extraction failed: %s", struct_name, e,
+            )
+            # Skip this struct — field count mismatch means unreliable data
+            continue
         struct_info[struct_name] = {
             "body": body,
             "fields": parsed_fields,
@@ -301,6 +486,15 @@ def _parse_struct_fields(body, raw_body=""):
         lsb: least significant bit index (e.g. 0)
         ref_type: referenced typedef name if field uses a custom type, else ""
         comment: inline comment text if present, else ""
+        packed_dim: packed dimension string (e.g. "[7:0]") or "" if none
+        unpacked_dim: unpacked dimension string (e.g. "[3:0]") or "" if none
+
+    Packed dimension appears BEFORE the field name: logic [7:0] field_name;
+    Unpacked dimension appears AFTER the field name: logic field_name [3:0];
+    Both can coexist: logic [7:0] field_name [3:0];
+
+    Field count validation: compares extracted field count against semicolons
+    in the struct body. Logs a warning on mismatch.
 
     Args:
         body: comment-stripped struct body text
@@ -313,8 +507,9 @@ def _parse_struct_fields(body, raw_body=""):
     if raw_body:
         # Match lines like:  logic [3:0] x_dest;  // destination X coordinate
         # or:                 tile_t dest_tile;    // destination tile
+        # or:                 logic field_name [3:0]; // array field
         comment_line_pattern = re.compile(
-            r"(\w+)\s*;\s*//\s*(.+?)$", re.MULTILINE
+            r"(\w+)\s*(?:\[[^\]]*\]\s*)*;\s*//\s*(.+?)$", re.MULTILINE
         )
         for cm in comment_line_pattern.finditer(raw_body):
             comment_map[cm.group(1)] = cm.group(2).strip()
@@ -325,22 +520,27 @@ def _parse_struct_fields(body, raw_body=""):
         "byte", "shortint", "longint", "string", "real",
     }
 
-    # Pattern 1: built-in type with optional packed dimension
-    #   logic [N:M] field_name;
+    # Pattern 1: built-in type with optional packed dimension and optional unpacked dimension
+    #   logic [N:M] field_name;           → packed_dim="[N:M]", unpacked_dim=""
+    #   logic field_name [3:0];           → packed_dim="", unpacked_dim="[3:0]"
+    #   logic [7:0] field_name [3:0];     → packed_dim="[7:0]", unpacked_dim="[3:0]"
     #   bit [7:0] field_name;
     #   logic field_name;  (1-bit)
     builtin_field_pattern = re.compile(
         r"(logic|bit|int|integer|wire|reg|byte|shortint|longint)"
-        r"\s*(?:\[([^\]]*)\]\s*)?(\w+)\s*;",
+        r"\s*(\[[^\]]*\])?\s*"       # optional packed dimension (group 2)
+        r"(\w+)"                      # field name (group 3)
+        r"\s*(\[[^\]]*\])?\s*;",     # optional unpacked dimension (group 4)
     )
 
-    # Pattern 2: custom type reference (typedef name)
+    # Pattern 2: custom type reference (typedef name) with optional unpacked dimension
     #   tile_t dest_tile;
+    #   tile_t dest_tile [3:0];
     #   endpoint_id_t ep_id;
-    # Must NOT match built-in types.  We match: word word ;
+    # Must NOT match built-in types.  We match: word word [dim]? ;
     # where the first word is not a built-in type.
     custom_field_pattern = re.compile(
-        r"(\w+)\s+(\w+)\s*;",
+        r"(\w+)\s+(\w+)\s*(\[[^\]]*\])?\s*;",
     )
 
     # Track which field names we've already captured (avoid duplicates)
@@ -349,14 +549,21 @@ def _parse_struct_fields(body, raw_body=""):
     # First pass: built-in typed fields
     for fm in builtin_field_pattern.finditer(body):
         type_name = fm.group(1)
-        dim_str = fm.group(2)  # e.g. "7:0" or "N:0" or None
+        packed_dim_raw = fm.group(2)   # e.g. "[7:0]" or None
         field_name = fm.group(3)
+        unpacked_dim_raw = fm.group(4)  # e.g. "[3:0]" or None
 
         if field_name in seen_names:
             continue
         seen_names.add(field_name)
 
+        # Extract dimension string for packed_dim (strip brackets for _parse_dimension)
+        dim_str = packed_dim_raw[1:-1] if packed_dim_raw else None
         msb, lsb, bit_width = _parse_dimension(dim_str, type_name)
+
+        # Store dimension strings with brackets
+        packed_dim = packed_dim_raw if packed_dim_raw else ""
+        unpacked_dim = unpacked_dim_raw if unpacked_dim_raw else ""
 
         fields.append({
             "name": field_name,
@@ -365,12 +572,15 @@ def _parse_struct_fields(body, raw_body=""):
             "lsb": lsb,
             "ref_type": "",
             "comment": comment_map.get(field_name, ""),
+            "packed_dim": packed_dim,
+            "unpacked_dim": unpacked_dim,
         })
 
     # Second pass: custom type references
     for fm in custom_field_pattern.finditer(body):
         type_name = fm.group(1)
         field_name = fm.group(2)
+        unpacked_dim_raw = fm.group(3)  # e.g. "[3:0]" or None
 
         if field_name in seen_names:
             continue
@@ -381,6 +591,8 @@ def _parse_struct_fields(body, raw_body=""):
             continue
         seen_names.add(field_name)
 
+        unpacked_dim = unpacked_dim_raw if unpacked_dim_raw else ""
+
         fields.append({
             "name": field_name,
             "bit_width": 0,  # unknown width for typedef references
@@ -388,7 +600,37 @@ def _parse_struct_fields(body, raw_body=""):
             "lsb": 0,
             "ref_type": type_name,
             "comment": comment_map.get(field_name, ""),
+            "packed_dim": "",
+            "unpacked_dim": unpacked_dim,
         })
+
+    # --- Field count validation (Req 9.2, 9.4) ---
+    # Count semicolons in the struct body as expected field count.
+    # Each field declaration ends with a semicolon.
+    # Filter out lines that contain keywords we intentionally skip
+    # (typedef, struct, packed, unsigned, signed) to reduce false positives.
+    skip_keywords = {"typedef", "struct", "packed", "unsigned", "signed"}
+    body_lines = [ln.strip() for ln in body.split(";") if ln.strip()]
+    expected_field_count = 0
+    for line in body_lines:
+        first_word = line.split()[0] if line.split() else ""
+        if first_word not in skip_keywords:
+            expected_field_count += 1
+
+    actual_field_count = len(fields)
+
+    if expected_field_count > 0 and actual_field_count != expected_field_count:
+        body_snippet = body.strip()[:100]
+        logger.error(
+            "Struct field count mismatch: expected %d fields "
+            "but extracted %d fields. Body snippet: %s",
+            expected_field_count, actual_field_count, body_snippet,
+        )
+        raise StructFieldCountMismatchError(
+            expected=expected_field_count,
+            actual=actual_field_count,
+            body_snippet=body_snippet,
+        )
 
     return fields
 

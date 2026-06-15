@@ -43,6 +43,24 @@ resource "aws_security_group" "rtl_parser_lambda" {
     prefix_list_ids = ["pl-78a54011"]
   }
 
+  # Outbound: Qdrant REST API to Virginia Backend VPC via VPC Peering
+  egress {
+    description = "Qdrant REST API to Virginia Backend VPC via VPC Peering"
+    from_port   = 6333
+    to_port     = 6333
+    protocol    = "tcp"
+    cidr_blocks = ["10.20.0.0/16"]
+  }
+
+  # Outbound: Neptune openCypher to Virginia Backend VPC via VPC Peering
+  egress {
+    description = "Neptune openCypher to Virginia Backend VPC via VPC Peering"
+    from_port   = 8182
+    to_port     = 8182
+    protocol    = "tcp"
+    cidr_blocks = ["10.20.0.0/16"]
+  }
+
   tags = merge(local.common_tags, {
     Name    = "sg-rtl-parser-lambda-${var.environment}"
     Purpose = "RTL Parser Lambda Security Group"
@@ -95,23 +113,6 @@ resource "aws_iam_role_policy" "rtl_parser_s3" {
         Effect   = "Allow"
         Action   = ["s3:PutObject"]
         Resource = ["${aws_s3_bucket.rtl_codes.arn}/rtl-parsed/*"]
-      }
-    ]
-  })
-}
-
-# IAM Policy: OpenSearch - RTL_OpenSearch_Index 인덱싱
-resource "aws_iam_role_policy" "rtl_parser_opensearch" {
-  name = "rtl-parser-opensearch-access"
-  role = aws_iam_role.rtl_parser_lambda.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect   = "Allow"
-        Action   = ["aoss:APIAccessAll"]
-        Resource = ["arn:aws:aoss:us-east-1:${data.aws_caller_identity.current.account_id}:collection/*"]
       }
     ]
   })
@@ -179,7 +180,7 @@ resource "aws_iam_role_policy" "rtl_parser_bedrock" {
   })
 }
 
-# IAM Policy: DynamoDB - 에러 테이블 PutItem + UpdateItem + Query (분석 파이프라인 상태 추적)
+# IAM Policy: DynamoDB - 에러 테이블 + Claim DB PutItem/UpdateItem/Query
 resource "aws_iam_role_policy" "rtl_parser_dynamodb" {
   name = "rtl-parser-dynamodb-access"
   role = aws_iam_role.rtl_parser_lambda.id
@@ -194,7 +195,10 @@ resource "aws_iam_role_policy" "rtl_parser_dynamodb" {
           "dynamodb:UpdateItem",
           "dynamodb:Query"
         ]
-        Resource = [aws_dynamodb_table.extraction_tasks.arn]
+        Resource = [
+          aws_dynamodb_table.extraction_tasks.arn,
+          aws_dynamodb_table.claim_db.arn
+        ]
       }
     ]
   })
@@ -223,7 +227,10 @@ resource "aws_iam_role_policy" "rtl_parser_vpc" {
   })
 }
 
-# IAM Policy: Neptune - WriteDataViaQuery (Phase 6 대비)
+# IAM Policy: Neptune - 데이터 읽기/쓰기/삭제 (Graph DB 적재/조회)
+# Neptune은 Virginia(us-east-1)에 위치하므로 ARN region은 us-east-1
+# openCypher MERGE/SET 구문은 WriteDataViaQuery 외에 DeleteDataViaQuery 권한도 요구하므로
+# AWS 공식 권장대로 neptune-db:* 로 모든 데이터 액션을 허용한다.
 resource "aws_iam_role_policy" "rtl_parser_neptune" {
   name = "rtl-parser-neptune-access"
   role = aws_iam_role.rtl_parser_lambda.id
@@ -233,8 +240,8 @@ resource "aws_iam_role_policy" "rtl_parser_neptune" {
     Statement = [
       {
         Effect   = "Allow"
-        Action   = ["neptune-db:WriteDataViaQuery"]
-        Resource = ["arn:aws:neptune-db:ap-northeast-2:${data.aws_caller_identity.current.account_id}:*/*"]
+        Action   = ["neptune-db:*"]
+        Resource = ["arn:aws:neptune-db:us-east-1:${data.aws_caller_identity.current.account_id}:cluster-IIEAL35IJ4RKREQXUKYXSGB73U/*"]
       }
     ]
   })
@@ -252,6 +259,33 @@ resource "aws_iam_role_policy" "rtl_parser_sfn" {
         Effect   = "Allow"
         Action   = ["states:StartExecution"]
         Resource = [aws_sfn_state_machine.analysis_orchestrator.arn]
+      }
+    ]
+  })
+}
+
+# IAM Policy: Secrets Manager - Qdrant API Key 조회 (KMS 복호화 포함)
+resource "aws_iam_role_policy" "rtl_parser_qdrant_secret" {
+  name = "rtl-parser-qdrant-secret-access"
+  role = aws_iam_role.rtl_parser_lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["secretsmanager:GetSecretValue"]
+        Resource = ["arn:aws:secretsmanager:ap-northeast-2:533335672315:secret:qdrant/api-key-*"]
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
+        Resource = ["arn:aws:kms:ap-northeast-2:533335672315:key/*"]
+        Condition = {
+          StringEquals = {
+            "kms:ViaService" = "secretsmanager.ap-northeast-2.amazonaws.com"
+          }
+        }
       }
     ]
   })
@@ -336,6 +370,10 @@ resource "aws_lambda_function" "rtl_parser" {
   memory_size      = 2048
   timeout          = 300
 
+  # Neptune(단일 인스턴스) 과부하 방지를 위해 동시 실행 수 제한.
+  # 재인덱싱 시 수백 개 동시 invoke가 Neptune을 압도하면 openCypher read timeout 발생.
+  reserved_concurrent_executions = 10
+
   # VPC Configuration - BOS-AI Frontend VPC (Seoul, 10.10.0.0/16)
   vpc_config {
     subnet_ids         = local.frontend_private_subnet_ids
@@ -347,16 +385,19 @@ resource "aws_lambda_function" "rtl_parser" {
 
   environment {
     variables = {
-      RTL_S3_BUCKET        = aws_s3_bucket.rtl_codes.bucket
-      OPENSEARCH_ENDPOINT  = data.aws_opensearchserverless_collection.virginia.collection_endpoint
-      RTL_OPENSEARCH_INDEX = "rtl-knowledge-base-index"
-      BEDROCK_REGION       = "us-east-1"
-      TITAN_EMBED_MODEL_ID = "amazon.titan-embed-text-v2:0"
-      DYNAMODB_ERROR_TABLE = aws_dynamodb_table.extraction_tasks.name
-      LAMBDA_REGION        = "ap-northeast-2"
-      STEP_FUNCTIONS_ARN   = "arn:aws:states:ap-northeast-2:${data.aws_caller_identity.current.account_id}:stateMachine:analysis-orchestrator-${var.environment}"
-      CLAUDE_MODEL_ID      = "anthropic.claude-3-haiku-20240307-v1:0"
-      CLAIM_DB_TABLE       = aws_dynamodb_table.claim_db.name
+      RTL_S3_BUCKET            = aws_s3_bucket.rtl_codes.bucket
+      BEDROCK_REGION           = "us-east-1"
+      TITAN_EMBED_MODEL_ID     = "amazon.titan-embed-text-v2:0"
+      DYNAMODB_ERROR_TABLE     = aws_dynamodb_table.extraction_tasks.name
+      LAMBDA_REGION            = "ap-northeast-2"
+      STEP_FUNCTIONS_ARN       = "arn:aws:states:ap-northeast-2:${data.aws_caller_identity.current.account_id}:stateMachine:analysis-orchestrator-${var.environment}"
+      CLAUDE_MODEL_ID          = "anthropic.claude-3-haiku-20240307-v1:0"
+      CLAIM_DB_TABLE           = aws_dynamodb_table.claim_db.name
+      QDRANT_ENDPOINT          = "http://10.20.1.217:6333"
+      QDRANT_COLLECTION        = "rtl-knowledge-base"
+      QDRANT_API_KEY_SECRET_ARN = "arn:aws:secretsmanager:ap-northeast-2:533335672315:secret:qdrant/api-key-t9KnjZ"
+      NEPTUNE_ENDPOINT         = "bos-ai-neptune-prod.cluster-c254guiq2xho.us-east-1.neptune.amazonaws.com"
+      NEPTUNE_REGION           = "us-east-1"
     }
   }
 
@@ -368,7 +409,6 @@ resource "aws_lambda_function" "rtl_parser" {
 
   depends_on = [
     aws_iam_role_policy.rtl_parser_s3,
-    aws_iam_role_policy.rtl_parser_opensearch,
     aws_iam_role_policy.rtl_parser_logs,
     aws_iam_role_policy.rtl_parser_kms,
     aws_iam_role_policy.rtl_parser_bedrock,
@@ -381,6 +421,50 @@ resource "aws_lambda_function" "rtl_parser" {
 # ----------------------------------------------------------------------------
 # Outputs
 # ----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
+# Lambda Event Invoke Config — 비동기 재시도 비활성화 + DLQ (비용 폭발 방지)
+# ----------------------------------------------------------------------------
+
+resource "aws_sqs_queue" "rtl_parser_dlq" {
+  provider = aws.seoul
+  name     = "rtl-parser-dlq"
+
+  message_retention_seconds = 1209600  # 14일 보존
+
+  tags = merge(local.common_tags, {
+    Name    = "sqs-rtl-parser-dlq-seoul-${var.environment}"
+    Purpose = "RTL Parser Lambda failed event capture"
+  })
+}
+
+resource "aws_lambda_function_event_invoke_config" "rtl_parser" {
+  provider      = aws.seoul
+  function_name = aws_lambda_function.rtl_parser.function_name
+
+  maximum_retry_attempts = 0
+
+  destination_config {
+    on_failure {
+      destination = aws_sqs_queue.rtl_parser_dlq.arn
+    }
+  }
+}
+
+# DLQ에 메시지를 보낼 수 있도록 Lambda 역할에 SQS 권한 추가
+resource "aws_iam_role_policy" "rtl_parser_dlq" {
+  name = "rtl-parser-dlq-send"
+  role = aws_iam_role.rtl_parser_lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["sqs:SendMessage"]
+      Resource = [aws_sqs_queue.rtl_parser_dlq.arn]
+    }]
+  })
+}
 
 output "rtl_parser_lambda_arn" {
   description = "RTL Parser Lambda function ARN"

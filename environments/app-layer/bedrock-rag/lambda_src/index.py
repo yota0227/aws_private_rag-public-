@@ -79,9 +79,8 @@ ALLOWED_TRANSITIONS = {
 # 문서 source 허용 값 (Requirements 6.5)
 VALID_SOURCES = {"archive_md", "rtl_parsed", "codebeamer", "manual_upload", "system_generated"}
 
-# RTL OpenSearch 인덱스 설정 (search-archive RTL 분기용)
-RTL_OPENSEARCH_ENDPOINT = os.environ.get('RTL_OPENSEARCH_ENDPOINT', '')
-RTL_OPENSEARCH_INDEX = os.environ.get('RTL_OPENSEARCH_INDEX', 'rtl-knowledge-base-index')
+# NOTE [2026-05-19]: AOSS 완전 종료. Qdrant(EC2)로 전환 완료.
+# RTL 검색은 RTL Parser Lambda invoke → Qdrant로 처리됨.
 
 
 def handler(event, context):
@@ -205,6 +204,10 @@ def handler(event, context):
         # HDD Stale Regeneration (Phase 9 — v9.3, Requirements 34.6)
         if '/hdd/regenerate-stale' in path and method == 'POST':
             return regenerate_stale_hdd(event)
+
+        # Neptune Graph Bulk Load (v9.4a)
+        if '/neptune-load' in path and method == 'POST':
+            return neptune_bulk_load(event)
 
         return response(404, {'error': f'Not found: {method} {path}'})
 
@@ -1560,19 +1563,13 @@ def search_archive(event):
 
 
 def _search_rtl_index(query, max_results=20, topic='', pipeline_id='', analysis_type=''):
-    """RTL OpenSearch 인덱스 직접 검색 (source='rtl_parsed' 분기)
-    module_name, parsed_summary, port_list, instance_list, claim_text, hdd_content 필드를 검색
-    topic, pipeline_id, analysis_type 필터링 지원
+    """RTL 인덱스 검색 — RTL Parser Lambda에 검색 위임
+    RTL Parser Lambda가 내부적으로 Qdrant 또는 AOSS를 사용하여 검색 수행
     Requirements: 22.1, 22.2, 22.3, 22.4, 22.5
     """
-    if not RTL_OPENSEARCH_ENDPOINT:
-        return response(200, {
-            'query': query,
-            'answer': 'RTL OpenSearch endpoint not configured',
-            'results': [],
-            'count': 0,
-            'source': 'rtl_parsed'
-        })
+    # NOTE [2026-05-18]: AOSS 종료 후 Qdrant로 전환됨.
+    # RTL Parser Lambda가 VECTOR_DB_TYPE에 따라 자체적으로 Qdrant/AOSS 분기 처리.
+    # 이 함수는 단순히 RTL Parser Lambda에 검색을 위임.
 
     try:
         # RTL Parser Lambda를 동기 invoke하여 검색 위임
@@ -1617,6 +1614,13 @@ def _search_rtl_index(query, max_results=20, topic='', pipeline_id='', analysis_
                     answer_parts.append(
                         f"\n[{i}] [HDD] {name} | topic: {r.get('topic', '')}"
                         f"\n    {hdd[:500]}{'...' if len(hdd) > 500 else ''}"
+                    )
+                elif atype == 'signal_path_edge':
+                    answer_parts.append(
+                        f"\n[{i}] [EDGE] {name} | {r.get('edge_type', '')}: "
+                        f"`{r.get('src', '')}` → `{r.get('dst', '')}` "
+                        f"[{r.get('category', '')}]"
+                        f"\n    evidence: {r.get('raw_text', '')[:200]}"
                     )
                 else:
                     answer_parts.append(
@@ -2256,8 +2260,8 @@ def _resolve_placeholders(markdown_text, claims_used, topic):
                     best_confidence = confidence
                     best_created_at = created_at
 
-        # Source ②: RTL_OpenSearch_Index 검색
-        if not resolved_name and RTL_OPENSEARCH_ENDPOINT:
+        # Source ②: RTL 인덱스 검색 (Qdrant via RTL Parser Lambda invoke)
+        if not resolved_name:
             try:
                 rtl_lambda_name = os.environ.get('RTL_PARSER_LAMBDA_NAME', 'lambda-rtl-parser-seoul-dev')
                 search_query = token_id.replace('_', ' ')
@@ -2428,6 +2432,94 @@ def _mark_stale_parents(topic, depth=0, max_depth=5):
         }))
 
     return propagated_to
+
+
+def neptune_bulk_load(event):
+    """POST /rag/neptune-load — Neptune 그래프 벌크 로드 (v9.4a)
+
+    Accepts batches of module nodes or INSTANTIATES edges and writes to Neptune.
+    Called from scripts/load_neptune_via_lambda.py.
+    """
+    req_start = time.time()
+    body = parse_body(event)
+
+    neptune_endpoint = os.environ.get('NEPTUNE_ENDPOINT', '')
+    if not neptune_endpoint:
+        return response(400, {'error': 'NEPTUNE_ENDPOINT not configured'})
+
+    action = body.get('action', '')
+    if action not in ('create_nodes', 'create_edges', 'clear_all'):
+        return response(400, {'error': f'Invalid action: {action}. Use create_nodes, create_edges, or clear_all'})
+
+    try:
+        # boto3 neptunedata 클라이언트 사용 — SigV4 자동 서명
+        neptune_client = boto3.client(
+            'neptunedata',
+            region_name='us-east-1',
+            endpoint_url=f"https://{neptune_endpoint}:8182"
+        )
+
+        if action == 'clear_all':
+            result = neptune_client.execute_open_cypher_query(
+                openCypherQuery="MATCH (n) DETACH DELETE n"
+            )
+            return response(200, {
+                'action': 'clear_all',
+                'status': 'all nodes and edges deleted',
+                'execution_time_ms': int((time.time() - req_start) * 1000)
+            })
+
+        if action == 'create_nodes':
+            modules = body.get('modules', [])
+            if not modules:
+                return response(400, {'error': 'modules list is empty'})
+
+            query_str = "UNWIND $modules AS m MERGE (n:Module {name: m})"
+            params_str = json.dumps({"modules": modules})
+            result = neptune_client.execute_open_cypher_query(
+                openCypherQuery=query_str,
+                parameters=params_str
+            )
+
+            return response(200, {
+                'action': 'create_nodes',
+                'count': len(modules),
+                'execution_time_ms': int((time.time() - req_start) * 1000)
+            })
+
+        elif action == 'create_edges':
+            edges = body.get('edges', [])
+            if not edges:
+                return response(400, {'error': 'edges list is empty'})
+
+            query_str = (
+                "UNWIND $edges AS e "
+                "MATCH (p:Module {name: e.parent}) "
+                "MATCH (c:Module {name: e.child}) "
+                "MERGE (p)-[r:INSTANTIATES {instance_name: e.instance_name}]->(c) "
+                "SET r.depth = e.depth"
+            )
+            params_str = json.dumps({"edges": edges})
+            result = neptune_client.execute_open_cypher_query(
+                openCypherQuery=query_str,
+                parameters=params_str
+            )
+
+            return response(200, {
+                'action': 'create_edges',
+                'count': len(edges),
+                'execution_time_ms': int((time.time() - req_start) * 1000)
+            })
+
+            return response(200, {
+                'action': 'create_edges',
+                'count': len(edges),
+                'execution_time_ms': int((time.time() - req_start) * 1000)
+            })
+
+    except Exception as e:
+        logger.error(f"Neptune bulk load error: {e}")
+        return response(500, {'error': str(e), 'execution_time_ms': int((time.time() - req_start) * 1000)})
 
 
 def regenerate_stale_hdd(event):
@@ -3004,7 +3096,14 @@ def _get_neptune_auth():
 
     session = boto3.Session()
     credentials = session.get_credentials().get_frozen_credentials()
-    region = session.region_name or 'ap-northeast-2'
+    # Neptune은 Virginia(us-east-1)에 배포됨 — endpoint에서 region 추출
+    neptune_endpoint = os.environ.get('NEPTUNE_ENDPOINT', '')
+    if '.us-east-1.' in neptune_endpoint:
+        region = 'us-east-1'
+    elif '.ap-northeast-2.' in neptune_endpoint:
+        region = 'ap-northeast-2'
+    else:
+        region = 'us-east-1'  # default: Neptune Virginia
     return AWS4Auth(
         credentials.access_key,
         credentials.secret_key,
@@ -3035,25 +3134,23 @@ def trace_signal_path(event):
         })
 
     try:
-        import requests as req_lib
-        auth = _get_neptune_auth()
-        neptune_url = f"https://{neptune_endpoint}:8182/openCypher"
+        neptune_client = boto3.client(
+            'neptunedata', region_name='us-east-1',
+            endpoint_url=f"https://{neptune_endpoint}:8182"
+        )
 
         # 신호 전파 경로 탐색: Signal DRIVES 관계 체인
-        cypher_query = {
-            "query": (
-                "MATCH path = (m:Module {name: $module})-[:HAS_PORT]->(p:Port)-[:CONNECTS_TO*1..5]->(target) "
-                "WHERE p.name CONTAINS $signal "
-                "RETURN [n IN nodes(path) | {name: n.name, type: labels(n)[0]}] AS path_nodes, "
-                "[r IN relationships(path) | type(r)] AS path_edges "
-                "LIMIT 10"
-            ),
-            "parameters": {"module": module_name, "signal": signal_name}
-        }
-
-        resp = req_lib.post(neptune_url, auth=auth, json=cypher_query, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
+        query_str = (
+            "MATCH path = (m:Module {name: $module})-[:HAS_PORT]->(p:Port)-[:CONNECTS_TO*1..5]->(target) "
+            "WHERE p.name CONTAINS $signal "
+            "RETURN [n IN nodes(path) | {name: n.name, type: labels(n)[0]}] AS path_nodes, "
+            "[r IN relationships(path) | type(r)] AS path_edges "
+            "LIMIT 10"
+        )
+        params_str = json.dumps({"module": module_name, "signal": signal_name})
+        data = neptune_client.execute_open_cypher_query(
+            openCypherQuery=query_str, parameters=params_str
+        )
 
         signal_paths = []
         for row in data.get('results', []):
@@ -3099,26 +3196,24 @@ def find_instantiation_tree(event):
         })
 
     try:
-        import requests as req_lib
-        auth = _get_neptune_auth()
-        neptune_url = f"https://{neptune_endpoint}:8182/openCypher"
+        neptune_client = boto3.client(
+            'neptunedata', region_name='us-east-1',
+            endpoint_url=f"https://{neptune_endpoint}:8182"
+        )
 
         # 인스턴스화 트리 탐색: INSTANTIATES 관계 체인
-        cypher_query = {
-            "query": (
-                "MATCH path = (root:Module {name: $module})-[:INSTANTIATES*1.." + str(min(int(depth), 10)) + "]->(child:Module) "
-                "RETURN root.name AS root, "
-                "[n IN nodes(path) | n.name] AS hierarchy, "
-                "length(path) AS depth "
-                "ORDER BY depth "
-                "LIMIT 50"
-            ),
-            "parameters": {"module": module_name}
-        }
-
-        resp = req_lib.post(neptune_url, auth=auth, json=cypher_query, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
+        query_str = (
+            "MATCH path = (root:Module {name: $module})-[:INSTANTIATES*1.." + str(min(int(depth), 10)) + "]->(child:Module) "
+            "RETURN root.name AS root, "
+            "[n IN nodes(path) | n.name] AS hierarchy, "
+            "length(path) AS depth "
+            "ORDER BY depth "
+            "LIMIT 50"
+        )
+        params_str = json.dumps({"module": module_name})
+        data = neptune_client.execute_open_cypher_query(
+            openCypherQuery=query_str, parameters=params_str
+        )
 
         tree = []
         for row in data.get('results', []):
@@ -3163,27 +3258,25 @@ def find_clock_crossings(event):
         })
 
     try:
-        import requests as req_lib
-        auth = _get_neptune_auth()
-        neptune_url = f"https://{neptune_endpoint}:8182/openCypher"
+        neptune_client = boto3.client(
+            'neptunedata', region_name='us-east-1',
+            endpoint_url=f"https://{neptune_endpoint}:8182"
+        )
 
         # 클럭 도메인 크로싱 탐색: 서로 다른 ClockDomain에 속한 신호 간 연결
-        cypher_query = {
-            "query": (
-                "MATCH (m:Module {name: $module})-[:HAS_PORT]->(p:Port)-[:CONNECTS_TO]->(q:Port), "
-                "(p)-[:BELONGS_TO_DOMAIN]->(cd1:ClockDomain), "
-                "(q)-[:BELONGS_TO_DOMAIN]->(cd2:ClockDomain) "
-                "WHERE cd1.name <> cd2.name "
-                "RETURN p.name AS source_signal, cd1.name AS source_domain, "
-                "q.name AS target_signal, cd2.name AS target_domain "
-                "LIMIT 50"
-            ),
-            "parameters": {"module": module_name}
-        }
-
-        resp = req_lib.post(neptune_url, auth=auth, json=cypher_query, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
+        query_str = (
+            "MATCH (m:Module {name: $module})-[:HAS_PORT]->(p:Port)-[:CONNECTS_TO]->(q:Port), "
+            "(p)-[:BELONGS_TO_DOMAIN]->(cd1:ClockDomain), "
+            "(q)-[:BELONGS_TO_DOMAIN]->(cd2:ClockDomain) "
+            "WHERE cd1.name <> cd2.name "
+            "RETURN p.name AS source_signal, cd1.name AS source_domain, "
+            "q.name AS target_signal, cd2.name AS target_domain "
+            "LIMIT 50"
+        )
+        params_str = json.dumps({"module": module_name})
+        data = neptune_client.execute_open_cypher_query(
+            openCypherQuery=query_str, parameters=params_str
+        )
 
         crossings = []
         for row in data.get('results', []):
@@ -4295,116 +4388,43 @@ def parser_contribution(event, context):
     if not pipeline_id:
         return {'error': 'pipeline_id is required'}
 
-    if not RTL_OPENSEARCH_ENDPOINT:
-        return {'error': 'RTL_OPENSEARCH_ENDPOINT not configured', 'pipeline_id': pipeline_id}
-
     try:
-        import requests
-        from requests_aws4auth import AWS4Auth
-
-        session = boto3.Session()
-        credentials = session.get_credentials()
-        aoss_region = os.environ.get('BEDROCK_REGION', 'us-east-1')
-        auth = AWS4Auth(
-            credentials.access_key,
-            credentials.secret_key,
-            aoss_region,
-            'aoss',
-            session_token=credentials.token,
-        )
-
-        url = f"{RTL_OPENSEARCH_ENDPOINT}/{RTL_OPENSEARCH_INDEX}/_search"
-
-        # Query all claims for this pipeline_id, aggregate by parser_source
-        search_body = {
-            "size": 0,
-            "query": {
-                "bool": {
-                    "must": [
-                        {"term": {"pipeline_id": pipeline_id}},
-                    ],
-                    "must_not": [
-                        {"term": {"parser_source": ""}},
-                    ]
-                }
-            },
-            "aggs": {
-                "by_parser": {
-                    "terms": {
-                        "field": "parser_source",
-                        "size": 20,
-                    },
-                    "aggs": {
-                        "avg_score": {
-                            "avg": {"field": "_score"}
-                        }
-                    }
-                }
-            }
+        # RTL Parser Lambda invoke로 Qdrant 검색 위임
+        rtl_lambda_name = os.environ.get('RTL_PARSER_LAMBDA_NAME', 'lambda-rtl-parser-seoul-dev')
+        invoke_payload = {
+            'action': 'search',
+            'query': '',
+            'pipeline_id': pipeline_id,
+            'analysis_type': 'claim',
+            'max_results': 200,
         }
-
-        resp = requests.post(
-            url, auth=auth, json=search_body,
-            headers={"Content-Type": "application/json"}, timeout=30,
+        invoke_resp = lambda_client.invoke(
+            FunctionName=rtl_lambda_name,
+            InvocationType='RequestResponse',
+            Payload=json.dumps(invoke_payload),
         )
-        resp.raise_for_status()
-        data = resp.json()
+        data = json.loads(invoke_resp['Payload'].read().decode('utf-8'))
+        results = data.get('results', [])
 
-        # Parse aggregation results
+        # 클라이언트 사이드 집계: parser_source별 통계
         parser_stats = {}
-        buckets = data.get("aggregations", {}).get("by_parser", {}).get("buckets", [])
-        for bucket in buckets:
-            parser_name = bucket.get("key", "unknown")
-            claims_total = bucket.get("doc_count", 0)
-            parser_stats[parser_name] = {
-                "claims_total": claims_total,
-                "claims_hit_in_search": 0,
-                "hit_ratio": 0.0,
-                "avg_search_score": 0.0,
-            }
-
-        # Now query with a broad text match to estimate hit ratio
-        # (claims that would actually appear in search results)
-        hit_search_body = {
-            "size": 0,
-            "query": {
-                "bool": {
-                    "must": [
-                        {"term": {"pipeline_id": pipeline_id}},
-                        {"exists": {"field": "claim_text"}},
-                    ],
-                    "must_not": [
-                        {"term": {"parser_source": ""}},
-                        {"term": {"claim_text": ""}},
-                    ]
+        for r in results:
+            parser_name = r.get('parser_source', '') or r.get('sub_record_type', '') or 'unknown'
+            if parser_name not in parser_stats:
+                parser_stats[parser_name] = {
+                    'claims_total': 0,
+                    'claims_hit_in_search': 0,
+                    'hit_ratio': 0.0,
+                    'avg_search_score': 0.0,
                 }
-            },
-            "aggs": {
-                "by_parser": {
-                    "terms": {
-                        "field": "parser_source",
-                        "size": 20,
-                    }
-                }
-            }
-        }
+            parser_stats[parser_name]['claims_total'] += 1
+            if r.get('claim_text'):
+                parser_stats[parser_name]['claims_hit_in_search'] += 1
 
-        hit_resp = requests.post(
-            url, auth=auth, json=hit_search_body,
-            headers={"Content-Type": "application/json"}, timeout=30,
-        )
-        if hit_resp.status_code == 200:
-            hit_data = hit_resp.json()
-            hit_buckets = hit_data.get("aggregations", {}).get("by_parser", {}).get("buckets", [])
-            for bucket in hit_buckets:
-                parser_name = bucket.get("key", "unknown")
-                hit_count = bucket.get("doc_count", 0)
-                if parser_name in parser_stats:
-                    parser_stats[parser_name]["claims_hit_in_search"] = hit_count
-                    total = parser_stats[parser_name]["claims_total"]
-                    parser_stats[parser_name]["hit_ratio"] = (
-                        hit_count / total if total > 0 else 0.0
-                    )
+        # hit_ratio 계산
+        for stats in parser_stats.values():
+            total = stats['claims_total']
+            stats['hit_ratio'] = stats['claims_hit_in_search'] / total if total > 0 else 0.0
 
         # Publish ParserHitRatio metrics to CloudWatch
         try:

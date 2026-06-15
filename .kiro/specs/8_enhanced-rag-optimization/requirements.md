@@ -560,3 +560,94 @@ v0.3 변경 사항 (Phase 1~5 테스트 결과 반영):
 9. IF wire 선언의 struct 타입이 동일 패키지에서 이미 파싱된 struct와 일치하면, THEN THE Wire_Declaration_Parser SHALL claim에 struct 정의 참조를 포함한다.
 10. FOR ALL wire 선언에 대해, 신호명이 비어있지 않고 최소 1개의 차원 정보 또는 struct 타입 정보가 claim에 포함되어야 한다 (Wire Declaration 완전성 속성).
 11. THE Wire_Declaration_Parser SHALL 신규 파일 `environments/app-layer/bedrock-rag/rtl_parser_src/wire_declaration_parser.py`로 구현한다.
+
+
+---
+
+## v9.3 Port Binding + Schematic Viewer + Merge Enhancement (Phase 9)
+
+> **품질 기준선:** v9.2 Content Fidelity 80% → v9.3 목표 85~88% (포트 바인딩 실명 복구 + Schematic 시각 검증)
+>
+> **범위:** v9.2에서 확보된 인스턴스 위치/wire 선언/package 정보를 바탕으로, (1) `.port(signal)` 바인딩을 Neptune CONNECTS_TO 엣지로 적재하여 모듈 간 실제 배선을 그래프에 반영하고, (2) Neptune 그래프를 JSON으로 내보내는 Graph Export API를 추가하며, (3) 3-view(Chip/Module/Signal) 인터랙티브 Schematic Viewer로 시각 검증 가능하게 하고, (4) HDD merge 시 placeholder 대신 실명(module/instance/signal 이름)을 복구하며 topic 수정이 통합본에 전파되도록 개선한다.
+>
+> **참조 문서:** `docs/diagrams/interactive_schematic.html` (Phase 9 프로토타입), `docs/8_enhanced-rag-optimization/v9.3-port-binding-plan.md`
+
+### 요구사항 30: Port Binding Parser (Supply Side — v9.3)
+
+**사용자 스토리:** 반도체 설계 엔지니어로서, `.port(signal)` 형식의 명시적 포트 바인딩이 파싱되어, "TENSIX EP=6의 `i_noc_data` 포트는 어떤 신호에 연결되는가?"와 같은 포트 단위 연결 질의에 정확한 답변을 받고 싶다.
+
+#### 인수 조건
+
+1. THE Port_Binding_Parser SHALL 모듈 인스턴스화 구문 내 `.port(signal)` 형식의 명시적 포트 바인딩을 정규식으로 추출한다. 지원 패턴: `.port_name(signal_expr)`, `.port_name(signal[bit_range])`, `.port_name()` (unconnected).
+2. THE Port_Binding_Parser SHALL 각 바인딩에 대해 다음 필드를 추출한다: `instance_name`, `module_type`, `port_name`, `signal_expr`, `bit_range`(선택), `is_unconnected`(불리언), `source_file`, `line_number`.
+3. THE Port_Binding_Parser SHALL concatenation 바인딩(`.port({sig_a, sig_b})`)을 인식하여 `signal_expr`을 전체 표현식으로 보존하고, 개별 signal 요소는 `constituent_signals` 배열에 분해하여 기록한다.
+4. THE Port_Binding_Parser SHALL 파라미터 바인딩(`.PARAM(value)`)은 제외하고 포트 바인딩만 추출한다. 파라미터와 포트 구분은 인스턴스화 구문의 `#(…)` 블록(파라미터)과 `(…)` 블록(포트) 위치로 결정한다.
+5. THE Port_Binding_Parser SHALL 생성된 claim에 `parser_source='port_binding_parser'` 를 설정하고, claim_text 형식은 `"Instance '{instance_name}' of module '{module_type}' binds port '{port_name}' to signal '{signal_expr}'"` 이다.
+6. THE Port_Binding_Parser SHALL `PARSER_PORT_BINDING_ENABLED` 환경 변수(기본값 `true`)로 제어한다.
+7. THE Port_Binding_Parser SHALL 신규 파일 `environments/app-layer/bedrock-rag/rtl_parser_src/port_binding_parser.py`로 구현하며, `_process_rtl_file`에서 기본 모듈 파싱 후 호출된다.
+8. FOR ALL 인스턴스 포트 바인딩에 대해, `port_name`과 `signal_expr`이 claim에 포함되어야 하며 `is_unconnected=false`인 바인딩의 `signal_expr`은 빈 문자열이어서는 안 된다 (Port Binding 완전성 속성).
+9. IF 동일 instance 내에서 동일 `port_name`에 대한 바인딩이 2회 이상 등장하면, THEN THE Port_Binding_Parser SHALL 첫 번째 바인딩만 채택하고 WARNING 로그에 중복 발견을 기록한다.
+
+### 요구사항 31: Neptune CONNECTS_TO 엣지 적재 (Supply Side — v9.3)
+
+**사용자 스토리:** 반도체 설계 엔지니어로서, 포트 바인딩 정보가 Neptune 그래프의 엣지로 적재되어, "EP=6의 i_noc_data 신호가 최종적으로 어떤 모듈에 도달하는가?"와 같은 신호 전파 질의가 `trace_signal_path` 도구로 정확히 추적되기를 원한다.
+
+#### 인수 조건
+
+1. WHEN Port_Binding_Parser가 포트 바인딩을 추출하면, THE RTL_Parser_Lambda SHALL 각 바인딩을 Neptune의 `CONNECTS_TO` 엣지로 적재한다. 엣지 시작: 인스턴스 포트 노드(`Port` label, `{instance_name}.{port_name}`), 엣지 끝: 신호 노드(`Signal` label, `signal_expr`).
+2. THE RTL_Parser_Lambda SHALL 포트 노드(Port) 생성 시 다음 속성을 설정한다: `instance_name`, `module_type`, `port_name`, `direction`(가능한 경우 `input`/`output`/`inout`, 미해석 시 `"unknown"`), `width`(비트폭 표현식 또는 평가된 값).
+3. THE RTL_Parser_Lambda SHALL 신호 노드(Signal) 생성 시 다음 속성을 설정한다: `name`(signal_expr), `scope`(모듈명), `width`(가능한 경우).
+4. THE RTL_Parser_Lambda SHALL CONNECTS_TO 엣지에 다음 속성을 설정한다: `bit_range`(있는 경우), `source_file`, `line_number`, `is_concatenation`(불리언).
+5. THE RTL_Parser_Lambda SHALL concatenation 바인딩(`{a, b}`)의 경우 `signal_expr` 전체를 대표 Signal 노드로 생성하고, `constituent_signals` 각각에 대해 보조 `CONNECTS_TO` 엣지(`is_constituent=true` 속성 포함)를 추가한다.
+6. THE RTL_Parser_Lambda SHALL 적재 실패(Neptune 타임아웃/가용성 문제) 시 기존 패턴과 동일하게 graceful degradation 하여 S3/OpenSearch 인덱싱은 계속 수행하며, CloudWatch 구조화 로그에 `neptune_load_failed: true`를 기록한다.
+7. FOR ALL Port_Binding claim에 대해 `is_unconnected=false`이고 Neptune이 가용한 경우, 적재된 CONNECTS_TO 엣지 수는 Port_Binding claim 수와 일치해야 한다 (적재 보존 속성, concatenation 보조 엣지 제외).
+8. THE RTL_Parser_Lambda SHALL 동일 `(instance_name, port_name)` 노드가 이미 존재하면 MERGE 연산으로 업데이트하여 중복 생성을 방지한다 (openCypher `MERGE` 또는 Gremlin `coalesce` 사용).
+
+### 요구사항 32: Graph Export API (Consumption Side — v9.3)
+
+**사용자 스토리:** 반도체 설계 엔지니어로서, Neptune 그래프의 부분집합을 JSON으로 내보내어 Schematic Viewer 및 외부 분석 도구에서 활용할 수 있기를 원한다.
+
+#### 인수 조건
+
+1. THE Lambda_Handler SHALL `POST /rag/graph-export` 엔드포인트를 제공하며, 입력으로 다음 파라미터를 수용한다: `scope`(필수 문자열, 허용 값: `"chip"`, `"module"`, `"signal"`), `root_module`(필수 문자열, 시작 모듈명), `depth`(선택 정수, 기본값 3), `signal_filter`(선택 문자열, `scope="signal"`일 때 필수).
+2. WHEN `scope="chip"` 이면, THE Lambda_Handler SHALL `root_module`의 직접 자식 인스턴스와 모듈 간 CONNECTS_TO 엣지 요약(모듈 레벨 aggregation)을 반환한다.
+3. WHEN `scope="module"` 이면, THE Lambda_Handler SHALL `root_module`의 내부 인스턴스, 포트, 포트 바인딩을 포함하는 모듈 레벨 상세 그래프를 반환한다 (`depth` 무시).
+4. WHEN `scope="signal"` 이면, THE Lambda_Handler SHALL `signal_filter`에 매칭되는 신호의 전파 경로를 `depth` 홉까지 반환한다. 내부적으로 `trace_signal_path` 로직을 재사용한다.
+5. THE Lambda_Handler SHALL 응답을 다음 JSON 스키마로 반환한다: `{nodes: [{id, label, type, properties}], edges: [{id, source, target, label, properties}], metadata: {scope, root_module, depth, node_count, edge_count, generated_at, neptune_fallback}}`.
+6. THE Lambda_Handler SHALL 응답 노드 수를 기본 상한 1,000개로 제한하며, 초과 시 `truncated=true` 플래그를 metadata에 포함하고 가장 중요도 높은 노드(degree 기준) 1,000개만 반환한다.
+7. IF Neptune 쿼리 타임아웃(30초) 또는 실패 시, THEN THE Lambda_Handler SHALL HTTP 503 대신 빈 그래프(`nodes=[]`, `edges=[]`) + `neptune_fallback=true`를 반환하여 뷰어가 graceful degradation 하도록 한다.
+8. THE Lambda_Handler SHALL Read-Only Neptune IAM Role을 사용하며, Graph Export API는 `neptune-db:ReadDataViaQuery` 권한만 필요하다.
+9. THE Terraform 구성 SHALL API Gateway에 `/rag/graph-export` 라우트(POST)를 추가한다.
+
+### 요구사항 33: Interactive Schematic Viewer (Consumption Side — v9.3)
+
+**사용자 스토리:** 반도체 설계 엔지니어로서, Graph Export API 결과를 브라우저에서 3-view(Chip/Module/Signal)로 시각화하고 인터랙티브하게 탐색하여, 포트 바인딩이 정확히 추출되었는지 육안으로 검증하고 싶다.
+
+#### 인수 조건
+
+1. THE Schematic_Viewer SHALL 단일 HTML 파일 `docs/diagrams/interactive_schematic.html`로 배포되며, D3.js v7을 사용한 force-directed layout + SVG 기반 렌더링을 수행한다.
+2. THE Schematic_Viewer SHALL 3가지 View 모드를 지원한다: (a) **Chip View** (`scope="chip"`): 최상위 모듈과 자식 인스턴스 네트워크, (b) **Module View** (`scope="module"`): 선택된 모듈 내부의 인스턴스+포트+바인딩 상세, (c) **Signal View** (`scope="signal"`): 선택된 신호의 전파 경로 하이라이트.
+3. THE Schematic_Viewer SHALL 상단 컨트롤 바에서 Graph Export API 엔드포인트, `root_module`, `scope`, `depth`, `signal_filter`를 입력받아 API 호출 후 그래프를 재렌더링한다.
+4. THE Schematic_Viewer SHALL 노드 타입별 색상을 구분한다: Module(white), Port(yellow), Signal(blue), ClockDomain(purple), Parameter(green). 포트의 방향(input/output/inout)은 노드 테두리 스타일로 표현한다.
+5. WHEN 사용자가 노드를 클릭하면, THE Schematic_Viewer SHALL 해당 노드와 직접 연결된 엣지+노드를 하이라이트하고 tooltip에 속성(`properties`) 전체를 표시한다.
+6. THE Schematic_Viewer SHALL 줌/팬(D3 zoom), 노드 드래그, 레이블 토글, 타입별 필터(Compute/NoC/Control만 표시 등) 기능을 제공한다.
+7. WHEN Graph Export API 응답에 `neptune_fallback=true` 또는 `truncated=true`가 포함되면, THE Schematic_Viewer SHALL 상단에 경고 배너(`⚠️ Neptune 불가용 — 부분 데이터 표시` 또는 `⚠️ 1000개 초과 — 상위 노드만 표시`)를 노출한다.
+8. THE Schematic_Viewer SHALL 초기 로드 시 프로토타입 데이터(내장 `nodes`/`links` JSON)로 렌더링하고, 컨트롤 바의 "Load from API" 버튼 클릭 시에만 Graph Export API를 호출하여 온프렘 환경에서 네트워크 없이도 동작하도록 한다.
+9. THE Schematic_Viewer SHALL 외부 CDN 의존성을 최소화하기 위해 D3.js v7 번들을 `docs/diagrams/vendor/d3.v7.min.js`로 로컬 복사본을 선택적으로 참조할 수 있도록 `<script>` 태그를 조건부로 전환 가능한 구조로 작성한다.
+
+### 요구사항 34: HDD Merge 개선 — 실명 복구 + Topic 전파 (Generation Side — v9.3)
+
+**사용자 스토리:** 반도체 설계 엔지니어로서, HDD 통합본이 `{MODULE_A}`, `{INSTANCE_1}` 같은 placeholder 대신 실제 module/instance/signal 이름으로 렌더링되고, 특정 topic의 claim이 수정되면 해당 topic을 참조하는 상위 통합본도 자동 갱신되기를 원한다.
+
+#### 인수 조건
+
+1. THE HDD_Merger SHALL `generate_hdd_section` 및 merge 시 생성되는 마크다운에서 placeholder 토큰(`{MODULE_*}`, `{INSTANCE_*}`, `{SIGNAL_*}`, `{PORT_*}`)을 실제 이름으로 복구한다. 복구 소스 우선순위: ① 사용된 claim의 `parser_source` 필드별 원본 이름 → ② RTL_OpenSearch_Index의 `module_name`/`instance_list`/`port_list` → ③ Claim_DB의 `statement` 원본.
+2. THE HDD_Merger SHALL 복구 불가능한 placeholder에 대해 HTML 주석 `<!-- NAME_RESOLUTION_FAILED: {TOKEN} -->`을 삽입하고, 응답 metadata의 `unresolved_placeholders` 배열에 토큰 목록을 포함한다.
+3. THE HDD_Merger SHALL 실명 복구 과정에서 동일 토큰이 여러 후보에 매칭될 경우, 가장 높은 confidence를 가진 claim의 이름을 우선 채택하며 동률일 경우 최신 `created_at`을 선택한다.
+4. THE HDD_Generator SHALL topic 간 의존성을 표현하기 위해 각 HDD 섹션에 `parent_topics` 메타데이터(배열)를 저장한다. 예: `ucie/phy/summary` → `parent_topics: []`, `ucie/summary` → `parent_topics: ["ucie/phy/summary", "ucie/mac/summary"]`.
+5. WHEN 특정 topic의 claim이 새로 approve되거나 수정되어 HDD 섹션이 재생성되면, THE HDD_Generator SHALL 해당 topic을 `parent_topics`에 포함하는 상위 통합본 섹션의 `stale` 플래그를 `true`로 설정하고 `last_child_update_at`을 현재 시간으로 기록한다.
+6. THE Lambda_Handler SHALL `POST /rag/hdd/regenerate-stale` 엔드포인트를 제공하며, `stale=true`인 모든 통합본 섹션을 일괄 재생성하고 재생성 수를 응답에 포함한다.
+7. THE HDD_Generator SHALL topic 전파 재생성 시 무한 루프를 방지하기 위해 `max_propagation_depth=5` 상한을 적용하며, 초과 시 WARNING 로그와 함께 해당 재생성만 건너뛴다.
+8. THE MCP_Bridge SHALL `regenerate_stale_hdd` 도구를 제공하며, 파라미터 없음 → Lambda_Handler `/rag/hdd/regenerate-stale` 호출 결과를 반환한다. 응답에 `execution_time_ms`, `sections_regenerated`, `sections_skipped`, `unresolved_placeholder_count`를 포함한다.
+9. FOR ALL 재생성된 HDD 섹션에 대해, placeholder 복구 후 생성된 마크다운에 `{MODULE_*}`/`{INSTANCE_*}`/`{SIGNAL_*}`/`{PORT_*}` 패턴이 남아있지 않거나, 남아있다면 HTML 주석 형태(`<!-- NAME_RESOLUTION_FAILED: ... -->`)여야 한다 (Placeholder 복구 완전성 속성).
+10. THE HDD_Generator SHALL topic 전파 체인을 CloudWatch 구조화 로그로 기록한다: `{event: "hdd_propagation", root_topic, propagated_to: [topic_list], depth, duration_ms}`.

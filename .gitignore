@@ -82,3 +82,32 @@ response.json
 # Terraform plan files
 *.tfplan
 **/tfplan
+.tmp_pypdf/
+.claude/
+reindex_log*.txt
+tmp_*.json
+reindex_response.json
+
+# Backups (state is in S3)
+backups/
+
+# Duplicate directories
+modules/modules/
+tests/tests/
+scripts/scripts/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Terraform plan files (may contain secrets)
+*.tfplan
+
+# Lambda deployment packages (built locally)
+*-deployment-package.zip
+lambda_current.zip
+
+# Session scratch/temp files (do NOT commit — may contain secrets: SSM output, env dumps, b64 patches)
+.tmp_*
+lambda_env_*.json
+plan_out.txt

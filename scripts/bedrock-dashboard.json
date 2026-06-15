@@ -1,0 +1,203 @@
+{
+  "widgets": [
+    {
+      "type": "text",
+      "x": 0,
+      "y": 0,
+      "width": 24,
+      "height": 2,
+      "properties": {
+        "markdown": "# Bedrock Usage & Cost Monitor\n| Model | Input ($/1K) | Output ($/1K) |\n|---|---|---|\n| Opus 4 | $0.015 | $0.075 |\n| Sonnet 4 | $0.003 | $0.015 |\n| Haiku 4.5 / 3.5 Haiku | $0.0008 | $0.004 |\n| Haiku 3 | $0.00025 | $0.00125 |\n| Titan Embed | $0.0001 | - |"
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 2,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "title": "Total Invocations (Daily)",
+        "metrics": [
+          ["AWS/Bedrock", "Invocations", {"stat": "Sum", "period": 86400}]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-east-1",
+        "period": 86400
+      }
+    },
+    {
+      "type": "metric",
+      "x": 12,
+      "y": 2,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "title": "Invocations by Model (Daily)",
+        "metrics": [
+          ["AWS/Bedrock", "Invocations", "ModelId", "us.anthropic.claude-opus-4-6-v1", {"stat": "Sum", "period": 86400, "label": "Opus 4-6"}],
+          ["AWS/Bedrock", "Invocations", "ModelId", "us.anthropic.claude-opus-4-7", {"stat": "Sum", "period": 86400, "label": "Opus 4-7"}],
+          ["AWS/Bedrock", "Invocations", "ModelId", "global.anthropic.claude-opus-4-6-v1", {"stat": "Sum", "period": 86400, "label": "Opus 4-6 (g)"}],
+          ["AWS/Bedrock", "Invocations", "ModelId", "global.anthropic.claude-opus-4-7", {"stat": "Sum", "period": 86400, "label": "Opus 4-7 (g)"}],
+          ["AWS/Bedrock", "Invocations", "ModelId", "us.anthropic.claude-sonnet-4-5-20250929-v1:0", {"stat": "Sum", "period": 86400, "label": "Sonnet 4.5"}],
+          ["AWS/Bedrock", "Invocations", "ModelId", "global.anthropic.claude-sonnet-4-6", {"stat": "Sum", "period": 86400, "label": "Sonnet 4-6 (g)"}],
+          ["AWS/Bedrock", "Invocations", "ModelId", "us.anthropic.claude-sonnet-4-6", {"stat": "Sum", "period": 86400, "label": "Sonnet 4-6"}],
+          ["AWS/Bedrock", "Invocations", "ModelId", "us.anthropic.claude-haiku-4-5-20251001-v1:0", {"stat": "Sum", "period": 86400, "label": "Haiku 4.5"}],
+          ["AWS/Bedrock", "Invocations", "ModelId", "us.anthropic.claude-3-5-haiku-20241022-v1:0", {"stat": "Sum", "period": 86400, "label": "3.5 Haiku"}],
+          ["AWS/Bedrock", "Invocations", "ModelId", "us.anthropic.claude-3-haiku-20240307-v1:0", {"stat": "Sum", "period": 86400, "label": "3 Haiku"}]
+        ],
+        "view": "timeSeries",
+        "stacked": true,
+        "region": "us-east-1",
+        "period": 86400
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 8,
+      "width": 24,
+      "height": 7,
+      "properties": {
+        "title": "Estimated Daily Cost by Model (USD)",
+        "metrics": [
+          [{"expression": "(m_opus_in * 0.015 + m_opus_out * 0.075) / 1000", "label": "Opus 4", "id": "opus_cost"}],
+          [{"expression": "(m_sonnet_in * 0.003 + m_sonnet_out * 0.015) / 1000", "label": "Sonnet 4", "id": "sonnet_cost"}],
+          [{"expression": "(m_haiku45_in * 0.0008 + m_haiku45_out * 0.004) / 1000", "label": "Haiku 4.5/3.5", "id": "haiku45_cost"}],
+          [{"expression": "(m_haiku3_in * 0.00025 + m_haiku3_out * 0.00125) / 1000", "label": "Haiku 3", "id": "haiku3_cost"}],
+          [{"expression": "m_titan_in * 0.0001 / 1000", "label": "Titan Embed", "id": "titan_cost"}],
+          ["AWS/Bedrock", "InputTokenCount", "ModelId", "us.anthropic.claude-opus-4-6-v1", {"stat": "Sum", "period": 86400, "id": "o46i", "visible": false}],
+          ["AWS/Bedrock", "InputTokenCount", "ModelId", "us.anthropic.claude-opus-4-7", {"stat": "Sum", "period": 86400, "id": "o47i", "visible": false}],
+          ["AWS/Bedrock", "InputTokenCount", "ModelId", "global.anthropic.claude-opus-4-6-v1", {"stat": "Sum", "period": 86400, "id": "o46gi", "visible": false}],
+          ["AWS/Bedrock", "InputTokenCount", "ModelId", "global.anthropic.claude-opus-4-7", {"stat": "Sum", "period": 86400, "id": "o47gi", "visible": false}],
+          [{"expression": "o46i + o47i + o46gi + o47gi", "id": "m_opus_in", "visible": false}],
+          ["AWS/Bedrock", "OutputTokenCount", "ModelId", "us.anthropic.claude-opus-4-6-v1", {"stat": "Sum", "period": 86400, "id": "o46o", "visible": false}],
+          ["AWS/Bedrock", "OutputTokenCount", "ModelId", "us.anthropic.claude-opus-4-7", {"stat": "Sum", "period": 86400, "id": "o47o", "visible": false}],
+          ["AWS/Bedrock", "OutputTokenCount", "ModelId", "global.anthropic.claude-opus-4-6-v1", {"stat": "Sum", "period": 86400, "id": "o46go", "visible": false}],
+          ["AWS/Bedrock", "OutputTokenCount", "ModelId", "global.anthropic.claude-opus-4-7", {"stat": "Sum", "period": 86400, "id": "o47go", "visible": false}],
+          [{"expression": "o46o + o47o + o46go + o47go", "id": "m_opus_out", "visible": false}],
+          ["AWS/Bedrock", "InputTokenCount", "ModelId", "us.anthropic.claude-sonnet-4-5-20250929-v1:0", {"stat": "Sum", "period": 86400, "id": "s45i", "visible": false}],
+          ["AWS/Bedrock", "InputTokenCount", "ModelId", "global.anthropic.claude-sonnet-4-6", {"stat": "Sum", "period": 86400, "id": "s46gi", "visible": false}],
+          ["AWS/Bedrock", "InputTokenCount", "ModelId", "us.anthropic.claude-sonnet-4-6", {"stat": "Sum", "period": 86400, "id": "s46i", "visible": false}],
+          [{"expression": "s45i + s46gi + s46i", "id": "m_sonnet_in", "visible": false}],
+          ["AWS/Bedrock", "OutputTokenCount", "ModelId", "us.anthropic.claude-sonnet-4-5-20250929-v1:0", {"stat": "Sum", "period": 86400, "id": "s45o", "visible": false}],
+          ["AWS/Bedrock", "OutputTokenCount", "ModelId", "global.anthropic.claude-sonnet-4-6", {"stat": "Sum", "period": 86400, "id": "s46go", "visible": false}],
+          ["AWS/Bedrock", "OutputTokenCount", "ModelId", "us.anthropic.claude-sonnet-4-6", {"stat": "Sum", "period": 86400, "id": "s46o", "visible": false}],
+          [{"expression": "s45o + s46go + s46o", "id": "m_sonnet_out", "visible": false}],
+          ["AWS/Bedrock", "InputTokenCount", "ModelId", "us.anthropic.claude-haiku-4-5-20251001-v1:0", {"stat": "Sum", "period": 86400, "id": "h45i", "visible": false}],
+          ["AWS/Bedrock", "InputTokenCount", "ModelId", "us.anthropic.claude-3-5-haiku-20241022-v1:0", {"stat": "Sum", "period": 86400, "id": "h35i", "visible": false}],
+          ["AWS/Bedrock", "InputTokenCount", "ModelId", "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-5-haiku-20241022-v1:0", {"stat": "Sum", "period": 86400, "id": "h35ai", "visible": false}],
+          ["AWS/Bedrock", "InputTokenCount", "ModelId", "global.anthropic.claude-haiku-4-5-20251001-v1:0", {"stat": "Sum", "period": 86400, "id": "h45gi", "visible": false}],
+          [{"expression": "h45i + h35i + h35ai + h45gi", "id": "m_haiku45_in", "visible": false}],
+          ["AWS/Bedrock", "OutputTokenCount", "ModelId", "us.anthropic.claude-haiku-4-5-20251001-v1:0", {"stat": "Sum", "period": 86400, "id": "h45o", "visible": false}],
+          ["AWS/Bedrock", "OutputTokenCount", "ModelId", "us.anthropic.claude-3-5-haiku-20241022-v1:0", {"stat": "Sum", "period": 86400, "id": "h35o", "visible": false}],
+          ["AWS/Bedrock", "OutputTokenCount", "ModelId", "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-5-haiku-20241022-v1:0", {"stat": "Sum", "period": 86400, "id": "h35ao", "visible": false}],
+          ["AWS/Bedrock", "OutputTokenCount", "ModelId", "global.anthropic.claude-haiku-4-5-20251001-v1:0", {"stat": "Sum", "period": 86400, "id": "h45go", "visible": false}],
+          [{"expression": "h45o + h35o + h35ao + h45go", "id": "m_haiku45_out", "visible": false}],
+          ["AWS/Bedrock", "InputTokenCount", "ModelId", "us.anthropic.claude-3-haiku-20240307-v1:0", {"stat": "Sum", "period": 86400, "id": "h3i", "visible": false}],
+          ["AWS/Bedrock", "InputTokenCount", "ModelId", "anthropic.claude-3-haiku-20240307-v1:0", {"stat": "Sum", "period": 86400, "id": "h3ai", "visible": false}],
+          [{"expression": "h3i + h3ai", "id": "m_haiku3_in", "visible": false}],
+          ["AWS/Bedrock", "OutputTokenCount", "ModelId", "us.anthropic.claude-3-haiku-20240307-v1:0", {"stat": "Sum", "period": 86400, "id": "h3o", "visible": false}],
+          ["AWS/Bedrock", "OutputTokenCount", "ModelId", "anthropic.claude-3-haiku-20240307-v1:0", {"stat": "Sum", "period": 86400, "id": "h3ao", "visible": false}],
+          [{"expression": "h3o + h3ao", "id": "m_haiku3_out", "visible": false}],
+          ["AWS/Bedrock", "InputTokenCount", "ModelId", "arn:aws:bedrock:us-east-1::foundation-model/amazon.titan-embed-text-v1", {"stat": "Sum", "period": 86400, "id": "t1i", "visible": false}],
+          ["AWS/Bedrock", "InputTokenCount", "ModelId", "amazon.titan-embed-text-v2:0", {"stat": "Sum", "period": 86400, "id": "t2i", "visible": false}],
+          [{"expression": "t1i + t2i", "id": "m_titan_in", "visible": false}]
+        ],
+        "view": "bar",
+        "stacked": true,
+        "region": "us-east-1",
+        "period": 86400,
+        "yAxis": {"left": {"label": "USD", "showUnits": false}}
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 15,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "title": "Input Tokens by Model (Daily)",
+        "metrics": [
+          ["AWS/Bedrock", "InputTokenCount", "ModelId", "us.anthropic.claude-opus-4-6-v1", {"stat": "Sum", "period": 86400, "label": "Opus 4-6"}],
+          ["AWS/Bedrock", "InputTokenCount", "ModelId", "us.anthropic.claude-opus-4-7", {"stat": "Sum", "period": 86400, "label": "Opus 4-7"}],
+          ["AWS/Bedrock", "InputTokenCount", "ModelId", "global.anthropic.claude-opus-4-6-v1", {"stat": "Sum", "period": 86400, "label": "Opus 4-6 (g)"}],
+          ["AWS/Bedrock", "InputTokenCount", "ModelId", "global.anthropic.claude-opus-4-7", {"stat": "Sum", "period": 86400, "label": "Opus 4-7 (g)"}],
+          ["AWS/Bedrock", "InputTokenCount", "ModelId", "us.anthropic.claude-sonnet-4-5-20250929-v1:0", {"stat": "Sum", "period": 86400, "label": "Sonnet 4.5"}],
+          ["AWS/Bedrock", "InputTokenCount", "ModelId", "global.anthropic.claude-sonnet-4-6", {"stat": "Sum", "period": 86400, "label": "Sonnet 4-6 (g)"}],
+          ["AWS/Bedrock", "InputTokenCount", "ModelId", "us.anthropic.claude-sonnet-4-6", {"stat": "Sum", "period": 86400, "label": "Sonnet 4-6"}],
+          ["AWS/Bedrock", "InputTokenCount", "ModelId", "us.anthropic.claude-haiku-4-5-20251001-v1:0", {"stat": "Sum", "period": 86400, "label": "Haiku 4.5"}],
+          ["AWS/Bedrock", "InputTokenCount", "ModelId", "us.anthropic.claude-3-5-haiku-20241022-v1:0", {"stat": "Sum", "period": 86400, "label": "3.5 Haiku"}],
+          ["AWS/Bedrock", "InputTokenCount", "ModelId", "us.anthropic.claude-3-haiku-20240307-v1:0", {"stat": "Sum", "period": 86400, "label": "3 Haiku"}]
+        ],
+        "view": "timeSeries",
+        "stacked": true,
+        "region": "us-east-1",
+        "period": 86400
+      }
+    },
+    {
+      "type": "metric",
+      "x": 12,
+      "y": 15,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "title": "Output Tokens by Model (Daily)",
+        "metrics": [
+          ["AWS/Bedrock", "OutputTokenCount", "ModelId", "us.anthropic.claude-opus-4-6-v1", {"stat": "Sum", "period": 86400, "label": "Opus 4-6"}],
+          ["AWS/Bedrock", "OutputTokenCount", "ModelId", "us.anthropic.claude-opus-4-7", {"stat": "Sum", "period": 86400, "label": "Opus 4-7"}],
+          ["AWS/Bedrock", "OutputTokenCount", "ModelId", "global.anthropic.claude-opus-4-6-v1", {"stat": "Sum", "period": 86400, "label": "Opus 4-6 (g)"}],
+          ["AWS/Bedrock", "OutputTokenCount", "ModelId", "global.anthropic.claude-opus-4-7", {"stat": "Sum", "period": 86400, "label": "Opus 4-7 (g)"}],
+          ["AWS/Bedrock", "OutputTokenCount", "ModelId", "us.anthropic.claude-sonnet-4-5-20250929-v1:0", {"stat": "Sum", "period": 86400, "label": "Sonnet 4.5"}],
+          ["AWS/Bedrock", "OutputTokenCount", "ModelId", "global.anthropic.claude-sonnet-4-6", {"stat": "Sum", "period": 86400, "label": "Sonnet 4-6 (g)"}],
+          ["AWS/Bedrock", "OutputTokenCount", "ModelId", "us.anthropic.claude-sonnet-4-6", {"stat": "Sum", "period": 86400, "label": "Sonnet 4-6"}],
+          ["AWS/Bedrock", "OutputTokenCount", "ModelId", "us.anthropic.claude-haiku-4-5-20251001-v1:0", {"stat": "Sum", "period": 86400, "label": "Haiku 4.5"}],
+          ["AWS/Bedrock", "OutputTokenCount", "ModelId", "us.anthropic.claude-3-5-haiku-20241022-v1:0", {"stat": "Sum", "period": 86400, "label": "3.5 Haiku"}],
+          ["AWS/Bedrock", "OutputTokenCount", "ModelId", "us.anthropic.claude-3-haiku-20240307-v1:0", {"stat": "Sum", "period": 86400, "label": "3 Haiku"}]
+        ],
+        "view": "timeSeries",
+        "stacked": true,
+        "region": "us-east-1",
+        "period": 86400
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 21,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "title": "Invocation Latency (Avg ms)",
+        "metrics": [
+          ["AWS/Bedrock", "InvocationLatency", {"stat": "Average", "period": 3600}]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-east-1",
+        "period": 3600
+      }
+    },
+    {
+      "type": "metric",
+      "x": 12,
+      "y": 21,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "title": "Errors (Daily)",
+        "metrics": [
+          ["AWS/Bedrock", "InvocationClientErrors", {"stat": "Sum", "period": 86400, "label": "Client Errors"}],
+          ["AWS/Bedrock", "InvocationServerErrors", {"stat": "Sum", "period": 86400, "label": "Server Errors"}]
+        ],
+        "view": "timeSeries",
+        "stacked": true,
+        "region": "us-east-1",
+        "period": 86400
+      }
+    }
+  ]
+}

@@ -45,8 +45,9 @@ logger.setLevel(logging.INFO)
 # 환경 변수
 # ---------------------------------------------------------------------------
 RTL_S3_BUCKET = os.environ.get("RTL_S3_BUCKET", "")
-OPENSEARCH_ENDPOINT = os.environ.get("RTL_OPENSEARCH_ENDPOINT", "")
-OPENSEARCH_INDEX = os.environ.get("RTL_OPENSEARCH_INDEX", "rtl-knowledge-base-index")
+# v9.5: RTL 벡터 저장소는 Qdrant 단일화 (OpenSearch 종속성 제거 — Req 19).
+# Qdrant 접속 설정은 qdrant_client 모듈이 환경변수로 직접 읽는다
+# (QDRANT_ENDPOINT / QDRANT_COLLECTION / QDRANT_API_KEY).
 BEDROCK_REGION = os.environ.get("BEDROCK_REGION", "us-east-1")
 DYNAMODB_EXTRACTION_TABLE = os.environ.get("DYNAMODB_EXTRACTION_TABLE", "rag-extraction-tasks")
 
@@ -54,209 +55,100 @@ s3_client = boto3.client("s3")
 dynamodb = boto3.resource("dynamodb")
 
 BATCH_SIZE = 100
+EMBED_CONCURRENCY = 5  # Bedrock Titan 병렬 임베딩 호출 수 (analysis 문서 인덱싱)
 
 
 # ---------------------------------------------------------------------------
 # 공통 유틸리티
 # ---------------------------------------------------------------------------
 
-def _get_opensearch_auth():
-    """OpenSearch AOSS SigV4 인증 객체 생성."""
-    import requests
-    from requests_aws4auth import AWS4Auth
+def _doc_embed_text(doc: dict[str, Any]) -> str:
+    """분석 문서에서 임베딩할 대표 텍스트를 추출.
 
-    session = boto3.Session()
-    credentials = session.get_credentials()
-    aoss_region = BEDROCK_REGION
-    auth = AWS4Auth(
-        credentials.access_key,
-        credentials.secret_key,
-        aoss_region,
-        "aoss",
-        session_token=credentials.token,
-    )
-    return auth
+    Qdrant(Cosine)는 zero 벡터를 거부하므로 모든 문서가 실제 임베딩을 가져야 한다.
+    의미 있는 텍스트 필드를 우선 사용하고, 없으면 주요 필드를 합성한다.
+    """
+    for key in ("hdd_content", "parsed_summary", "claim_text", "raw_text"):
+        val = doc.get(key)
+        if val:
+            return str(val)[:8000]
+    parts = []
+    for k, v in doc.items():
+        if k.startswith("_") or k == "embedding":
+            continue
+        if v in (None, "", [], {}):
+            continue
+        parts.append(f"{k}: {v}")
+    text = " | ".join(parts)
+    return text[:8000] if text else "(empty)"
 
 
-def _opensearch_scroll_query(
+def _scroll_query(
     pipeline_id: str, analysis_type: str, max_docs: int = 10000,
 ) -> list[dict]:
-    """OpenSearch에서 pipeline_id + analysis_type으로 문서를 페이지네이션 조회.
+    """pipeline_id + analysis_type으로 Qdrant 문서를 페이지네이션 조회.
 
-    AOSS는 scroll API를 지원하지 않으므로 search_after 방식으로 페이지네이션한다.
-    _id 기준 정렬 후 마지막 _id를 search_after로 전달하여 다음 페이지를 조회한다.
+    OpenSearch search_after → Qdrant scroll 마이그레이션 (동등 결과 집합, Req 19.3).
+    각 dict에 Qdrant point id가 ``_id`` 키로 포함된다.
     """
-    import requests
+    import qdrant_client
 
-    if not OPENSEARCH_ENDPOINT:
-        logger.warning("OPENSEARCH_ENDPOINT not set, returning empty results")
-        return []
-
-    auth = _get_opensearch_auth()
-    url = f"{OPENSEARCH_ENDPOINT}/{OPENSEARCH_INDEX}/_search"
-    results: list[dict] = []
-    search_after: list[str] | None = None
-
-    while len(results) < max_docs:
-        search_body: dict[str, Any] = {
-            "size": BATCH_SIZE,
-            "sort": [{"_id": "asc"}],
-            "query": {
-                "bool": {
-                    "must": [
-                        {"term": {"pipeline_id": pipeline_id}},
-                        {"term": {"analysis_type": analysis_type}},
-                    ],
-                },
-            },
-        }
-        if search_after is not None:
-            search_body["search_after"] = search_after
-
-        try:
-            resp = requests.post(
-                url, auth=auth, json=search_body,
-                headers={"Content-Type": "application/json"}, timeout=60,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            hits = data.get("hits", {}).get("hits", [])
-
-            if not hits:
-                break
-
-            for hit in hits:
-                doc = hit.get("_source", {})
-                doc["_id"] = hit.get("_id", "")
-                results.append(doc)
-
-            # search_after: 마지막 hit의 sort 값
-            search_after = hits[-1].get("sort")
-            if not search_after:
-                break
-
-            logger.info(json.dumps({
-                "event": "scroll_page",
-                "pipeline_id": pipeline_id,
-                "analysis_type": analysis_type,
-                "page_size": len(hits),
-                "total_so_far": len(results),
-            }))
-
-            # 배치 크기보다 적으면 마지막 페이지
-            if len(hits) < BATCH_SIZE:
-                break
-
-        except Exception as e:
-            logger.error(json.dumps({
-                "event": "opensearch_scroll_error",
-                "pipeline_id": pipeline_id,
-                "error": str(e),
-            }))
-            break
-
-    return results
+    return qdrant_client.scroll_query(
+        pipeline_id=pipeline_id, analysis_type=analysis_type, max_docs=max_docs,
+    )
 
 
 def _index_document(doc: dict[str, Any]) -> bool:
-    """단일 문서를 OpenSearch에 인덱싱."""
-    import requests
+    """단일 문서를 Qdrant에 인덱싱 (임베딩 생성 포함)."""
+    import qdrant_client
+    from hdd_generator import _generate_embedding
 
-    if not OPENSEARCH_ENDPOINT:
+    embedding = _generate_embedding(_doc_embed_text(doc))
+    if not embedding:
+        logger.warning(json.dumps({"event": "index_document_embed_failed"}))
         return False
-
-    auth = _get_opensearch_auth()
-    url = f"{OPENSEARCH_ENDPOINT}/{OPENSEARCH_INDEX}/_doc"
-    try:
-        resp = requests.post(
-            url, auth=auth, json=doc,
-            headers={"Content-Type": "application/json"}, timeout=30,
-        )
-        resp.raise_for_status()
-        return True
-    except Exception as e:
-        logger.error(json.dumps({
-            "event": "opensearch_index_error",
-            "error": str(e),
-        }))
-        return False
+    return qdrant_client.index_document(doc, embedding)
 
 
 def _bulk_index_documents(docs: list[dict[str, Any]]) -> int:
-    """여러 문서를 OpenSearch _bulk API로 일괄 인덱싱.
+    """여러 문서를 Qdrant에 일괄 인덱싱 (임베딩 병렬 생성).
 
-    AOSS는 _bulk API를 지원한다. NDJSON 형식으로 전송.
     Returns: 성공적으로 인덱싱된 문서 수.
     """
-    import requests
+    import qdrant_client
+    from hdd_generator import _generate_embedding
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    if not OPENSEARCH_ENDPOINT or not docs:
+    if not docs:
         return 0
 
-    auth = _get_opensearch_auth()
-    url = f"{OPENSEARCH_ENDPOINT}/{OPENSEARCH_INDEX}/_bulk"
+    embeddings: list = [None] * len(docs)
+    with ThreadPoolExecutor(max_workers=EMBED_CONCURRENCY) as executor:
+        futures = {
+            executor.submit(_generate_embedding, _doc_embed_text(doc)): i
+            for i, doc in enumerate(docs)
+        }
+        for future in as_completed(futures):
+            i = futures[future]
+            try:
+                embeddings[i] = future.result()
+            except Exception:
+                embeddings[i] = None
 
-    # NDJSON 형식: {"index": {}}\n{doc}\n{"index": {}}\n{doc}\n...
-    lines: list[str] = []
-    for doc in docs:
-        lines.append(json.dumps({"index": {}}))
-        lines.append(json.dumps(doc, ensure_ascii=False, default=str))
-    body = "\n".join(lines) + "\n"
-
-    try:
-        resp = requests.post(
-            url, auth=auth, data=body.encode("utf-8"),
-            headers={"Content-Type": "application/x-ndjson"}, timeout=60,
-        )
-        resp.raise_for_status()
-        result = resp.json()
-        errors = result.get("errors", False)
-        items = result.get("items", [])
-        success_count = sum(
-            1 for item in items
-            if item.get("index", {}).get("status", 0) in (200, 201)
-        )
-        if errors:
-            failed = len(items) - success_count
-            logger.warning(json.dumps({
-                "event": "bulk_index_partial_error",
-                "total": len(docs),
-                "success": success_count,
-                "failed": failed,
-            }))
-        return success_count
-    except Exception as e:
-        logger.error(json.dumps({
-            "event": "bulk_index_error",
-            "doc_count": len(docs),
-            "error": str(e),
-        }))
+    items = [(docs[i], embeddings[i]) for i in range(len(docs)) if embeddings[i]]
+    if not items:
         return 0
+    return qdrant_client.batch_index_documents(items)
 
 
-def _update_document(doc_id: str, update_fields: dict[str, Any]) -> bool:
-    """OpenSearch 문서의 특정 필드를 업데이트."""
-    import requests
+def _update_document(doc_id, update_fields: dict[str, Any]) -> bool:
+    """Qdrant point payload 업데이트 (OpenSearch _update_document 등가).
 
-    if not OPENSEARCH_ENDPOINT:
-        return False
+    doc_id는 Qdrant point id (``_id``로 조회된 값).
+    """
+    import qdrant_client
 
-    auth = _get_opensearch_auth()
-    url = f"{OPENSEARCH_ENDPOINT}/{OPENSEARCH_INDEX}/_doc/{doc_id}"
-    try:
-        resp = requests.post(
-            url, auth=auth, json={"doc": update_fields},
-            headers={"Content-Type": "application/json"}, timeout=30,
-        )
-        resp.raise_for_status()
-        return True
-    except Exception as e:
-        logger.error(json.dumps({
-            "event": "opensearch_update_error",
-            "doc_id": doc_id,
-            "error": str(e),
-        }))
-        return False
+    return qdrant_client.set_payload(doc_id, update_fields)
 
 
 def _update_dynamodb_status(
@@ -309,7 +201,7 @@ def handle_hierarchy_extraction(event: dict[str, Any]) -> dict[str, Any]:
 
     try:
         # 1. OpenSearch에서 파싱된 모듈 조회
-        parsed_docs = _opensearch_scroll_query(pipeline_id, "module_parse")
+        parsed_docs = _scroll_query(pipeline_id, "module_parse")
         if not parsed_docs:
             _update_dynamodb_status(pipeline_id, stage, "completed",
                                    extra={"modules_processed": 0})
@@ -650,7 +542,7 @@ def handle_topic_classification(event: dict[str, Any], context: Any = None) -> d
         _update_dynamodb_status(pipeline_id, stage, "in_progress")
 
     try:
-        parsed_docs = _opensearch_scroll_query(pipeline_id, "module_parse")
+        parsed_docs = _scroll_query(pipeline_id, "module_parse")
         if not parsed_docs:
             _update_dynamodb_status(pipeline_id, stage, "completed",
                                    extra={"modules_processed": 0})
@@ -812,10 +704,10 @@ def handle_claim_generation(event: dict[str, Any]) -> dict[str, Any]:
     _update_dynamodb_status(pipeline_id, stage, "in_progress")
 
     try:
-        parsed_docs = _opensearch_scroll_query(pipeline_id, "module_parse")
+        parsed_docs = _scroll_query(pipeline_id, "module_parse")
 
         # 분석 결과 수집 (hierarchy만 — 가볍게)
-        hierarchy_docs = _opensearch_scroll_query(pipeline_id, "hierarchy", max_docs=100)
+        hierarchy_docs = _scroll_query(pipeline_id, "hierarchy", max_docs=100)
         analysis_results: dict[str, Any] = {
             "hierarchy": hierarchy_docs[0] if hierarchy_docs else {},
             "clock_domains": [],
@@ -901,19 +793,19 @@ def handle_hdd_generation(event: dict[str, Any]) -> dict[str, Any]:
 
     try:
         # 분석 결과 수집
-        hierarchy_docs = _opensearch_scroll_query(pipeline_id, "hierarchy")
-        clock_docs = _opensearch_scroll_query(pipeline_id, "clock_domain")
-        dataflow_docs = _opensearch_scroll_query(pipeline_id, "dataflow")
+        hierarchy_docs = _scroll_query(pipeline_id, "hierarchy")
+        clock_docs = _scroll_query(pipeline_id, "clock_domain")
+        dataflow_docs = _scroll_query(pipeline_id, "dataflow")
 
         # claim 전체를 한 번만 조회 (루프 밖)
-        all_claim_docs = _opensearch_scroll_query(pipeline_id, "claim")
+        all_claim_docs = _scroll_query(pipeline_id, "claim")
 
         # 심화 분석 결과 5종 조회 (조회 실패 시 빈 리스트로 폴백)
         deep_analysis: dict[str, Any] = {}
         for atype in ("chip_config", "edc_topology", "noc_protocol",
                        "overlay_deep", "sram_inventory"):
             try:
-                docs = _opensearch_scroll_query(pipeline_id, atype, max_docs=100)
+                docs = _scroll_query(pipeline_id, atype, max_docs=100)
                 if docs:
                     deep_analysis[atype] = docs
             except Exception as da_err:
@@ -928,7 +820,7 @@ def handle_hdd_generation(event: dict[str, Any]) -> dict[str, Any]:
         if target_topic:
             topics_to_generate = {target_topic}
         else:
-            topic_docs = _opensearch_scroll_query(pipeline_id, "topic")
+            topic_docs = _scroll_query(pipeline_id, "topic")
             topics_to_generate: set[str] = set()
             for doc in topic_docs:
                 t_list = doc.get("topics", doc.get("topic", []))
@@ -942,7 +834,7 @@ def handle_hdd_generation(event: dict[str, Any]) -> dict[str, Any]:
         sections_generated = 0
 
         # 토픽별 module_parse 문서 수집 (claim 편중 문제 우회)
-        parsed_docs = _opensearch_scroll_query(pipeline_id, "module_parse")
+        parsed_docs = _scroll_query(pipeline_id, "module_parse")
         topic_module_map: dict[str, list[dict[str, Any]]] = {}
         for doc in parsed_docs:
             name = doc.get("module_name", "")
@@ -1051,8 +943,8 @@ def handle_variant_delta(event: dict[str, Any]) -> dict[str, Any]:
             return {"status": "completed", "skipped": True}
 
         # 베이스라인과 variant 모듈 조회
-        baseline_docs = _opensearch_scroll_query(variant_baseline_id, "module_parse")
-        variant_docs = _opensearch_scroll_query(pipeline_id, "module_parse")
+        baseline_docs = _scroll_query(variant_baseline_id, "module_parse")
+        variant_docs = _scroll_query(pipeline_id, "module_parse")
 
         delta = extract_variant_delta(baseline_docs, variant_docs)
 
@@ -1101,131 +993,46 @@ def handle_variant_delta(event: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def handle_backfill_pipeline_id(event: dict[str, Any]) -> dict[str, Any]:
-    """기존 OpenSearch 문서에 pipeline_id, analysis_type 필드를 백필.
+    """[Deprecated] pipeline_id 백필 — Full 재인덱싱(Req 19.5)으로 대체됨.
 
-    AOSS는 _update_by_query를 지원하지 않으므로:
-    1. pipeline_id 필드가 없는 문서를 검색 (must_not exists)
-    2. 각 문서에 pipeline_id, chip_type, snapshot_date, analysis_type 추가
-    3. 새 문서로 다시 인덱싱 (POST /_doc)
-
-    배치 처리: 100건씩
+    기존에는 OpenSearch에서 pipeline_id 필드가 없는 레거시 문서에 메타데이터를
+    백필했으나, v9.5 Qdrant 단일화 + Full 재인덱싱 이후 모든 문서가 인덱싱
+    시점에 pipeline_id를 갖는다. 따라서 본 핸들러는 no-op로 유지한다
+    (Step Functions 정의 호환을 위해 시그니처/반환 형태만 보존).
 
     Args:
-        event: 백필 이벤트.
-            필수: ``pipeline_id`` (str)
-            선택: ``analysis_type`` (str, 기본값 "module_parse")
+        event: ``pipeline_id`` (str) 선택.
 
     Returns:
-        백필 결과 dict.
+        no-op 결과 dict (skipped/deprecated 플래그 포함).
     """
-    import requests
-
     pipeline_id = event.get("pipeline_id", "tt_20260221")
-    analysis_type = event.get("analysis_type", "module_parse")
     stage = "backfill_pipeline_id"
-    _update_dynamodb_status(pipeline_id, stage, "in_progress")
-
-    # pipeline_id에서 chip_type, snapshot_date 추출
-    if "_" in pipeline_id:
-        chip_type, snapshot_date = pipeline_id.split("_", 1)
-    else:
-        chip_type, snapshot_date = pipeline_id, "unknown"
-
-    total_backfilled = 0
-    total_failed = 0
-
-    try:
-        if not OPENSEARCH_ENDPOINT:
-            logger.warning("OPENSEARCH_ENDPOINT not set, skipping backfill")
-            _update_dynamodb_status(pipeline_id, stage, "completed",
-                                   extra={"backfilled": 0, "skipped": True})
-            return {"status": "completed", "backfilled": 0, "failed": 0,
-                    "skipped": True}
-
-        auth = _get_opensearch_auth()
-        url = f"{OPENSEARCH_ENDPOINT}/{OPENSEARCH_INDEX}/_search"
-
-        while True:
-            # pipeline_id 필드가 없는 문서를 배치로 검색
-            search_body: dict[str, Any] = {
-                "size": BATCH_SIZE,
-                "query": {
-                    "bool": {
-                        "must_not": [
-                            {"exists": {"field": "pipeline_id"}},
-                        ],
-                    },
-                },
-            }
-
-            resp = requests.post(
-                url, auth=auth, json=search_body,
-                headers={"Content-Type": "application/json"}, timeout=60,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            hits = data.get("hits", {}).get("hits", [])
-
-            if not hits:
-                break
-
-            for hit in hits:
-                source = hit.get("_source", {})
-                # 기존 문서에 새 필드 추가
-                source["pipeline_id"] = pipeline_id
-                source["chip_type"] = chip_type
-                source["snapshot_date"] = snapshot_date
-                source["analysis_type"] = analysis_type
-
-                if _index_document(source):
-                    total_backfilled += 1
-                else:
-                    total_failed += 1
-
-            logger.info(json.dumps({
-                "event": "backfill_batch_complete",
-                "pipeline_id": pipeline_id,
-                "batch_size": len(hits),
-                "total_backfilled": total_backfilled,
-            }))
-
-        _update_dynamodb_status(pipeline_id, stage, "completed",
-                               extra={"backfilled": total_backfilled,
-                                      "failed": total_failed})
-
-        logger.info(json.dumps({
-            "event": "backfill_pipeline_id_complete",
-            "pipeline_id": pipeline_id,
-            "total_backfilled": total_backfilled,
-            "total_failed": total_failed,
-        }))
-        return {"status": "completed", "backfilled": total_backfilled,
-                "failed": total_failed}
-
-    except Exception as e:
-        _update_dynamodb_status(pipeline_id, stage, "failed",
-                               error_message=str(e))
-        logger.error(json.dumps({
-            "event": "backfill_pipeline_id_error",
-            "pipeline_id": pipeline_id,
-            "error": str(e),
-        }))
-        raise
+    logger.info(json.dumps({
+        "event": "backfill_pipeline_id_deprecated",
+        "pipeline_id": pipeline_id,
+        "note": "superseded by full reindex (Req 19.5)",
+    }))
+    _update_dynamodb_status(pipeline_id, stage, "completed",
+                           extra={"backfilled": 0, "skipped": True,
+                                  "deprecated": True})
+    return {"status": "completed", "backfilled": 0, "failed": 0,
+            "skipped": True, "deprecated": True}
 
 
 # ---------------------------------------------------------------------------
-# Clear Index: OpenSearch 인덱스 삭제 후 재생성
+# Clear Index: Qdrant point 삭제 (pipeline_id/analysis_type 필터)
 # ---------------------------------------------------------------------------
 
 def handle_clear_index(event: dict[str, Any]) -> dict[str, Any]:
-    """OpenSearch 인덱스 정리.
+    """Qdrant point 정리 (재인덱싱 전 클린업).
 
-    ``analysis_type`` 파라미터가 지정되면 해당 타입 문서만 개별 삭제.
-    지정되지 않으면 인덱스 전체를 삭제하고 재생성.
+    ``analysis_type`` 파라미터가 지정되면 (pipeline_id + analysis_type) 필터로 삭제.
+    지정되지 않으면 pipeline_id 단위로 해당 파이프라인의 모든 point를 삭제.
 
-    AOSS는 ``_delete_by_query``를 지원하지 않으므로:
-    - 전체 삭제: 인덱스 DELETE → PUT 재생성
-    - 부분 삭제: scroll 조회 → 개별 문서 DELETE
+    OpenSearch 인덱스 DELETE/PUT 재생성 → Qdrant delete_by_filter 마이그레이션 (Req 19.2).
+    Qdrant 컬렉션은 영속이며 매핑 재생성이 불필요하다. 안전장치로 pipeline_id가
+    비어 있으면 (전체 컬렉션 삭제 위험) 거부한다.
 
     Args:
         event: ``pipeline_id`` (str) 필수, ``analysis_type`` (str) 선택.
@@ -1233,7 +1040,7 @@ def handle_clear_index(event: dict[str, Any]) -> dict[str, Any]:
     Returns:
         ``{"status": "completed"}`` 또는 에러 시 raise.
     """
-    import requests
+    import qdrant_client
 
     pipeline_id = event["pipeline_id"]
     target_analysis_type = event.get("analysis_type", "")
@@ -1241,128 +1048,25 @@ def handle_clear_index(event: dict[str, Any]) -> dict[str, Any]:
     _update_dynamodb_status(pipeline_id, stage, "in_progress")
 
     try:
-        if not OPENSEARCH_ENDPOINT:
-            logger.warning("OPENSEARCH_ENDPOINT not set, skipping clear_index")
-            _update_dynamodb_status(pipeline_id, stage, "completed",
-                                   extra={"skipped": True})
-            return {"status": "completed", "skipped": True}
+        if not pipeline_id:
+            # pipeline_id 없는 전체 삭제는 사고 방지를 위해 거부
+            raise ValueError("clear_index requires pipeline_id (refuse full-collection wipe)")
 
-        auth = _get_opensearch_auth()
-
-        # analysis_type이 지정되면 해당 타입 문서만 개별 삭제
-        if target_analysis_type:
-            docs = _opensearch_scroll_query(
-                pipeline_id, target_analysis_type, max_docs=50000,
-            )
-            deleted = 0
-            for doc in docs:
-                doc_id = doc.get("_id", "")
-                if not doc_id:
-                    continue
-                del_url = (
-                    f"{OPENSEARCH_ENDPOINT}/{OPENSEARCH_INDEX}/_doc/{doc_id}"
-                )
-                try:
-                    resp = requests.delete(
-                        del_url, auth=auth,
-                        headers={"Content-Type": "application/json"},
-                        timeout=30,
-                    )
-                    if resp.status_code in (200, 404):
-                        deleted += 1
-                except Exception as del_err:
-                    logger.warning(json.dumps({
-                        "event": "clear_index_doc_delete_error",
-                        "doc_id": doc_id,
-                        "error": str(del_err),
-                    }))
-
-            logger.info(json.dumps({
-                "event": "clear_index_partial",
-                "pipeline_id": pipeline_id,
-                "analysis_type": target_analysis_type,
-                "docs_found": len(docs),
-                "docs_deleted": deleted,
-            }))
-            _update_dynamodb_status(pipeline_id, stage, "completed",
-                                   extra={"deleted": deleted,
-                                          "analysis_type": target_analysis_type})
-            return {"status": "completed", "deleted": deleted}
-
-        # analysis_type 미지정 → 인덱스 전체 삭제/재생성
-        index_url = f"{OPENSEARCH_ENDPOINT}/{OPENSEARCH_INDEX}"
-
-        # 1. DELETE /{index}
-        del_resp = requests.delete(
-            index_url, auth=auth,
-            headers={"Content-Type": "application/json"}, timeout=30,
+        ok = qdrant_client.delete_by_filter(
+            pipeline_id=pipeline_id,
+            analysis_type=target_analysis_type,
         )
-        # 404 = 인덱스가 이미 없음 → 무시
-        if del_resp.status_code not in (200, 404):
-            del_resp.raise_for_status()
+
         logger.info(json.dumps({
-            "event": "clear_index_deleted",
-            "index": OPENSEARCH_INDEX,
-            "status_code": del_resp.status_code,
+            "event": "clear_index_complete",
+            "pipeline_id": pipeline_id,
+            "analysis_type": target_analysis_type or "all",
+            "deleted": ok,
         }))
-
-        # 2. PUT /{index} — 매핑 재생성
-        index_body: dict[str, Any] = {
-            "settings": {
-                "index": {
-                    "knn": True,
-                },
-            },
-            "mappings": {
-                "properties": {
-                    "embedding": {
-                        "type": "knn_vector",
-                        "dimension": 1024,
-                        "method": {
-                            "name": "hnsw",
-                            "space_type": "cosinesimil",
-                            "engine": "faiss",
-                        },
-                    },
-                    "module_name": {"type": "keyword"},
-                    "parent_module": {"type": "keyword"},
-                    "file_path": {"type": "keyword"},
-                    "port_list": {"type": "text"},
-                    "parameter_list": {"type": "text"},
-                    "instance_list": {"type": "text"},
-                    "parsed_summary": {"type": "text"},
-                    "pipeline_id": {"type": "keyword"},
-                    "chip_type": {"type": "keyword"},
-                    "snapshot_date": {"type": "keyword"},
-                    "analysis_type": {"type": "keyword"},
-                    "hierarchy_path": {"type": "keyword"},
-                    "clock_domains": {"type": "nested"},
-                    "is_cdc_boundary": {"type": "boolean"},
-                    "topic": {"type": "keyword"},
-                    "topics": {"type": "keyword"},
-                    "claim_id": {"type": "keyword"},
-                    "claim_type": {"type": "keyword"},
-                    "claim_text": {"type": "text"},
-                    "hdd_content": {"type": "text"},
-                    "created_at": {"type": "date"},
-                    "updated_at": {"type": "date"},
-                },
-            },
-        }
-
-        put_resp = requests.put(
-            index_url, auth=auth, json=index_body,
-            headers={"Content-Type": "application/json"}, timeout=30,
-        )
-        put_resp.raise_for_status()
-        logger.info(json.dumps({
-            "event": "clear_index_recreated",
-            "index": OPENSEARCH_INDEX,
-            "status_code": put_resp.status_code,
-        }))
-
-        _update_dynamodb_status(pipeline_id, stage, "completed")
-        return {"status": "completed"}
+        _update_dynamodb_status(pipeline_id, stage, "completed",
+                               extra={"analysis_type": target_analysis_type or "all",
+                                      "deleted": ok})
+        return {"status": "completed", "deleted": ok}
 
     except Exception as e:
         _update_dynamodb_status(pipeline_id, stage, "failed",
@@ -1511,47 +1215,24 @@ def handle_chip_config(event: dict[str, Any]) -> dict[str, Any]:
     _update_dynamodb_status(pipeline_id, stage, "in_progress")
 
     try:
-        # OpenSearch에서 *_pkg.sv 파일만 직접 쿼리 (module_parse 전체 조회 대신)
-        import requests as _requests
+        # Qdrant module_parse 문서에서 *_pkg.sv 파일 경로만 추출 (scroll + Python 필터)
         pkg_files: list[str] = []
-
-        if OPENSEARCH_ENDPOINT:
-            auth = _get_opensearch_auth()
-            url = f"{OPENSEARCH_ENDPOINT}/{OPENSEARCH_INDEX}/_search"
-            search_body = {
-                "size": 200,
-                "query": {
-                    "bool": {
-                        "must": [
-                            {"term": {"pipeline_id": pipeline_id}},
-                            {"term": {"analysis_type": "module_parse"}},
-                            {"wildcard": {"file_path": "*_pkg.sv"}},
-                        ],
-                    },
-                },
-                "_source": ["file_path"],
-            }
-            try:
-                resp = _requests.post(
-                    url, auth=auth, json=search_body,
-                    headers={"Content-Type": "application/json"}, timeout=30,
-                )
-                resp.raise_for_status()
-                hits = resp.json().get("hits", {}).get("hits", [])
-                for hit in hits:
-                    fp = hit.get("_source", {}).get("file_path", "")
-                    if fp and fp.endswith("_pkg.sv"):
-                        if topic_filter:
-                            fname = fp.rsplit("/", 1)[-1].lower()
-                            if not fname.startswith(topic_filter.lower()):
-                                continue
-                        pkg_files.append(fp)
-            except Exception as q_err:
-                logger.warning(json.dumps({
-                    "event": "chip_config_query_error",
-                    "pipeline_id": pipeline_id,
-                    "error": str(q_err),
-                }))
+        try:
+            parsed_docs = _scroll_query(pipeline_id, "module_parse")
+            for doc in parsed_docs:
+                fp = doc.get("file_path", "")
+                if fp and fp.endswith("_pkg.sv"):
+                    if topic_filter:
+                        fname = fp.rsplit("/", 1)[-1].lower()
+                        if not fname.startswith(topic_filter.lower()):
+                            continue
+                    pkg_files.append(fp)
+        except Exception as q_err:
+            logger.warning(json.dumps({
+                "event": "chip_config_query_error",
+                "pipeline_id": pipeline_id,
+                "error": str(q_err),
+            }))
 
         logger.info(json.dumps({
             "event": "chip_config_pkg_files_found",
@@ -1631,7 +1312,7 @@ def handle_edc_topology(event: dict[str, Any]) -> dict[str, Any]:
 
     try:
         # OpenSearch에서 EDC 모듈 조회
-        parsed_docs = _opensearch_scroll_query(pipeline_id, "module_parse")
+        parsed_docs = _scroll_query(pipeline_id, "module_parse")
         edc_modules = [
             d for d in parsed_docs
             if d.get("module_name", "").lower().startswith("tt_edc")
@@ -1747,7 +1428,7 @@ def handle_noc_protocol(event: dict[str, Any]) -> dict[str, Any]:
         axi_gasket = extract_axi_address_gasket(pkg_content) if pkg_content else {}
 
         # OpenSearch에서 NoC 모듈 조회 → 보안 펜스 식별
-        parsed_docs = _opensearch_scroll_query(pipeline_id, "module_parse")
+        parsed_docs = _scroll_query(pipeline_id, "module_parse")
         noc_modules = [
             d for d in parsed_docs
             if d.get("module_name", "").lower().startswith("tt_noc")
@@ -1837,7 +1518,7 @@ def handle_overlay_deep_analysis(event: dict[str, Any]) -> dict[str, Any]:
         cpu_params = extract_cpu_cluster_params(pkg_content) if pkg_content else {}
 
         # OpenSearch에서 Overlay 모듈 조회
-        parsed_docs = _opensearch_scroll_query(pipeline_id, "module_parse")
+        parsed_docs = _scroll_query(pipeline_id, "module_parse")
         overlay_modules = [
             d for d in parsed_docs
             if d.get("module_name", "").lower().startswith("tt_overlay")
@@ -1902,10 +1583,10 @@ def handle_sram_inventory(event: dict[str, Any]) -> dict[str, Any]:
     _update_dynamodb_status(pipeline_id, stage, "in_progress")
 
     try:
-        hierarchy_docs = _opensearch_scroll_query(pipeline_id, "hierarchy")
+        hierarchy_docs = _scroll_query(pipeline_id, "hierarchy")
         if not hierarchy_docs:
             # hierarchy가 없으면 module_parse에서 직접 추출 시도
-            hierarchy_docs = _opensearch_scroll_query(pipeline_id, "module_parse")
+            hierarchy_docs = _scroll_query(pipeline_id, "module_parse")
 
         inventory = build_sram_inventory(hierarchy_docs)
 

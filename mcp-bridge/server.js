@@ -248,11 +248,11 @@ function createMcpServer() {
 
   mcp.tool(
     "search_rtl",
-    "RTL 파싱된 데이터를 검색합니다. 모듈명, 포트, 인스턴스, 토픽 등으로 검색 가능합니다. Trinity/N1B0 등 업로드된 RTL 코드의 구조 정보를 조회합니다.",
+    "RTL 및 SoC 설계 데이터를 검색합니다. 모듈명, 포트, 인스턴스, 토픽 등으로 검색 가능합니다. RTL 코드뿐 아니라 firmware 헤더, 레지스터맵(SVD/JSON), 설계 문서(MD/RST), timing constraint(SDC), device tree(DTS), filelist hierarchy 등도 검색됩니다.",
     {
-      query: z.string().describe("검색어 (모듈명, 신호명, 키워드 등)"),
-      pipeline_id: z.string().optional().describe("파이프라인 ID 필터 (예: tt_20260221). 생략 시 전체 검색"),
-      topic: z.string().optional().describe("토픽 필터 (예: NoC, FPU, EDC, Overlay). 생략 시 전체 검색"),
+      query: z.string().describe("검색어 (모듈명, 신호명, 레지스터명, 키워드 등)"),
+      pipeline_id: z.string().optional().describe("파이프라인 ID 필터 (예: tt_20260221, tt_20260516). 생략 시 전체 검색"),
+      topic: z.string().optional().describe("토픽 필터 (예: NoC, FPU, EDC, Overlay, Hierarchy). 생략 시 전체 검색"),
       max_results: z.number().optional().default(50).describe("최대 결과 수 (기본값: 50)")
     },
     async (args, extra) => {
@@ -282,6 +282,20 @@ function createMcpServer() {
           if (r.topic) text += " | 토픽: " + (Array.isArray(r.topic) ? r.topic.join(", ") : r.topic);
           if (r.analysis_type) text += " | 유형: " + r.analysis_type;
           if (r.pipeline_id) text += " | 파이프라인: " + r.pipeline_id;
+          // Signal path edge rendering
+          if (r.analysis_type === "signal_path_edge") {
+            text += "\n    " + (r.edge_type || "") + ": `" + (r.src || "") + "` → `" + (r.dst || "") + "`";
+            if (r.category) text += " [" + r.category + "]";
+            if (r.raw_text) text += "\n    evidence: " + r.raw_text.substring(0, 300);
+          }
+          // Phase 2/3: 보조 파일 타입 렌더링
+          if (r.analysis_type === "filelist_hierarchy") {
+            text += "\n    📂 " + (r.claim_text || "");
+            if (r.instance_list) text += "\n    파일: " + r.instance_list.substring(0, 300) + (r.instance_list.length > 300 ? "..." : "");
+          }
+          if (["config_data", "register_map", "firmware_header", "firmware_source", "documentation", "design_constraint", "device_tree", "script", "structured_data"].indexOf(r.analysis_type) >= 0) {
+            text += "\n    📄 [" + r.analysis_type + "] " + (r.parsed_summary || "").substring(0, 300);
+          }
           if (r.claim_text) text += "\n    Claim: " + r.claim_text.substring(0, 500);
           if (r.claim_type) text += " [" + r.claim_type + "]";
           if (r.hdd_section_title) text += "\n    HDD: " + r.hdd_section_title;
@@ -513,22 +527,20 @@ function createMcpServer() {
         let text = "🔍 신호 전파 경로 추적\n";
         text += "  모듈: " + args.module_name + "\n";
         text += "  신호: " + args.signal_name + "\n";
-        text += "  경로 노드 수: " + (resp.path_nodes ? resp.path_nodes.length : 0) + "\n";
-        if (resp.path_nodes && resp.path_nodes.length > 0) {
-          text += "\n--- 경로 노드 ---\n";
-          resp.path_nodes.forEach((node, i) => {
-            text += "  [" + (i+1) + "] " + (node.type || "unknown") + ": " + (node.name || "unknown");
-            if (node.module) text += " (모듈: " + node.module + ")";
-            text += "\n";
+        const paths = resp.signal_path || [];
+        text += "  경로 수: " + paths.length + "\n";
+        if (paths.length > 0) {
+          text += "\n--- 경로 ---\n";
+          paths.forEach((p, i) => {
+            if (p.nodes && p.nodes.length > 0) {
+              text += "  [" + (i+1) + "] " + p.nodes.map(n => (n.name || n)).join(" → ") + "\n";
+            } else if (p.hierarchy) {
+              text += "  [" + (i+1) + "] " + (Array.isArray(p.hierarchy) ? p.hierarchy.join(" → ") : p.hierarchy) + "\n";
+            } else {
+              text += "  [" + (i+1) + "] " + JSON.stringify(p) + "\n";
+            }
           });
-        }
-        if (resp.path_edges && resp.path_edges.length > 0) {
-          text += "\n--- 경로 엣지 ---\n";
-          resp.path_edges.forEach((edge, i) => {
-            text += "  [" + (i+1) + "] " + (edge.from || "?") + " —[" + (edge.type || "?") + "]→ " + (edge.to || "?") + "\n";
-          });
-        }
-        if (!resp.path_nodes?.length && !resp.path_edges?.length) {
+        } else {
           text += "\n해당 신호의 전파 경로를 찾을 수 없습니다.";
         }
         text += "\n\nexecution_time_ms: " + execution_time_ms;
@@ -557,21 +569,20 @@ function createMcpServer() {
         let text = "🌳 인스턴스화 트리\n";
         text += "  루트 모듈: " + args.module_name + "\n";
         text += "  탐색 깊이: " + args.depth + "\n";
-        text += "  총 노드 수: " + (resp.total_nodes || 0) + "\n";
-        if (resp.tree) {
+        const treeData = resp.instantiation_tree || resp.tree || resp.nodes || [];
+        text += "  총 노드 수: " + treeData.length + "\n";
+        if (treeData.length > 0) {
           text += "\n--- 트리 구조 ---\n";
-          const renderTree = (node, indent) => {
-            text += indent + (node.instance_name ? node.instance_name + ": " : "") + (node.module_name || "unknown") + "\n";
-            if (node.children && node.children.length > 0) {
-              node.children.forEach((child) => { renderTree(child, indent + "  "); });
+          treeData.forEach((node, i) => {
+            if (node.hierarchy && Array.isArray(node.hierarchy)) {
+              const indent = "  ".repeat(node.depth || 1);
+              text += indent + node.hierarchy.join(" → ") + "\n";
+            } else if (node.module_name) {
+              const indent = "  ".repeat((node.depth || 0) + 1);
+              text += indent + (node.instance_name ? node.instance_name + ": " : "") + node.module_name + "\n";
+            } else {
+              text += "  " + JSON.stringify(node) + "\n";
             }
-          };
-          renderTree(resp.tree, "  ");
-        } else if (resp.nodes && resp.nodes.length > 0) {
-          text += "\n--- 트리 노드 ---\n";
-          resp.nodes.forEach((node, i) => {
-            const indent = "  ".repeat((node.depth || 0) + 1);
-            text += indent + (node.instance_name ? node.instance_name + ": " : "") + (node.module_name || "unknown") + "\n";
           });
         } else {
           text += "\n해당 모듈의 인스턴스화 트리를 찾을 수 없습니다.";
@@ -617,6 +628,94 @@ function createMcpServer() {
       } catch(err) {
         const execution_time_ms = Date.now() - startTime;
         return { content: [{ type: "text", text: JSON.stringify({ error: "find_clock_crossings 실패: " + err.message, execution_time_ms }) }], isError: true };
+      }
+    }
+  );
+
+  // ========================================================================
+  // Phase 9: Graph Export 도구
+  // Requirements: 32.1, 32.5
+  // ========================================================================
+
+  mcp.tool(
+    "graph_export",
+    "Neptune 그래프의 부분집합을 JSON으로 내보냅니다. Chip/Module/Signal 3가지 scope로 그래프를 조회하여 Schematic Viewer 및 외부 분석 도구에서 활용할 수 있습니다.",
+    {
+      scope: z.enum(["chip", "module", "signal"]).describe("조회 범위: chip(최상위 인스턴스), module(내부 상세), signal(신호 전파 경로)"),
+      root_module: z.string().describe("시작 모듈명 (예: BLK_UCIE)"),
+      depth: z.number().optional().default(3).describe("탐색 깊이 (기본값 3, scope=module 시 무시)"),
+      signal_filter: z.string().optional().describe("신호 필터 (scope=signal 시 필수)")
+    },
+    async (args, extra) => {
+      const startTime = Date.now();
+      try {
+        console.log("[TOOL] graph_export: scope=" + args.scope + " root_module=" + args.root_module + " depth=" + args.depth + " signal_filter=" + (args.signal_filter || "none"));
+        const body = { scope: args.scope, root_module: args.root_module };
+        if (args.depth !== undefined) body.depth = args.depth;
+        if (args.signal_filter) body.signal_filter = args.signal_filter;
+        const resp = await ragApi("POST", "/graph-export", body);
+        const execution_time_ms = Date.now() - startTime;
+        if (resp.error) return { content: [{ type: "text", text: JSON.stringify({ error: resp.error, execution_time_ms }) }], isError: true };
+        let text = "📊 Graph Export 결과\n";
+        text += "  Scope: " + args.scope + "\n";
+        text += "  Root Module: " + args.root_module + "\n";
+        text += "  Depth: " + (args.depth || 3) + "\n";
+        if (args.signal_filter) text += "  Signal Filter: " + args.signal_filter + "\n";
+        const metadata = resp.metadata || {};
+        text += "  노드 수: " + (metadata.node_count || (resp.nodes ? resp.nodes.length : 0)) + "\n";
+        text += "  엣지 수: " + (metadata.edge_count || (resp.edges ? resp.edges.length : 0)) + "\n";
+        if (metadata.truncated) text += "  ⚠️ 노드 상한(1000개) 초과 — 상위 노드만 반환됨\n";
+        if (metadata.neptune_fallback) text += "  ⚠️ Neptune 불가용 — 빈 그래프 반환\n";
+        if (resp.nodes && resp.nodes.length > 0) {
+          text += "\n--- 노드 (상위 10개) ---\n";
+          resp.nodes.slice(0, 10).forEach((node, i) => {
+            text += "  [" + (i+1) + "] " + (node.label || node.id || "unknown") + " (type: " + (node.type || "unknown") + ")\n";
+          });
+          if (resp.nodes.length > 10) text += "  ... 외 " + (resp.nodes.length - 10) + "개\n";
+        }
+        if (resp.edges && resp.edges.length > 0) {
+          text += "\n--- 엣지 (상위 10개) ---\n";
+          resp.edges.slice(0, 10).forEach((edge, i) => {
+            text += "  [" + (i+1) + "] " + (edge.source || "?") + " —[" + (edge.label || "?") + "]→ " + (edge.target || "?") + "\n";
+          });
+          if (resp.edges.length > 10) text += "  ... 외 " + (resp.edges.length - 10) + "개\n";
+        }
+        if ((!resp.nodes || resp.nodes.length === 0) && (!resp.edges || resp.edges.length === 0)) {
+          text += "\n그래프 데이터가 없습니다.";
+        }
+        text += "\n\nexecution_time_ms: " + execution_time_ms;
+        return { content: [{ type: "text", text }] };
+      } catch(err) {
+        const execution_time_ms = Date.now() - startTime;
+        return { content: [{ type: "text", text: JSON.stringify({ error: "graph_export 실패: " + err.message, execution_time_ms }) }], isError: true };
+      }
+    }
+  );
+
+  // regenerate_stale_hdd — Stale HDD 일괄 재생성 (Requirements 34.8)
+  mcp.tool(
+    "regenerate_stale_hdd",
+    "Stale 상태의 HDD 통합본 섹션을 일괄 재생성합니다. topic 전파로 인해 stale 마킹된 섹션들을 최신 claim 기반으로 다시 생성하고 placeholder를 실명으로 복구합니다.",
+    {},
+    async (args, extra) => {
+      const startTime = Date.now();
+      try {
+        console.log("[TOOL] regenerate_stale_hdd: triggered");
+        const resp = await ragApi("POST", "/hdd/regenerate-stale", {});
+        const execution_time_ms = Date.now() - startTime;
+        if (resp.error) return { content: [{ type: "text", text: JSON.stringify({ error: resp.error, execution_time_ms }) }], isError: true };
+        let text = "🔄 Stale HDD 재생성 결과\n";
+        text += "  재생성 완료: " + (resp.sections_regenerated || 0) + "개 섹션\n";
+        text += "  건너뛴 섹션: " + (resp.sections_skipped || 0) + "개\n";
+        text += "  미해결 placeholder: " + (resp.unresolved_placeholder_count || 0) + "개\n";
+        text += "  실행 시간: " + execution_time_ms + "ms\n";
+        if (resp.sections_regenerated === 0 && resp.sections_skipped === 0) {
+          text += "\n  ℹ️ stale 상태의 HDD 섹션이 없습니다.";
+        }
+        return { content: [{ type: "text", text }] };
+      } catch(err) {
+        const execution_time_ms = Date.now() - startTime;
+        return { content: [{ type: "text", text: JSON.stringify({ error: "regenerate_stale_hdd 실패: " + err.message, execution_time_ms }) }], isError: true };
       }
     }
   );

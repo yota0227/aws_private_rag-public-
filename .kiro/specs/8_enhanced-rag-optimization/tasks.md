@@ -2,7 +2,7 @@
 
 ## Overview
 
-BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시스템으로 확장한다. 8개 Phase로 나누어 점진적으로 구현하며, 각 Phase는 이전 Phase의 결과물에 의존한다. Terraform IaC로 AWS 리소스를 관리하고, Python 3.12 Lambda 함수, Node.js MCP Bridge, Go 1.21 + gopter 속성 기반 테스트를 사용한다. Phase 7은 v9 RTL Parser Pipeline Enhancement로, Supply Side 파서 6종 확장, Consumption Side 검색 개선, Generation Side Hybrid Grounding, Quality Infrastructure 파서 기여도 측정을 포함한다. Phase 8은 v9.2 RTL Wiring & Topology Parser로, v9.1 리뷰에서 식별된 5개 잔여 갭(EP Index Table, NOC2AXI dual-row, NoC repeater, clock_routing array, dispatch feedthrough wire)을 해소하여 Content Fidelity 80%+ 달성을 목표로 한다.
+BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시스템으로 확장한다. 9개 Phase로 나누어 점진적으로 구현하며, 각 Phase는 이전 Phase의 결과물에 의존한다. Terraform IaC로 AWS 리소스를 관리하고, Python 3.12 Lambda 함수, Node.js MCP Bridge, Go 1.21 + gopter 속성 기반 테스트를 사용한다. Phase 7은 v9 RTL Parser Pipeline Enhancement로, Supply Side 파서 6종 확장, Consumption Side 검색 개선, Generation Side Hybrid Grounding, Quality Infrastructure 파서 기여도 측정을 포함한다. Phase 8은 v9.2 RTL Wiring & Topology Parser로, v9.1 리뷰에서 식별된 5개 잔여 갭(EP Index Table, NOC2AXI dual-row, NoC repeater, clock_routing array, dispatch feedthrough wire)을 해소하여 Content Fidelity 80%+ 달성을 목표로 한다. Phase 9는 v9.3 Port Binding Parser + Schematic Viewer + Merge 개선으로, 포트 바인딩 파서(.port(signal) 매핑 추출), Neptune CONNECTS_TO 엣지 적재, Graph Export API(Neptune → JSON), Interactive Schematic Viewer(3-view: Chip/Module/Signal), HDD merge 개선(실명 복구 + topic→통합본 전파)을 포함하여 Content Fidelity 85~88% 달성을 목표로 한다.
 
 ## Tasks
 
@@ -19,7 +19,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 필수 태그: Project=BOS-AI, Environment=prod, ManagedBy=terraform, Layer=app
     - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 12.2_
 
-  - [ ]* 1.2 Property 23 테스트 작성: RTL S3 버킷 보안 구성
+  - [x]* 1.2 Property 23 테스트 작성: RTL S3 버킷 보안 구성
     - **Property 23: RTL S3 보안 구성**
     - **Validates: Requirements 1.1, 1.2, 1.5, 1.6, 12.2**
     - `tests/properties/enhanced_rag_optimization_test.go`에 작성
@@ -33,7 +33,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 필수 태그 적용
     - _Requirements: 2.1, 2.8, 2.10, 13.1, 13.2, 13.4, 13.5, 13.6_
 
-  - [ ]* 1.4 Property 24 테스트 작성: RTL Parser Lambda Terraform 구성
+  - [x]* 1.4 Property 24 테스트 작성: RTL Parser Lambda Terraform 구성
     - **Property 24: RTL Parser Lambda 구성**
     - **Validates: Requirements 2.8, 13.1, 13.2**
     - Python 3.12 런타임, 2048MB 메모리, 300초 타임아웃, Frontend VPC, IAM 최소 권한 검증
@@ -50,17 +50,17 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 모듈화 구조 유지 (향후 PyVerilog/AST 교체 대비, ECR 컨테이너 마이그레이션 준비)
     - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.10, 2.11, 13.7_
 
-  - [ ]* 1.6 Property 1 테스트 작성: RTL 파싱 라운드트립
+  - [x]* 1.6 Property 1 테스트 작성: RTL 파싱 라운드트립
     - **Property 1: RTL 파싱 라운드트립**
     - **Validates: Requirements 2.2, 2.4, 2.9**
     - 유효한 Verilog/SystemVerilog 모듈 선언에 대해 parse → serialize → re-parse 동일 결과 검증
 
-  - [ ]* 1.7 Property 2 테스트 작성: 토큰 Truncation 상한
+  - [x]* 1.7 Property 2 테스트 작성: 토큰 Truncation 상한
     - **Property 2: 토큰 Truncation 상한**
     - **Validates: Requirements 2.11**
     - 임의 텍스트에 대해 truncate_to_tokens 출력이 8,000 토큰 이하, 짧은 입력은 동일 출력 검증
 
-  - [ ]* 1.8 Property 3 테스트 작성: RTL 파싱 실패 에러 레코드
+  - [x]* 1.8 Property 3 테스트 작성: RTL 파싱 실패 에러 레코드
     - **Property 3: RTL 파싱 실패 에러 레코드**
     - **Validates: Requirements 2.6, 2.7**
     - 파싱 불가 콘텐츠에 대해 에러 레코드 생성 + parsed_summary에 원본 전체 미포함 검증
@@ -77,7 +77,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 필드 매핑: embedding(knn_vector, 1024, faiss, l2), module_name(keyword), parent_module(keyword), port_list(text), parameter_list(text), instance_list(text), file_path(keyword), parsed_summary(text)
     - _Requirements: 3.2, 3.3, 3.4_
 
-  - [ ]* 1.11 Property 4 테스트 작성: RTL OpenSearch 인덱스 매핑 완전성
+  - [x]* 1.11 Property 4 테스트 작성: RTL OpenSearch 인덱스 매핑 완전성
     - **Property 4: OpenSearch 인덱스 매핑 완전성**
     - **Validates: Requirements 3.3, 3.4**
     - 8개 필드 존재 및 올바른 타입, knn_vector dimension=1024, engine=faiss, space_type=l2 검증
@@ -88,12 +88,12 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - RTL_S3_Bucket `rtl-sources/*` 접두사에 대한 동일 5개 액션 거부
     - _Requirements: 12.1, 13.9_
 
-  - [ ]* 1.13 Property 22 테스트 작성: IAM Explicit Deny
+  - [x]* 1.13 Property 22 테스트 작성: IAM Explicit Deny
     - **Property 22: IAM Explicit Deny로 Source of Truth 보호**
     - **Validates: Requirements 13.9**
     - Lambda_Handler IAM 정책에 Source of Truth 버킷 PutObject/DeleteObject/DeleteObjectVersion/BypassGovernanceRetention/PutObjectRetention Explicit Deny 존재 검증
 
-- [ ] 2. Phase 1 Checkpoint
+- [x] 2. Phase 1 Checkpoint
   - Ensure all tests pass, ask the user if questions arise.
   - `cd environments/app-layer/bedrock-rag && terraform validate`
   - `cd tests && go test -v ./properties/ -run TestEnhancedRagOptimization -count=1` (Phase 1 관련 테스트)
@@ -110,7 +110,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 필수 태그 적용
     - _Requirements: 4.1, 4.2, 4.5, 4.6, 4.7, 13.3, 13.4, 13.6_
 
-  - [ ]* 3.2 Property 5 테스트 작성: Claim_DB Terraform 구성 완전성
+  - [x]* 3.2 Property 5 테스트 작성: Claim_DB Terraform 구성 완전성
     - **Property 5: Claim_DB Terraform 구성 완전성**
     - **Validates: Requirements 4.1, 4.2, 4.5, 4.6, 4.7**
     - PK/SK, 5 GSI 키 스키마, PAY_PER_REQUEST, PITR, KMS CMK 검증
@@ -124,27 +124,27 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - approval_status 필드 지원: verified 전이 시 pending_review 설정
     - _Requirements: 4.3, 4.4, 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8, 5.9, 5.10, 14.1, 14.2_
 
-  - [ ]* 3.4 Property 6 테스트 작성: Claim 필드 유효성 검증
+  - [x]* 3.4 Property 6 테스트 작성: Claim 필드 유효성 검증
     - **Property 6: Claim 필드 유효성 검증**
     - **Validates: Requirements 5.1, 5.6, 5.7, 7.2**
     - evidence 빈 배열 거부, confidence 범위, topic 형식, statement 길이, source_chunk 길이 검증
 
-  - [ ]* 3.5 Property 7 테스트 작성: Claim 상태 전이 규칙
+  - [x]* 3.5 Property 7 테스트 작성: Claim 상태 전이 규칙
     - **Property 7: Claim 상태 전이 규칙**
     - **Validates: Requirements 5.2, 5.3**
     - 6가지 허용 전이 성공, 불허 전이 HTTP 409, 초기 status=draft 검증
 
-  - [ ]* 3.6 Property 8 테스트 작성: Claim 버전 불변성
+  - [x]* 3.6 Property 8 테스트 작성: Claim 버전 불변성
     - **Property 8: Claim 버전 불변성**
     - **Validates: Requirements 5.4**
     - 업데이트 시 version+1, 이전 version 레코드 유지(삭제 안 됨) 검증
 
-  - [ ]* 3.7 Property 9 테스트 작성: Optimistic Locking 동시성 제어
+  - [x]* 3.7 Property 9 테스트 작성: Optimistic Locking 동시성 제어
     - **Property 9: Optimistic Locking 동시성 제어**
     - **Validates: Requirements 5.9, 5.10**
     - ConditionExpression 포함, ConditionalCheckFailedException 시 최대 3회 재시도 검증
 
-  - [ ]* 3.8 Property 10 테스트 작성: Contradiction Score 기반 상태 변경
+  - [x]* 3.8 Property 10 테스트 작성: Contradiction Score 기반 상태 변경
     - **Property 10: Contradiction Score 기반 상태 변경**
     - **Validates: Requirements 5.5, 5.8**
     - contradiction_score >= 0.7 시 기존 claim conflicted + derived_from 기록, deprecated cascading 검증
@@ -158,12 +158,12 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 파일 경로에서 topic 자동 추출 (예: `documents/soc/ucie/phy_spec.md` → `ucie/phy`)
     - _Requirements: 6.1, 6.2, 6.3, 6.4, 6.5, 6.6_
 
-  - [ ]* 3.10 Property 13 테스트 작성: 문서 메타데이터 확장 구조
+  - [x]* 3.10 Property 13 테스트 작성: 문서 메타데이터 확장 구조
     - **Property 13: 문서 메타데이터 확장 구조**
     - **Validates: Requirements 6.2, 6.5**
     - topic/variant/doc_version/source 필드 존재 및 기본값, source 허용 값 검증
 
-  - [ ]* 3.11 Property 14 테스트 작성: 파일 경로에서 Topic 자동 추출
+  - [x]* 3.11 Property 14 테스트 작성: 파일 경로에서 Topic 자동 추출
     - **Property 14: 파일 경로에서 Topic 자동 추출**
     - **Validates: Requirements 6.6**
     - documents/{team}/{category}/{filename} 형식에서 유효한 계층적 topic 생성 검증
@@ -178,12 +178,12 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - `handler()` 라우팅에 `action == 'ingest_claims'` 분기 추가
     - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5, 7.6, 7.7_
 
-  - [ ]* 3.13 Property 15 테스트 작성: Claim Ingestion 페이지네이션 및 카운팅
+  - [x]* 3.13 Property 15 테스트 작성: Claim Ingestion 페이지네이션 및 카운팅
     - **Property 15: Ingestion 페이지네이션 및 카운팅**
     - **Validates: Requirements 7.3, 7.4, 7.7**
     - 100건 상한, 응답 필드 존재, has_more 시 continuation_token, 신규 claim status=draft/version=1 검증
 
-- [ ] 4. Phase 2 Checkpoint
+- [x] 4. Phase 2 Checkpoint
   - Ensure all tests pass, ask the user if questions arise.
   - `terraform validate` 실행
   - Claim CRUD 함수 및 Ingestion 파이프라인 동작 확인
@@ -204,7 +204,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 모든 도구 응답에 `execution_time_ms` 필드 포함
     - _Requirements: 8.1, 8.2, 8.3, 8.6_
 
-  - [ ]* 5.3 Property 21 테스트 작성: MCP Tool 응답 실행 시간 포함
+  - [x]* 5.3 Property 21 테스트 작성: MCP Tool 응답 실행 시간 포함
     - **Property 21: MCP Tool 응답 실행 시간 포함**
     - **Validates: Requirements 8.6**
     - 모든 MCP Tool 응답에 execution_time_ms 존재 및 양의 정수 검증
@@ -219,12 +219,12 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 기존 `handle_query()` 수정: Verification Pipeline 우선 실행, 폴백 시 기존 Bedrock_KB 검색
     - _Requirements: 9.1, 9.2, 9.3, 9.4, 9.5, 9.6, 9.7, 9.8, 9.9_
 
-  - [ ]* 5.5 Property 16 테스트 작성: Verification Pipeline 응답 구조
+  - [x]* 5.5 Property 16 테스트 작성: Verification Pipeline 응답 구조
     - **Property 16: Verification Pipeline 응답 구조**
     - **Validates: Requirements 9.2, 9.3, 9.6, 9.7**
     - verification_metadata 필드 존재, topics_identified 최대 3개, claim 없으면 fallback=true, verified claim만 사용 검증
 
-  - [ ]* 5.6 Property 17 테스트 작성: 충돌 경고 포함
+  - [x]* 5.6 Property 17 테스트 작성: 충돌 경고 포함
     - **Property 17: 충돌 경고 포함**
     - **Validates: Requirements 9.4**
     - conflicted claim 존재 시 has_conflicts=true + 답변에 충돌 경고 메시지 포함 검증
@@ -236,7 +236,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 단방향 데이터 흐름 보장: Source_of_Truth → Verified_Knowledge → Serving
     - _Requirements: 12.3, 12.4, 12.5, 12.6, 15.8_
 
-- [ ] 6. Phase 3 Checkpoint
+- [x] 6. Phase 3 Checkpoint
   - Ensure all tests pass, ask the user if questions arise.
   - MCP Bridge 도구 3개 + Verification Pipeline 통합 동작 확인
 
@@ -250,7 +250,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - publishable 계산: status='verified' AND approval_status='approved'인 경우만 true
     - _Requirements: 14.1, 14.2, 14.3, 14.4, 14.6_
 
-  - [ ]* 7.2 Property 18 테스트 작성: Human Review Gate 승인 생명주기
+  - [x]* 7.2 Property 18 테스트 작성: Human Review Gate 승인 생명주기
     - **Property 18: Human Review Gate 승인 생명주기**
     - **Validates: Requirements 14.2, 14.3, 14.4, 14.5, 14.6, 14.7**
     - verified 전이 시 pending_review, approve 시 approved, reject 시 rejected, publishable 조건, 미승인 claim HTTP 403 검증
@@ -270,7 +270,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 모든 도구 응답에 `execution_time_ms` 포함
     - _Requirements: 10.1, 10.4_
 
-- [ ] 8. Phase 4 Checkpoint
+- [x] 8. Phase 4 Checkpoint
   - Ensure all tests pass, ask the user if questions arise.
   - Human Review Gate + HDD 생성 + 마크다운 출판 통합 동작 확인
 
@@ -288,17 +288,17 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - `handler()` 라우팅에 `action == 'cross_check_claims'` 분기 추가
     - _Requirements: 11.1, 11.2, 11.3, 11.4, 11.5, 11.6, 11.7, 11.8, 11.9, 11.10_
 
-  - [ ]* 9.2 Property 11 테스트 작성: Validation Risk Score 계산 및 상태 전이
+  - [x]* 9.2 Property 11 테스트 작성: Validation Risk Score 계산 및 상태 전이
     - **Property 11: Validation Risk Score 계산 및 상태 전이**
     - **Validates: Requirements 11.5, 11.6, 11.7, 11.8**
     - 공식 정확성, 임계값별 상태 전이(< 0.3 verified, 0.3~0.7 draft, >= 0.7 conflicted) 검증
 
-  - [ ]* 9.3 Property 12 테스트 작성: Rule-Based Checker 검증
+  - [x]* 9.3 Property 12 테스트 작성: Rule-Based Checker 검증
     - **Property 12: Rule-Based Checker 검증**
     - **Validates: Requirements 11.4**
     - S3 존재 확인, statement 길이, topic 형식 검증 → 모두 통과 시 score_3=1.0, 실패 시 < 1.0 검증
 
-  - [ ]* 9.4 Property 19 테스트 작성: Cross-Check 결과 카운팅 일관성
+  - [x]* 9.4 Property 19 테스트 작성: Cross-Check 결과 카운팅 일관성
     - **Property 19: Cross-Check 결과 카운팅 일관성**
     - **Validates: Requirements 11.9**
     - claims_verified + claims_conflicted + claims_pending == total_processed 검증
@@ -314,7 +314,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - ingest_claims, cross_check_claims, verification_pipeline 함수에 메트릭 발행 호출 통합
     - _Requirements: 15.1, 15.2, 15.3, 15.4, 15.5, 15.6, 15.7_
 
-  - [ ]* 9.6 Property 20 테스트 작성: KPI 메트릭 계산 공식
+  - [x]* 9.6 Property 20 테스트 작성: KPI 메트릭 계산 공식
     - **Property 20: KPI 메트릭 계산 공식**
     - **Validates: Requirements 15.2, 15.3, 15.4, 15.5, 15.6, 15.7**
     - 7개 메트릭 계산 공식 정확성, BOS-AI/ClaimDB 네임스페이스 발행 검증
@@ -325,7 +325,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 모든 신규 리소스 필수 태그 최종 확인
     - _Requirements: 13.6, 15.8_
 
-- [ ] 10. Final Checkpoint - 전체 테스트 통과 확인
+- [x] 10. Final Checkpoint - 전체 테스트 통과 확인
   - Ensure all tests pass, ask the user if questions arise.
   - `cd environments/app-layer/bedrock-rag && terraform validate`
   - `cd tests && go test -v ./properties/ -run TestEnhancedRagOptimization -count=1`
@@ -370,7 +370,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - Neptune Fallback 발생 시 `verification_metadata.neptune_fallback = true` 설정
     - _Requirements: 16.12_
 
-  - [ ]* 11.7 Property 25 테스트 작성: Neptune 통합 질의 Fallback 및 병렬 호출
+  - [x]* 11.7 Property 25 테스트 작성: Neptune 통합 질의 Fallback 및 병렬 호출
     - **Property 25: Neptune 통합 질의 Fallback 및 병렬 호출**
     - **Validates: Requirements 16.3, 16.5, 16.12, 16.15**
     - 3개 DB 병렬 비동기 호출, 개별 Timeout 30초, Neptune 실패 시 Fallback + neptune_fallback=true, Neptune SG 8182 포트 제한 검증
@@ -381,12 +381,12 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - ECR 컨테이너 이미지 배포 전환
     - _Requirements: 16.13_
 
-- [ ] 12. Phase 6 Checkpoint
+- [x] 12. Phase 6 Checkpoint
   - Ensure all tests pass, ask the user if questions arise.
   - Neptune Cluster + 관계 추출 + 3저장소 통합 질의 동작 확인
   - `terraform validate` (knowledge-graph 환경)
 
-- [ ] 13. Final Checkpoint - 전체 6 Phase 통합 테스트
+- [x] 13. Final Checkpoint - 전체 6 Phase 통합 테스트
   - 전체 시스템 통합 동작 확인
   - `cd environments/app-layer/bedrock-rag && terraform validate`
   - `cd environments/app-layer/knowledge-graph && terraform validate`
@@ -403,7 +403,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - `extract_package_constants()` 함수 내에서 `_extract_functions()`, `_extract_tasks()` 호출 통합
     - _Requirements: 17.1, 17.2, 17.3, 17.4, 17.5, 17.6, 17.7_
 
-  - [ ]* 14.2 Property 26 테스트 작성: Function/Task 추출 라운드트립
+  - [x]* 14.2 Property 26 테스트 작성: Function/Task 추출 라운드트립
     - **Property 26: Function/Task 추출 라운드트립**
     - **Validates: Requirements 17.1, 17.2, 17.3, 17.6**
     - 유효한 SystemVerilog function/task 선언에 대해 추출 후 claim_text 파싱으로 원본 시그니처 복원 검증
@@ -415,7 +415,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 모든 claim에 `parser_source='package_struct_parser'` 설정
     - _Requirements: 20.1, 20.2, 20.3, 20.4, 20.5_
 
-  - [ ]* 14.4 Property 30 테스트 작성: Struct 필드 비트폭 추출
+  - [x]* 14.4 Property 30 테스트 작성: Struct 필드 비트폭 추출
     - **Property 30: Struct 필드 비트폭 추출**
     - **Validates: Requirements 20.1, 20.2, 20.4, 20.5**
     - typedef struct 정의에서 필드 비트폭, 인라인 주석, 타입 참조가 claim에 포함되는지 검증
@@ -427,7 +427,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 부모/자식 struct 모두에 대해 claim 생성
     - _Requirements: 21.1, 21.2, 21.3, 21.4_
 
-  - [ ]* 14.6 Property 31 테스트 작성: 중첩 Struct 완전성
+  - [x]* 14.6 Property 31 테스트 작성: 중첩 Struct 완전성
     - **Property 31: 중첩 Struct 완전성**
     - **Validates: Requirements 21.1, 21.2, 21.3, 21.4**
     - 부모/자식 struct claim 모두 생성, 관계 추적 가능, 3단계 초과 시 truncation 경고 검증
@@ -444,7 +444,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 모든 claim에 `parser_source='generate_block_parser'` 설정
     - _Requirements: 18.1, 18.2, 18.3, 18.4, 18.5, 18.6, 18.7_
 
-  - [ ]* 15.2 Property 27 테스트 작성: Generate 블록 토폴로지 패턴 인식
+  - [x]* 15.2 Property 27 테스트 작성: Generate 블록 토폴로지 패턴 인식
     - **Property 27: Generate 블록 토폴로지 패턴 인식**
     - **Validates: Requirements 18.1, 18.2, 18.4, 18.6**
     - generate for/if 블록에서 올바른 토폴로지 유형 식별, claim_text에 패턴/신호/차원/크기 포함, 파라미터 참조 보존 검증
@@ -460,17 +460,17 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 모든 claim에 `parser_source='always_block_parser'` 설정
     - _Requirements: 19.1, 19.2, 19.3, 19.4, 19.5, 19.6, 19.7_
 
-  - [ ]* 15.4 Property 28 테스트 작성: 클럭 도메인 추출 및 집계
+  - [x]* 15.4 Property 28 테스트 작성: 클럭 도메인 추출 및 집계
     - **Property 28: 클럭 도메인 추출 및 집계**
     - **Validates: Requirements 19.1, 19.2, 19.3, 19.6**
     - always_ff에서만 클럭 도메인 추출(always_comb 제외), 모듈당 집계, 도메인 매핑 정확성 검증
 
-  - [ ]* 15.5 Property 29 테스트 작성: 클럭 도메인 크로싱 감지
+  - [x]* 15.5 Property 29 테스트 작성: 클럭 도메인 크로싱 감지
     - **Property 29: 클럭 도메인 크로싱 감지**
     - **Validates: Requirements 19.4**
     - 2개 이상 도메인 시 CDC claim 생성, 1개 이하 시 CDC claim 미생성 검증
 
-- [ ] 16. Phase 7 Checkpoint — Supply Side 파서 기본 검증
+- [x] 16. Phase 7 Checkpoint — Supply Side 파서 기본 검증
   - Ensure all tests pass, ask the user if questions arise.
   - `package_extractor.py` 함수/태스크 추출 + flit 구조 + 중첩 struct 동작 확인
   - `generate_block_parser.py` 토폴로지 패턴 인식 동작 확인
@@ -488,12 +488,12 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - Python `eval()` 사용 금지 (코드 인젝션 방지)
     - _Requirements: 22.1, 22.2, 22.3, 22.4, 22.5, 22.6_
 
-  - [ ]* 17.2 Property 32 테스트 작성: 비트폭 표현식 평가
+  - [x]* 17.2 Property 32 테스트 작성: 비트폭 표현식 평가
     - **Property 32: 비트폭 표현식 평가**
     - **Validates: Requirements 22.1, 22.2, 22.3, 22.4**
     - 순수 정수 산술식 + 해석 가능 파라미터 → 수학적 올바른 결과, 미해석 파라미터 → 원본 유지 검증
 
-  - [ ]* 17.3 Property 33 테스트 작성: 안전한 비트폭 평가 (코드 인젝션 방지)
+  - [x]* 17.3 Property 33 테스트 작성: 안전한 비트폭 평가 (코드 인젝션 방지)
     - **Property 33: 안전한 비트폭 평가**
     - **Validates: Requirements 22.6**
     - 정수 리터럴/지원 연산자/파라미터 참조 외 구문 거부, 악의적 입력 시 ValueError 검증
@@ -508,7 +508,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 각 Sub_Record를 개별 임베딩 + OpenSearch 인덱싱
     - _Requirements: 23.1, 23.2, 23.3, 23.4, 23.5_
 
-  - [ ]* 18.2 Property 34 테스트 작성: 대형 모듈 청킹 불변식
+  - [x]* 18.2 Property 34 테스트 작성: 대형 모듈 청킹 불변식
     - **Property 34: 대형 모듈 청킹 불변식**
     - **Validates: Requirements 23.1, 23.2, 23.3**
     - 50+ 포트 → 3가지 Sub_Record 생성 + 필드 포함 + 기존 레코드 유지, 50 미만 → Sub_Record 미생성 검증
@@ -522,7 +522,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 응답 `metadata.query_type`에 분류 결과 포함
     - _Requirements: 24.1, 24.2, 24.3, 24.4, 24.5, 24.6, 24.7, 24.8_
 
-  - [ ]* 18.4 Property 35 테스트 작성: 질의 유형별 동적 Boost 매핑
+  - [x]* 18.4 Property 35 테스트 작성: 질의 유형별 동적 Boost 매핑
     - **Property 35: 질의 유형별 동적 Boost 매핑**
     - **Validates: Requirements 24.1, 24.2, 24.3, 24.4, 24.5, 24.6, 24.8**
     - classify_query_type 5가지 유형 분류, get_dynamic_boosts 가중치 정확성, 미매칭 시 general_query 폴백 검증
@@ -541,12 +541,12 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - `rag_query` API에서도 `grounding_mode` 수용
     - _Requirements: 25.1, 25.2, 25.3, 25.4, 25.5, 25.6, 25.7, 25.8_
 
-  - [ ]* 19.2 Property 36 테스트 작성: Hybrid Grounding 태그 일관성
+  - [x]* 19.2 Property 36 테스트 작성: Hybrid Grounding 태그 일관성
     - **Property 36: Hybrid Grounding 태그 일관성**
     - **Validates: Requirements 25.2, 25.3, 25.4, 25.5**
     - GROUNDED 태그에 claim_id 각주, INFERRED 태그에 경고, grounded_ratio + inferred_ratio = 1.0, inferred > 0.5 시 경고 검증
 
-  - [ ]* 19.3 Property 37 테스트 작성: Grounding 모드 동작
+  - [x]* 19.3 Property 37 테스트 작성: Grounding 모드 동작
     - **Property 37: Grounding 모드 동작**
     - **Validates: Requirements 25.6, 25.8**
     - strict 모드 GROUNDED만 + KB 부족 시 NOT IN KB, hybrid 모드 양쪽 태그, free 모드 태그 없음 검증
@@ -560,12 +560,12 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - 기존 `_make_claim()` 및 각 파서의 claim 생성에 `parser_source` 필드 추가
     - _Requirements: 26.1, 26.2, 26.3, 26.6_
 
-  - [ ]* 20.2 Property 38 테스트 작성: 파서 Feature Flag 제어
+  - [x]* 20.2 Property 38 테스트 작성: 파서 Feature Flag 제어
     - **Property 38: 파서 Feature Flag 제어**
     - **Validates: Requirements 26.1, 26.2**
     - feature flag false → 파서 미실행 + claim 미인덱싱, true → 정상 실행 검증
 
-  - [ ]* 20.3 Property 39 테스트 작성: 파서 출처 귀속
+  - [x]* 20.3 Property 39 테스트 작성: 파서 출처 귀속
     - **Property 39: 파서 출처 귀속**
     - **Validates: Requirements 26.6**
     - 모든 파서 생성 claim에 parser_source 필드 존재 + 빈 문자열 아님 검증
@@ -596,7 +596,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
     - _Requirements: 17.5, 18.5, 19.5, 22.5, 23.1, 26.1, 26.3_
 
 
-- [ ] 22. Phase 7 Final Checkpoint — 전체 Phase 7 통합 테스트
+- [x] 22. Phase 7 Final Checkpoint — 전체 Phase 7 통합 테스트
   - Ensure all tests pass, ask the user if questions arise.
   - Supply Side: package_extractor.py (함수/태스크 + flit + 중첩 struct), generate_block_parser.py, always_block_parser.py, bitwidth_evaluator.py 동작 확인
   - Consumption Side: 대형 모듈 청킹 + 질의 유형별 동적 Boost 동작 확인
@@ -605,7 +605,7 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
   - `cd tests && go test -v ./properties/ -run TestEnhancedRagOptimization -count=1` (Phase 7 Property 26~39 포함)
 
 
-- [ ] 23. Phase 7 Final Checkpoint - 전체 7 Phase 통합 테스트
+- [x] 23. Phase 7 Final Checkpoint - 전체 7 Phase 통합 테스트
   - 전체 시스템 통합 동작 확인 (Phase 1~7)
   - `cd environments/app-layer/bedrock-rag && terraform validate`
   - `cd environments/app-layer/knowledge-graph && terraform validate`
@@ -631,6 +631,15 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
 - 품질 목표: v8 68% → v9 75~78% Content Fidelity (RTL 단독 천장)
 - Confluence/Jira는 Cloud 환경이므로 별도 연동 방식 검토 (이 스펙 범위 외)
 - Codebeamer 연동은 Spec 6 (codebeamer-aspice-rag-integration)에서 처리
+- Phase 9 신규 파일 1개: `port_binding_parser.py`
+- Phase 9 수정 파일: `handler.py`, `index.py`, `server.js`, `api-gateway.tf`, `interactive_schematic.html`
+- Phase 9 Property 테스트 5개 추가 (Property 40~44)
+- Phase 9 요구사항 5개 추가 (요구사항 30~34)
+- 포트 바인딩 파서는 `#(…)` 파라미터 블록과 `(…)` 포트 블록을 구분하여 포트만 추출
+- Graph Export API는 Read-Only Neptune IAM Role 사용 (기존 Phase 6 인프라 재활용)
+- Schematic Viewer는 온프렘 네트워크 없이도 내장 데이터로 동작 (API 호출은 선택적)
+- HDD merge 실명 복구는 3단계 소스 우선순위로 placeholder를 실제 이름으로 치환
+- Topic 전파 재생성은 max_propagation_depth=5로 무한 루프 방지
 
 
 
@@ -751,8 +760,158 @@ BOS-AI Private RAG 시스템을 검증된 지식 단위(Claim) 기반 답변 시
   - `cd environments/app-layer/bedrock-rag/rtl_parser_src && py -m pytest -v`
 
 
-- [ ] 28. Final Checkpoint - 전체 8 Phase 통합 테스트
+- [x] 28. Final Checkpoint - 전체 8 Phase 통합 테스트
   - 전체 시스템 통합 동작 확인 (Phase 1~8)
   - `cd environments/app-layer/bedrock-rag && terraform validate`
   - Content Fidelity 목표: v9.1 74% → v9.2 80%+ 달성 여부 확인
   - 5개 갭 해소 확인: EP Table (+3pp), NOC2AXI+repeater (+5pp), clock_routing+dispatch (+5pp)
+
+
+- [x] 29. Phase 9: Port Binding Parser + Neptune CONNECTS_TO 엣지 적재
+  - [x] 29.1 Port Binding Parser 구현 (`environments/app-layer/bedrock-rag/rtl_parser_src/port_binding_parser.py` — 신규)
+    - `extract_port_bindings(rtl_content, module_name, file_path, pipeline_id)` 메인 함수
+    - 인스턴스화 구문 식별: `module_type [#(params)] instance_name (port_connections);` 패턴
+    - `#(…)` 블록(파라미터)과 `(…)` 블록(포트) 분리 → 포트 블록만 파싱
+    - `.port_name(signal_expr)` 정규식 추출: port_name, signal_expr, bit_range 분리
+    - `.port_name()` (unconnected) 감지 → `is_unconnected=true`
+    - concatenation 바인딩 `.port({sig_a, sig_b})` 인식 → `constituent_signals` 배열 분해
+    - 동일 instance 내 동일 port_name 중복 시 첫 번째만 채택 + WARNING 로그
+    - claim_text 형식: `"Instance '{instance_name}' of module '{module_type}' binds port '{port_name}' to signal '{signal_expr}'"`
+    - `parser_source='port_binding_parser'` 설정
+    - `PARSER_PORT_BINDING_ENABLED` 환경 변수 feature flag (기본값 `true`)
+    - _Requirements: 30.1, 30.2, 30.3, 30.4, 30.5, 30.6, 30.7, 30.8, 30.9_
+
+  - [x] 29.2 Neptune CONNECTS_TO 엣지 적재 확장 (`environments/app-layer/bedrock-rag/rtl_parser_src/handler.py` 수정)
+    - `_load_port_bindings_to_neptune(bindings, module_name)` 함수 추가
+    - 각 바인딩에 대해 Port 노드 생성/MERGE: `{instance_name}.{port_name}` (속성: instance_name, module_type, port_name, direction, width)
+    - Signal 노드 생성/MERGE: `signal_expr` (속성: name, scope=module_name, width)
+    - CONNECTS_TO 엣지 생성: Port → Signal (속성: bit_range, source_file, line_number, is_concatenation)
+    - concatenation 바인딩: 대표 Signal 노드 + constituent_signals 각각에 보조 CONNECTS_TO 엣지 (`is_constituent=true`)
+    - 동일 `(instance_name, port_name)` 노드 MERGE로 중복 방지 (openCypher MERGE)
+    - Neptune 적재 실패 시 graceful degradation: S3/OpenSearch 인덱싱 계속 + `neptune_load_failed: true` 로그
+    - `_process_rtl_file()` 함수에서 port_binding_parser 호출 후 Neptune 적재 호출 통합
+    - _Requirements: 31.1, 31.2, 31.3, 31.4, 31.5, 31.6, 31.7, 31.8_
+
+  - [x]* 29.3 Property 40 테스트 작성: Port Binding 추출 완전성
+    - **Property 40: Port Binding 추출 완전성**
+    - **Validates: Requirements 30.1, 30.2, 30.4, 30.8**
+    - `.port(signal)` 패턴 추출, 파라미터 블록 제외, is_unconnected=false 시 signal_expr 비어있지 않음, port_name 비어있지 않음 검증
+
+  - [x]* 29.4 Property 41 테스트 작성: Neptune CONNECTS_TO 적재 보존
+    - **Property 41: Neptune CONNECTS_TO 적재 보존**
+    - **Validates: Requirements 31.1, 31.7, 31.8**
+    - is_unconnected=false 바인딩 수 == CONNECTS_TO 엣지 수, MERGE로 중복 미생성, Neptune 실패 시 OpenSearch 인덱싱 계속 검증
+
+  - [x] 29.5 Port Binding Parser 단위 테스트 작성 (`environments/app-layer/bedrock-rag/rtl_parser_src/test_port_binding_parser.py` — 신규)
+    - 기본 `.port(signal)` 추출 검증
+    - `.port(signal[3:0])` bit_range 추출 검증
+    - `.port()` unconnected 감지 검증
+    - `.port({a, b, c})` concatenation 분해 검증
+    - `#(.PARAM(val))` 파라미터 블록 제외 검증
+    - 동일 port_name 중복 시 첫 번째만 채택 검증
+    - feature flag off → claim 0건 검증
+    - claim_text 형식 정확성 검증
+    - _Requirements: 30.1, 30.2, 30.3, 30.4, 30.5, 30.8, 30.9_
+
+
+- [x] 30. Phase 9: Graph Export API + Interactive Schematic Viewer
+  - [x] 30.1 Graph Export API 구현 (`environments/app-layer/bedrock-rag/lambda_src/index.py` 수정)
+    - `graph_export(event)` 함수 추가
+    - 입력 파라미터: `scope`(필수, "chip"/"module"/"signal"), `root_module`(필수), `depth`(선택, 기본3), `signal_filter`(선택, scope="signal" 시 필수)
+    - `scope="chip"`: root_module의 직접 자식 인스턴스 + 모듈 간 CONNECTS_TO 엣지 aggregation
+    - `scope="module"`: root_module 내부 인스턴스/포트/바인딩 상세 그래프
+    - `scope="signal"`: signal_filter 매칭 신호의 전파 경로 (trace_signal_path 로직 재사용)
+    - 응답 JSON: `{nodes: [{id, label, type, properties}], edges: [{id, source, target, label, properties}], metadata: {scope, root_module, depth, node_count, edge_count, generated_at, neptune_fallback, truncated}}`
+    - 노드 상한 1,000개 (degree 기준 상위), 초과 시 `truncated=true`
+    - Neptune 타임아웃/실패 시 빈 그래프 + `neptune_fallback=true` 반환 (HTTP 200)
+    - Read-Only Neptune IAM Role 사용
+    - `handler()` 라우팅에 POST `/rag/graph-export` 추가
+    - _Requirements: 32.1, 32.2, 32.3, 32.4, 32.5, 32.6, 32.7, 32.8_
+
+  - [x] 30.2 API Gateway 라우트 추가 (`environments/app-layer/bedrock-rag/api-gateway.tf` 수정)
+    - `/rag/graph-export` POST 라우트 추가
+    - `/rag/hdd/regenerate-stale` POST 라우트 추가 (Task 31.3용)
+    - _Requirements: 32.9_
+
+  - [x] 30.3 MCP Bridge graph_export 도구 추가 (`mcp-bridge/server.js` 수정)
+    - `graph_export` 도구 추가: scope(필수), root_module(필수), depth(선택), signal_filter(선택) → POST /rag/graph-export
+    - 응답에 `execution_time_ms` 포함
+    - _Requirements: 32.1, 32.5_
+
+  - [x] 30.4 Interactive Schematic Viewer 확장 (`docs/diagrams/interactive_schematic.html` 수정)
+    - 상단 컨트롤 바 추가: API Endpoint 입력, root_module, scope 선택(chip/module/signal), depth, signal_filter, "Load from API" 버튼
+    - 3-view 모드 전환: Chip View / Module View / Signal View
+    - 노드 타입별 색상: Module(white), Port(yellow), Signal(blue), ClockDomain(purple), Parameter(green)
+    - 포트 방향별 테두리 스타일: input(실선), output(점선), inout(이중선)
+    - 노드 클릭 → 연결 하이라이트 + tooltip에 properties 전체 표시
+    - `neptune_fallback=true` / `truncated=true` 시 경고 배너 표시
+    - 초기 로드: 내장 프로토타입 데이터로 렌더링 (기존 nodes/links 유지)
+    - D3.js 로컬 복사본 선택적 참조 구조 (`docs/diagrams/vendor/d3.v7.min.js` fallback)
+    - _Requirements: 33.1, 33.2, 33.3, 33.4, 33.5, 33.6, 33.7, 33.8, 33.9_
+
+  - [x]* 30.5 Property 42 테스트 작성: Graph Export API 응답 구조
+    - **Property 42: Graph Export API 응답 구조**
+    - **Validates: Requirements 32.1, 32.5, 32.6, 32.7**
+    - 응답에 nodes/edges/metadata 필드 존재, scope 유효값 검증, 노드 상한 1000개, Neptune 실패 시 neptune_fallback=true + 빈 그래프 검증
+
+
+- [x] 31. Phase 9: HDD Merge 개선 — 실명 복구 + Topic 전파
+  - [x] 31.1 HDD Merger 실명 복구 구현 (`environments/app-layer/bedrock-rag/lambda_src/index.py` 수정)
+    - `_resolve_placeholders(markdown_text, claims_used, topic)` 함수 추가
+    - placeholder 토큰 정규식: `r'\{(MODULE|INSTANCE|SIGNAL|PORT)_[A-Z0-9_]+\}'`
+    - 복구 소스 우선순위: ① claim의 parser_source별 원본 이름 → ② RTL_OpenSearch_Index 검색 → ③ Claim_DB statement 원본
+    - 동일 토큰 다중 후보 시: confidence 최고 → 동률 시 최신 created_at 선택
+    - 복구 불가 시 HTML 주석 `<!-- NAME_RESOLUTION_FAILED: {TOKEN} -->` 삽입
+    - 응답 metadata에 `unresolved_placeholders` 배열 포함
+    - `generate_hdd_section()` 함수 내에서 마크다운 생성 후 `_resolve_placeholders()` 호출 통합
+    - _Requirements: 34.1, 34.2, 34.3_
+
+  - [x] 31.2 HDD Topic 전파 구현 (`environments/app-layer/bedrock-rag/lambda_src/index.py` 수정)
+    - `generate_hdd_section()` 함수 확장: 생성된 HDD 섹션에 `parent_topics` 메타데이터 저장
+    - `_mark_stale_parents(topic)` 함수 추가: 해당 topic을 parent_topics에 포함하는 상위 섹션의 `stale=true` + `last_child_update_at` 설정
+    - `approve_claim()` 함수 확장: claim approve 시 해당 topic의 HDD 섹션 stale 마킹 호출
+    - `max_propagation_depth=5` 상한 적용 (무한 루프 방지)
+    - 전파 체인 CloudWatch 구조화 로그: `{event: "hdd_propagation", root_topic, propagated_to, depth, duration_ms}`
+    - _Requirements: 34.4, 34.5, 34.7, 34.10_
+
+  - [x] 31.3 Stale HDD 일괄 재생성 엔드포인트 구현 (`environments/app-layer/bedrock-rag/lambda_src/index.py` 수정)
+    - `regenerate_stale_hdd(event)` 함수 추가
+    - Seoul_S3 `published/` 접두사에서 `stale=true` 메타데이터를 가진 섹션 스캔
+    - 각 stale 섹션에 대해 `generate_hdd_section()` 재호출 + `_resolve_placeholders()` 적용
+    - 응답: `{sections_regenerated, sections_skipped, unresolved_placeholder_count, execution_time_ms}`
+    - `handler()` 라우팅에 POST `/rag/hdd/regenerate-stale` 추가
+    - _Requirements: 34.6, 34.9_
+
+  - [x] 31.4 MCP Bridge regenerate_stale_hdd 도구 추가 (`mcp-bridge/server.js` 수정)
+    - `regenerate_stale_hdd` 도구 추가: 파라미터 없음 → POST /rag/hdd/regenerate-stale
+    - 응답에 `execution_time_ms`, `sections_regenerated`, `sections_skipped`, `unresolved_placeholder_count` 포함
+    - _Requirements: 34.8_
+
+  - [x]* 31.5 Property 43 테스트 작성: Placeholder 복구 완전성
+    - **Property 43: Placeholder 복구 완전성**
+    - **Validates: Requirements 34.1, 34.2, 34.9**
+    - 재생성 후 마크다운에 `{MODULE_*}`/`{INSTANCE_*}`/`{SIGNAL_*}`/`{PORT_*}` 패턴 미존재 또는 HTML 주석 형태만 존재, unresolved_placeholders 배열 정확성 검증
+
+  - [x]* 31.6 Property 44 테스트 작성: Topic 전파 무한 루프 방지
+    - **Property 44: Topic 전파 무한 루프 방지**
+    - **Validates: Requirements 34.5, 34.7**
+    - 순환 parent_topics 구조에서 max_propagation_depth=5 초과 시 재생성 건너뛰기 + WARNING 로그, stale 마킹 정확성 검증
+
+
+- [x] 32. Phase 9 Checkpoint — 전체 Phase 9 통합 테스트
+  - Ensure all tests pass, ask the user if questions arise.
+  - Port Binding Parser: `.port(signal)` 추출 + concatenation + unconnected 동작 확인
+  - Neptune CONNECTS_TO: 포트 바인딩 → 엣지 적재 + MERGE 중복 방지 동작 확인
+  - Graph Export API: 3가지 scope 모드 + 노드 상한 + fallback 동작 확인
+  - Schematic Viewer: 3-view 전환 + API 연동 + 경고 배너 동작 확인
+  - HDD Merge: placeholder 복구 + topic 전파 + stale 재생성 동작 확인
+  - `cd environments/app-layer/bedrock-rag/rtl_parser_src && py -m pytest -v`
+  - `cd environments/app-layer/bedrock-rag && terraform validate`
+
+
+- [ ] 33. Final Checkpoint - 전체 9 Phase 통합 테스트
+  - 전체 시스템 통합 동작 확인 (Phase 1~9)
+  - `cd environments/app-layer/bedrock-rag && terraform validate`
+  - `cd environments/app-layer/knowledge-graph && terraform validate`
+  - Content Fidelity 목표: v9.2 80% → v9.3 85~88% 달성 여부 확인
+  - 포트 바인딩 기반 신호 추적 정확도 확인 (trace_signal_path 개선)

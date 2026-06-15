@@ -56,7 +56,7 @@ SoC RTL 호환성 (Requirements 14-15)은 v9.5로 이동되어 본 구현에서 
     - 중첩 괄호 표현식 (e.g., `(SizeX - 1) * 2`) 보존 without simplification
     - _Requirements: 5.1, 5.2, 5.3, 5.4_
 
-  - [ ]* 3.2 Port Binding Expression round-trip property test 작성
+  - [x]* 3.2 Port Binding Expression round-trip property test 작성
     - **Property 4: Port binding expression round-trip**
     - hypothesis 라이브러리 사용, 최소 100 iterations
     - Generator: +, -, *, / 연산자 + 정수 리터럴 + 괄호 + 식별자 조합의 랜덤 표현식
@@ -73,7 +73,7 @@ SoC RTL 호환성 (Requirements 14-15)은 v9.5로 이동되어 본 구현에서 
     - Claim 생성: claim_type="structural", topic="Hierarchy"
     - _Requirements: 6.1, 6.2, 6.3, 6.4, 6.5_
 
-  - [ ]* 4.2 Generate Block Label 추출 unit test 작성
+  - [x]* 4.2 Generate Block Label 추출 unit test 작성
     - gen_noc2axi_ne_opt 추출 및 instance 연관 검증
     - 중첩 generate block 계층 경로 검증
     - generate if 블록 label 추출 검증
@@ -100,7 +100,7 @@ SoC RTL 호환성 (Requirements 14-15)은 v9.5로 이동되어 본 구현에서 
     - `rtl_parser_src/handler.py`의 `_process_rtl_file()`에서 package file이 아닌 일반 모듈 파일에서도 `extract_module_parameters()` 호출
     - _Requirements: 7.1, 7.4_
 
-  - [ ]* 5.4 Top Module Parameter 추출 unit test 작성
+  - [x]* 5.4 Top Module Parameter 추출 unit test 작성
     - AXI_SLV_OUTSTANDING_READS=64 추출 검증
     - Expression default value 보존 검증
     - #(.NUM_REPEATERS(4)) instantiation override 추출 검증
@@ -114,7 +114,7 @@ SoC RTL 호환성 (Requirements 14-15)은 v9.5로 이동되어 본 구현에서 
     - 검증: de_to_t6_coloumn[SizeX][SizeY-1][2] → dims = [SizeX, SizeY-1, 2] (3개 모두 보존)
     - _Requirements: 8.1, 8.2, 8.3_
 
-  - [ ]* 6.2 Wire dimension count preservation property test 작성
+  - [x]* 6.2 Wire dimension count preservation property test 작성
     - **Property 1: Wire dimension count preservation**
     - hypothesis 라이브러리 사용, 최소 100 iterations
     - Generator: 1-5개 차원의 랜덤 wire 선언 (각 차원은 identifier 또는 expression)
@@ -129,7 +129,7 @@ SoC RTL 호환성 (Requirements 14-15)은 v9.5로 이동되어 본 구현에서 
     - 필드 수 검증: 추출된 필드 수가 소스와 불일치 시 에러 보고 (extraction fail + mismatch report)
     - _Requirements: 9.1, 9.2, 9.3, 9.4_
 
-  - [ ]* 7.2 Struct field count invariant property test 작성
+  - [x]* 7.2 Struct field count invariant property test 작성
     - **Property 2: Struct field count invariant**
     - hypothesis 라이브러리 사용, 최소 100 iterations
     - Generator: 1-15개 필드의 랜덤 struct 정의 (packed/unpacked/custom type 혼합)
@@ -184,7 +184,7 @@ SoC RTL 호환성 (Requirements 14-15)은 v9.5로 이동되어 본 구현에서 
     - DynamoDB scan timeout → exponential backoff retry (max 3)
     - _Requirements: 12.5, 13.1_
 
-  - [ ]* 10.3 Neptune ingestion idempotence property test 작성
+  - [x]* 10.3 Neptune ingestion idempotence property test 작성
     - **Property 3: Neptune ingestion idempotence**
     - hypothesis 라이브러리 사용, 최소 100 iterations
     - Generator: 랜덤 module_parse + claim records (mocked Neptune client)
@@ -208,7 +208,7 @@ SoC RTL 호환성 (Requirements 14-15)은 v9.5로 이동되어 본 구현에서 
     - Neptune 미접속 시 기존 claim-only 모드로 동작
     - _Requirements: 13.2, 13.3_
 
-  - [ ]* 11.3 Graph Evidence Provider unit test 작성
+  - [x]* 11.3 Graph Evidence Provider unit test 작성
     - Neptune 접속 가능 시 evidence 조회 검증
     - Neptune 미접속 시 graceful degradation 검증
     - Evidence table 형식 출력 검증
@@ -225,7 +225,7 @@ SoC RTL 호환성 (Requirements 14-15)은 v9.5로 이동되어 본 구현에서 
     - Parsing N>0 modules but ingestion 0 nodes → 에러 보고
     - _Requirements: 13.1, 13.2, 13.3_
 
-  - [ ]* 13.2 Integration test — Neptune ingestion end-to-end
+  - [x]* 13.2 Integration test — Neptune ingestion end-to-end
     - DynamoDB → neptune_ingestion.py → Graph Export API 검증
     - Graph evidence provider → HDD evidence injection 검증
     - Interactive Schematic graph data 로딩 검증 (JS error 없음)

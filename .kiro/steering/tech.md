@@ -83,3 +83,39 @@ cd mcp-bridge && npm install && npm start
 - Common tags defined in `locals` block and merged per resource
 - Variables use `.tfvars.example` files as templates (actual `.tfvars` are gitignored)
 - Each module follows the standard `main.tf`, `variables.tf`, `outputs.tf` pattern
+
+## Lambda 배포 체크리스트
+
+Lambda 코드 변경 후 배포 시 반드시 확인:
+
+1. **코드 변경 & 테스트**: `py -m pytest` (rtl_parser_src/ 디렉토리)
+2. **배포 패키지 빌드**: `rtl_parser_src/`에서 test_* 제외하고 zip 생성
+3. **terraform apply**: `environments/app-layer/bedrock-rag/`에서 실행
+   - `terraform plan -target="aws_lambda_function.rtl_parser"`
+   - `terraform apply -target="aws_lambda_function.rtl_parser" -auto-approve`
+4. **Lambda 환경변수 확인** (빠뜨리면 인덱싱 안 됨):
+   - `RTL_OPENSEARCH_ENDPOINT` — OpenSearch Serverless 엔드포인트
+   - `RTL_OPENSEARCH_INDEX` — 인덱스명 (rtl-knowledge-base-index)
+   - `CLAIM_TABLE_NAME` — DynamoDB 테이블 (bos-ai-claim-db-prod)
+   - `BEDROCK_REGION` — Bedrock 리전 (us-east-1)
+   - `NEPTUNE_ENDPOINT` — Neptune 엔드포인트 (선택)
+5. **재인덱싱 트리거** (파서 로직 변경 시):
+   - `py scripts/reindex_all_rtl.py --pipeline-id tt_20260221 --batch-size 50`
+   - 9465개 파일, 약 4분 소요 (Lambda invoke), 실제 파싱 완료까지 10~20분
+6. **인덱싱 완료 확인**:
+   - Lambda 로그: `"RTL_OPENSEARCH_ENDPOINT not set, skipping indexing"` 경고 없어야 함
+   - MCP `search_rtl`로 검색 테스트
+7. **산출물 생성**: MCP `generate_hdd_section` 또는 API 호출
+
+**대상 Lambda 구분:**
+- `lambda-rtl-parser-seoul-dev` — RTL 파싱 (S3 트리거, 재인덱싱 대상)
+- `lambda-document-processor-seoul-prod` — API Gateway 요청 처리 (검색, HDD 생성)
+
+## MCP Bridge 연결
+
+- **서버**: server02 (192.128.20.241:3100)
+- **프로토콜**: Streamable HTTP (`/mcp`)
+- **Kiro 연결**: SSH 터널 (`localhost:3100` → `server02:3100`) + `.kiro/settings/mcp.json`
+- **RAG API**: API Gateway (Private REST) → VPC Endpoint → Lambda
+- **주의**: Kiro는 HTTPS 또는 localhost만 허용. 원격 IP HTTP 직접 연결 불가.
+- **DNS**: server02는 Route53 Resolver를 통해 API Gateway public DNS를 VPC Endpoint IP로 resolve

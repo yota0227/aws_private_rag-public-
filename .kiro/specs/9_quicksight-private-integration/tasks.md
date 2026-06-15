@@ -17,12 +17,12 @@ Global IAM → Network Layer → App Layer → Lambda 소스 → MCP Bridge → 
     - 표준 태그(`Project`, `Environment`, `ManagedBy`, `Layer`) 적용
     - _요구사항: 9.1, 9.2, 9.3, 9.4, 9.5, 9.6_
 
-  - [ ]* 1.2 Property 13 속성 테스트 작성 — IAM 역할별 권한 분리 검증
+  - [x]* 1.2 Property 13 속성 테스트 작성 — IAM 역할별 권한 분리 검증
     - **Property 13: Quick IAM 역할별 권한 분리**
     - **검증: 요구사항 9.1, 9.2, 9.3**
     - `tests/properties/quicksight_test.go`에 gopter 기반 테스트 추가
 
-  - [ ]* 1.3 Property 14 속성 테스트 작성 — IAM 역할 접근 조건 검증
+  - [x]* 1.3 Property 14 속성 테스트 작성 — IAM 역할 접근 조건 검증
     - **Property 14: Quick IAM 역할 접근 조건**
     - **검증: 요구사항 9.4, 9.5**
     - `tests/properties/quicksight_test.go`에 gopter 기반 테스트 추가
@@ -33,7 +33,7 @@ Global IAM → Network Layer → App Layer → Lambda 소스 → MCP Bridge → 
     - `QS_Viewer_Users` → Quick READER 역할 매핑
     - _요구사항: 2.6, 2.7_
 
-  - [ ]* 1.5 Property 6 속성 테스트 작성 — GROUP_MAP 역할 매핑 검증
+  - [x]* 1.5 Property 6 속성 테스트 작성 — GROUP_MAP 역할 매핑 검증
     - **Property 6: GROUP_MAP Quick 역할 매핑 정확성**
     - **검증: 요구사항 2.6, 2.7**
     - `tests/properties/quicksight_test.go`에 gopter 기반 테스트 추가
@@ -52,12 +52,12 @@ Global IAM → Network Layer → App Layer → Lambda 소스 → MCP Bridge → 
     - 표준 태그 적용
     - _요구사항: 1.3, 4.2, 4.3, 7.2_
 
-  - [ ]* 3.2 Property 2 속성 테스트 작성 — SG 인바운드 규칙 CIDR/포트 제한 검증
+  - [x]* 3.2 Property 2 속성 테스트 작성 — SG 인바운드 규칙 CIDR/포트 제한 검증
     - **Property 2: Quick Security Group 인바운드 규칙 제한**
     - **검증: 요구사항 1.3, 4.3**
     - `tests/properties/quicksight_test.go`에 gopter 기반 테스트 추가
 
-  - [ ]* 3.3 Property 3 속성 테스트 작성 — VPC Connection SG Virginia 직접 접근 차단 검증
+  - [x]* 3.3 Property 3 속성 테스트 작성 — VPC Connection SG Virginia 직접 접근 차단 검증
     - **Property 3: Quick VPC Connection Security Group Virginia 직접 접근 차단**
     - **검증: 요구사항 4.2, 4.5, 7.2**
     - `tests/properties/quicksight_test.go`에 gopter 기반 테스트 추가
@@ -70,7 +70,7 @@ Global IAM → Network Layer → App Layer → Lambda 소스 → MCP Bridge → 
     - 표준 태그 적용
     - _요구사항: 1.1, 1.2, 1.4, 1.5, 1.6_
 
-  - [ ]* 3.5 Property 1 속성 테스트 작성 — Quick VPC Endpoint 구성 정확성 검증
+  - [x]* 3.5 Property 1 속성 테스트 작성 — Quick VPC Endpoint 구성 정확성 검증
     - **Property 1: Quick VPC Endpoint 구성 정확성**
     - **검증: 요구사항 1.1, 1.2, 1.4**
     - `tests/properties/quicksight_test.go`에 gopter 기반 테스트 추가
@@ -87,7 +87,7 @@ Global IAM → Network Layer → App Layer → Lambda 소스 → MCP Bridge → 
     - Network ACL 규칙: 허용 CIDR(10.10.0.0/16, 10.20.0.0/16, 192.128.0.0/16) 외 트래픽 차단
     - _요구사항: 4.6, 7.1, 7.3_
 
-  - [ ]* 3.8 Property 15 속성 테스트 작성 — 네트워크 격리 검증
+  - [x]* 3.8 Property 15 속성 테스트 작성 — 네트워크 격리 검증
     - **Property 15: Quick 네트워크 격리**
     - **검증: 요구사항 7.1, 7.3**
     - `tests/properties/quicksight_test.go`에 gopter 기반 테스트 추가
@@ -119,7 +119,7 @@ Global IAM → Network Layer → App Layer → Lambda 소스 → MCP Bridge → 
     - 표준 태그 적용
     - _요구사항: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7_
 
-  - [ ]* 5.4 Property 7 속성 테스트 작성 — S3 보안 구성 검증
+  - [x]* 5.4 Property 7 속성 테스트 작성 — S3 보안 구성 검증
     - **Property 7: Quick S3 버킷 보안 구성**
     - **검증: 요구사항 3.1, 3.2, 3.3, 3.4**
     - `tests/properties/quicksight_test.go`에 gopter 기반 테스트 추가
@@ -131,7 +131,7 @@ Global IAM → Network Layer → App Layer → Lambda 소스 → MCP Bridge → 
     - Quick 데이터셋 SPICE 새로고침 스케줄: 1시간 간격
     - _요구사항: 2.3, 2.4, 4.4, 4.7, 5.10_
 
-  - [ ]* 5.6 Property 5 속성 테스트 작성 — IAM 정책 최소 권한 검증
+  - [x]* 5.6 Property 5 속성 테스트 작성 — IAM 정책 최소 권한 검증
     - **Property 5: Quick 서비스 역할 최소 권한**
     - **검증: 요구사항 2.3, 2.4**
     - `tests/properties/quicksight_test.go`에 gopter 기반 테스트 추가
@@ -155,12 +155,12 @@ Global IAM → Network Layer → App Layer → Lambda 소스 → MCP Bridge → 
     - 모든 CloudWatch 로그 그룹 보존 기간: 90일
     - _요구사항: 5.11, 7.4, 10.1, 10.2, 10.3, 10.4, 10.5_
 
-  - [ ]* 5.9 Property 4 속성 테스트 작성 — 필수 태그 존재 검증
+  - [x]* 5.9 Property 4 속성 테스트 작성 — 필수 태그 존재 검증
     - **Property 4: Quick 리소스 필수 태그 존재**
     - **검증: 요구사항 1.6, 3.7, 9.6**
     - `tests/properties/quicksight_test.go`에 gopter 기반 테스트 추가
 
-  - [ ]* 5.10 Property 16 속성 테스트 작성 — CloudWatch 로그 보존 기간 검증
+  - [x]* 5.10 Property 16 속성 테스트 작성 — CloudWatch 로그 보존 기간 검증
     - **Property 16: Quick CloudWatch 로그 보존 기간**
     - **검증: 요구사항 10.5**
     - `tests/properties/quicksight_test.go`에 gopter 기반 테스트 추가
@@ -198,22 +198,22 @@ Global IAM → Network Layer → App Layer → Lambda 소스 → MCP Bridge → 
     - boto3, standard library only (Python 3.12)
     - _요구사항: 5.1_
 
-  - [ ]* 7.5 Property 9 속성 테스트 작성 — Lambda 응답 형식 변환 검증
+  - [x]* 7.5 Property 9 속성 테스트 작성 — Lambda 응답 형식 변환 검증
     - **Property 9: RAG Connector Lambda 응답 형식 변환**
     - **검증: 요구사항 5.2, 5.4**
     - `tests/properties/quicksight_lambda_test.go`에 gopter 기반 테스트 추가
 
-  - [ ]* 7.6 Property 10 속성 테스트 작성 — Lambda/MCP 에러 처리 검증
+  - [x]* 7.6 Property 10 속성 테스트 작성 — Lambda/MCP 에러 처리 검증
     - **Property 10: RAG Connector Lambda 에러 처리**
     - **검증: 요구사항 5.5, 6.5**
     - `tests/properties/quicksight_lambda_test.go`에 gopter 기반 테스트 추가
 
-  - [ ]* 7.7 Property 11 속성 테스트 작성 — 캐시 라운드트립 검증
+  - [x]* 7.7 Property 11 속성 테스트 작성 — 캐시 라운드트립 검증
     - **Property 11: RAG Connector Lambda 캐시 라운드트립**
     - **검증: 요구사항 5.9**
     - `tests/properties/quicksight_lambda_test.go`에 gopter 기반 테스트 추가
 
-  - [ ]* 7.8 Property 12 속성 테스트 작성 — 소스 코드 자격 증명 미포함 검증
+  - [x]* 7.8 Property 12 속성 테스트 작성 — 소스 코드 자격 증명 미포함 검증
     - **Property 12: Lambda 소스 코드 자격 증명 미포함**
     - **검증: 요구사항 5.6**
     - `tests/properties/quicksight_lambda_test.go`에 gopter 기반 테스트 추가
@@ -239,7 +239,7 @@ Global IAM → Network Layer → App Layer → Lambda 소스 → MCP Bridge → 
     - API 호출 실패 시 `isError: true` 에러 메시지 반환 및 콘솔 로그 기록
     - _요구사항: 6.2, 6.3, 6.4, 6.5_
 
-  - [ ]* 9.3 MCP Bridge Quick 도구 단위 테스트 작성 — `mcp-bridge/test/quicksight_tools_test.js`
+  - [x]* 9.3 MCP Bridge Quick 도구 단위 테스트 작성 — `mcp-bridge/test/quicksight_tools_test.js`
     - 도구 등록 확인, API 호출 모킹, 에러 처리 검증
     - _요구사항: 6.1, 6.2, 6.5_
 
@@ -256,7 +256,7 @@ Global IAM → Network Layer → App Layer → Lambda 소스 → MCP Bridge → 
     - Quick S3 버킷 퍼블릭 액세스 차단 비활성화 시 deny
     - _요구사항: 7.6_
 
-  - [ ]* 10.4 Property 8 속성 테스트 작성 — OPA 정책 위반 감지 검증
+  - [x]* 10.4 Property 8 속성 테스트 작성 — OPA 정책 위반 감지 검증
     - **Property 8: OPA 정책 보안 위반 감지**
     - **검증: 요구사항 4.9, 7.5, 7.6**
     - `tests/properties/quicksight_opa_test.go`에 gopter 기반 테스트 추가

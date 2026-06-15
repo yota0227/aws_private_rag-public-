@@ -229,16 +229,16 @@
   - [x] 40.1 BOS-AI-RAG VPC의 VPN Gateway 분리
   - [x] 40.2 VPN Gateway 삭제 (vgw-0461cd4d6a4463f67)
 
-- [ ] 41. BOS-AI-RAG VPC 삭제
-  - [ ] 41.1 서브넷 삭제
-  - [ ] 41.2 Security Group 삭제
-  - [ ] 41.3 Route Table 삭제
-  - [ ] 41.4 VPC 삭제 (vpc-0f759f00e5df658d1)
+- [x] 41. BOS-AI-RAG VPC 삭제
+  - [x] 41.1 서브넷 삭제
+  - [x] 41.2 Security Group 삭제
+  - [x] 41.3 Route Table 삭제
+  - [x] 41.4 VPC 삭제 (vpc-0f759f00e5df658d1)
 
-- [ ] 42. Terraform State 정리
-  - [ ] 42.1 삭제된 리소스 state 제거
-  - [ ] 42.2 State 파일 백업
-  - [ ] 42.3 State 일관성 확인
+- [x] 42. Terraform State 정리
+  - [x] 42.1 삭제된 리소스 state 제거
+  - [x] 42.2 State 파일 백업
+  - [x] 42.3 State 일관성 확인
 
 ## Phase 10: 모니터링 및 문서화
 

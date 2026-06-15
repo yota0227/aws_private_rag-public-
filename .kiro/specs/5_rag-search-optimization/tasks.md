@@ -17,7 +17,7 @@ BOS-AI Private RAG 시스템의 검색 품질을 Phase 1으로 개선한다. Lam
   - [x] 1.3 `lambda.tf` Lambda 환경 변수에 `SEARCH_TYPE`, `SEARCH_RESULTS_COUNT` 추가
     - `environment.variables` 블록에 `SEARCH_TYPE = var.search_type`, `SEARCH_RESULTS_COUNT = tostring(var.search_results_count)` 추가
     - _Requirements: 2.3_
-  - [ ]* 1.4 Property 2 테스트 작성: Terraform 검색 변수 정의
+  - [x]* 1.4 Property 2 테스트 작성: Terraform 검색 변수 정의
     - **Property 2: Terraform 검색 변수 정의**
     - **Validates: Requirements 2.1, 2.2, 2.3, 2.4**
     - `tests/properties/rag_search_optimization_test.go`에 작성
@@ -32,7 +32,7 @@ BOS-AI Private RAG 시스템의 검색 품질을 Phase 1으로 개선한다. Lam
     - `Content-Type: application/json`, UTF-8 인코딩으로 S3 저장
     - 메타데이터 키는 원본 S3 키 + `.metadata.json`
     - _Requirements: 3.1, 3.2, 3.3, 3.5, 3.6_
-  - [ ]* 2.2 Property 3 테스트 작성: 메타데이터 파일 구조 및 내용
+  - [x]* 2.2 Property 3 테스트 작성: 메타데이터 파일 구조 및 내용
     - **Property 3: 메타데이터 파일 구조 및 내용**
     - **Validates: Requirements 3.1, 3.2, 3.3, 3.4, 3.5**
     - 임의의 S3 키와 team/category 값에 대해 메타데이터 구조, 필드 존재, document_type 매핑, 빈 값 처리 검증
@@ -42,7 +42,7 @@ BOS-AI Private RAG 시스템의 검색 품질을 Phase 1으로 개선한다. Lam
     - 둘 다 → `{"andAll": [team필터, category필터]}`
     - 둘 다 없거나 빈 값 → `None`
     - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5_
-  - [ ]* 2.4 Property 4 테스트 작성: Bedrock 필터 구문 변환
+  - [x]* 2.4 Property 4 테스트 작성: Bedrock 필터 구문 변환
     - **Property 4: Bedrock 필터 구문 변환**
     - **Validates: Requirements 4.1, 4.2, 4.3, 4.4, 4.5**
     - 임의의 filter 객체에 대해 변환 규칙 정확성 검증
@@ -50,7 +50,7 @@ BOS-AI Private RAG 시스템의 검색 품질을 Phase 1으로 개선한다. Lam
     - `documents/{team}/{category}/{filename}` 형식에서 `(team, category)` 튜플 반환
     - 경로 깊이 3 미만이면 `('', '')` 반환
     - _Requirements: 8.2_
-  - [ ]* 2.6 Property 8 테스트 작성: S3 키 경로 team/category 파싱
+  - [x]* 2.6 Property 8 테스트 작성: S3 키 경로 team/category 파싱
     - **Property 8: S3 키 경로 team/category 파싱**
     - **Validates: Requirements 8.2**
     - 다양한 깊이의 S3 키에 대해 파싱 정확성 검증
@@ -64,7 +64,7 @@ BOS-AI Private RAG 시스템의 검색 품질을 Phase 1으로 개선한다. Lam
     - `vectorSearchConfiguration`에 `searchType`, `numberOfResults` 설정
     - `filter` 객체가 요청에 포함되면 `build_bedrock_filter()`로 변환하여 전달
     - _Requirements: 1.1, 1.2, 4.1_
-  - [ ]* 4.2 Property 1 테스트 작성: 검색 설정 구성
+  - [x]* 4.2 Property 1 테스트 작성: 검색 설정 구성
     - **Property 1: 검색 설정 구성 (Search Config Construction)**
     - **Validates: Requirements 1.1, 1.2**
     - 유효한 검색 유형과 결과 수에 대해 vectorSearchConfiguration 구성 정확성 검증
@@ -74,7 +74,7 @@ BOS-AI Private RAG 시스템의 검색 품질을 Phase 1으로 개선한다. Lam
     - `answer`, `citations`, `metadata` 필드 포함하는 응답 구조
     - 기존 응답 형식과 하위 호환성 유지
     - _Requirements: 1.3, 5.1, 5.2, 5.3, 5.4_
-  - [ ]* 4.4 Property 5 테스트 작성: 질의 응답 구조 완전성
+  - [x]* 4.4 Property 5 테스트 작성: 질의 응답 구조 완전성
     - **Property 5: 질의 응답 구조 완전성**
     - **Validates: Requirements 5.1, 5.2, 5.3, 5.4**
     - 성공적인 Bedrock 응답에 대해 응답 필드 존재 및 타입 검증
@@ -89,7 +89,7 @@ BOS-AI Private RAG 시스템의 검색 품질을 Phase 1으로 개선한다. Lam
     - 인용 0건 시 `no_citation_query` 경고 로그
     - 응답 시간 30초 초과 시 `slow_query` 경고 로그
     - _Requirements: 7.1, 7.2, 7.4_
-  - [ ]* 4.7 Property 7 테스트 작성: 구조화 로그 필드 완전성
+  - [x]* 4.7 Property 7 테스트 작성: 구조화 로그 필드 완전성
     - **Property 7: 구조화 로그 필드 완전성**
     - **Validates: Requirements 7.1**
     - 질의 처리 시 구조화 로그에 필수 필드가 모두 포함되는지 검증
@@ -130,7 +130,7 @@ BOS-AI Private RAG 시스템의 검색 품질을 Phase 1으로 개선한다. Lam
     - `event.get('action') == 'backfill_metadata'` 분기로 `backfill_metadata(event, context)` 호출
     - API Gateway 미경유, Lambda Event 비동기 호출 전용
     - _Requirements: 8.1_
-  - [ ]* 8.3 Property 9 테스트 작성: Backfill 페이지네이션 및 카운팅
+  - [x]* 8.3 Property 9 테스트 작성: Backfill 페이지네이션 및 카운팅
     - **Property 9: Backfill 페이지네이션 및 카운팅**
     - **Validates: Requirements 8.3, 8.6, 8.7**
     - `processed_count + skipped_count + error_count`가 실제 처리 수와 일치하고 500건 미초과 검증
@@ -149,7 +149,7 @@ BOS-AI Private RAG 시스템의 검색 품질을 Phase 1으로 개선한다. Lam
     - 둘 다 미제공 시 `filter` 객체 미포함
     - 응답의 references에 score 표시 추가
     - _Requirements: 6.1, 6.2, 6.3_
-  - [ ]* 10.2 Property 6 테스트 작성: MCP Bridge 필터 요청 구성
+  - [x]* 10.2 Property 6 테스트 작성: MCP Bridge 필터 요청 구성
     - **Property 6: MCP Bridge 필터 요청 구성**
     - **Validates: Requirements 6.2, 6.3**
     - 임의의 team/category 조합에 대해 filter 객체 포함/미포함 규칙 검증

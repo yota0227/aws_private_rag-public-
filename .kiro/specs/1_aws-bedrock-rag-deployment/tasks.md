@@ -251,7 +251,7 @@
     - Configure DNS resolution across regions
     - _Requirements: 9.5_
 
-  - [ ] 19.2 Write property test for Route53 configuration
+  - [x] 19.2 Write property test for Route53 configuration
     - **Property 35: Route53 DNS Configuration**
     - **Validates: Requirements 9.5**
 
