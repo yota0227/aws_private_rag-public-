@@ -1,7 +1,8 @@
 /**
- * BOS-AI RAG MCP SSE Bridge
+ * BOS-AI RAG MCP Bridge
  * 
- * Obot → localhost:3100 (MCP Streamable HTTP + SSE) → Seoul Private API Gateway → Lambda → Virginia Bedrock KB
+ * MCP Server → Lambda 직접 invoke → Qdrant/Neptune/Bedrock KB
+ * API Gateway 제거됨 (2026-05-29) — Lambda 직접 invoke로 전환
  */
 const express = require("express");
 const http = require("http");
@@ -13,10 +14,94 @@ const { SSEServerTransport } = require("@modelcontextprotocol/sdk/server/sse.js"
 
 const { z } = require("zod");
 
-const RAG_API_BASE = process.env.RAG_API_BASE || "https://r0qa9lzhgi.execute-api.ap-northeast-2.amazonaws.com/dev/rag";
 const PORT = process.env.PORT || 3100;
+const AWS_REGION = process.env.AWS_REGION || "ap-northeast-2";
+const LAMBDA_FUNCTION = process.env.LAMBDA_FUNCTION || "lambda-document-processor-seoul-prod";
+const RTL_LAMBDA_FUNCTION = process.env.RTL_LAMBDA_FUNCTION || "lambda-rtl-parser-seoul-dev";
 
+// AWS SDK Lambda client (lazy init)
+let _lambdaClient = null;
+function getLambdaClient() {
+  if (!_lambdaClient) {
+    const { LambdaClient } = require("@aws-sdk/client-lambda");
+    _lambdaClient = new LambdaClient({ region: AWS_REGION });
+  }
+  return _lambdaClient;
+}
+
+// RAG API base URL (fallback for environments without Lambda access)
+const RAG_API_BASE = process.env.RAG_API_BASE || "";
+
+/**
+ * Invoke Lambda directly (replaces API Gateway HTTP calls)
+ * Formats request as API Gateway event for document-processor Lambda
+ */
 function ragApi(method, path, body) {
+  // If RAG_API_BASE is set, use HTTP (legacy/fallback mode)
+  if (RAG_API_BASE) {
+    return ragApiHttp(method, path, body);
+  }
+
+  // Lambda direct invoke mode
+  const { InvokeCommand } = require("@aws-sdk/client-lambda");
+  const client = getLambdaClient();
+
+  // Determine which Lambda to invoke
+  // /search-rtl goes directly to rtl-parser Lambda
+  const isRtlSearch = path === "/search-rtl";
+  const functionName = isRtlSearch ? RTL_LAMBDA_FUNCTION : LAMBDA_FUNCTION;
+
+  let payload;
+  if (isRtlSearch) {
+    // RTL Parser Lambda expects {action: "search", query, ...}
+    payload = { action: "search", ...body };
+  } else {
+    // Document Processor Lambda expects API Gateway event format
+    payload = {
+      httpMethod: method,
+      path: "/rag" + path,
+      headers: { "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : null,
+      queryStringParameters: null,
+    };
+    // Handle GET with query params
+    if (method === "GET" && path.includes("?")) {
+      const [basePath, qs] = path.split("?");
+      payload.path = "/rag" + basePath;
+      const params = {};
+      qs.split("&").forEach(p => { const [k,v] = p.split("="); params[k] = decodeURIComponent(v); });
+      payload.queryStringParameters = params;
+    }
+  }
+
+  return client.send(new InvokeCommand({
+    FunctionName: functionName,
+    InvocationType: "RequestResponse",
+    Payload: Buffer.from(JSON.stringify(payload)),
+  })).then(response => {
+    const result = JSON.parse(Buffer.from(response.Payload).toString());
+
+    if (isRtlSearch) {
+      // RTL Parser returns results directly
+      return result;
+    }
+
+    // Document Processor returns API Gateway response format
+    if (result.statusCode && result.body) {
+      try { return JSON.parse(result.body); }
+      catch(e) { return { raw: result.body }; }
+    }
+    return result;
+  }).catch(err => {
+    console.error("[Lambda invoke error]", functionName, path, err.message);
+    return { error: "Lambda invoke failed: " + err.message };
+  });
+}
+
+/**
+ * HTTP fallback (for environments without Lambda access, e.g. on-prem server02)
+ */
+function ragApiHttp(method, path, body) {
   return new Promise((resolve, reject) => {
     const url = new URL(RAG_API_BASE + path);
     const options = {
@@ -47,7 +132,7 @@ function createMcpServer() {
 
   mcp.tool(
     "rag_query",
-    "BOS-AI RAG 지식 베이스에 질의합니다. 문서 내용 검색, 키워드 검색, 기술 질문 등 모든 지식 검색은 이 툴을 사용하세요. 파일명을 몰라도 됩니다 — 키워드나 자연어로 질의하면 관련 문서를 찾아 답변합니다. 업로드된 SoC 코드, 스펙 문서, 주간 보고서 등을 검색합니다.",
+    "업로드된 문서(스펙 PDF, 설계 문서, 주간 보고서 등)를 자연어로 질의해 답변을 생성합니다. ⚠️ RTL/SoC 설계 데이터 전용이 아닙니다 — 모듈·포트·신호·인스턴스·레지스터·계층구조 등 RTL 관련 질문은 반드시 search_rtl을 사용하세요(이 툴은 RTL 데이터를 검색하지 못해 '근거 없음'으로 답할 수 있습니다). 문서가 아직 많이 등록되지 않은 경우 결과가 없을 수 있습니다.",
     { query: z.string().describe("질의 내용 (한국어/영어 모두 가능)") },
     async (args, extra) => {
       try {
@@ -248,7 +333,7 @@ function createMcpServer() {
 
   mcp.tool(
     "search_rtl",
-    "RTL 및 SoC 설계 데이터를 검색합니다. 모듈명, 포트, 인스턴스, 토픽 등으로 검색 가능합니다. RTL 코드뿐 아니라 firmware 헤더, 레지스터맵(SVD/JSON), 설계 문서(MD/RST), timing constraint(SDC), device tree(DTS), filelist hierarchy 등도 검색됩니다.",
+    "🔧 RTL/SoC 설계 데이터 검색 (1순위 도구). 모듈명·포트·신호·인스턴스·레지스터맵·계층구조·토픽 등 RTL 관련 질문은 이 툴을 가장 먼저 사용하세요. 예: 'tt_noc_router 포트 정리', '특정 모듈의 입출력 신호', '인스턴스 바인딩'. RTL 코드(.v/.sv/.vhd)뿐 아니라 firmware 헤더, 레지스터맵(SVD/JSON), 설계 문서(MD/RST), timing constraint(SDC), device tree(DTS), filelist hierarchy도 검색됩니다. (업로드 문서/스펙 PDF 검색은 rag_query 사용)",
     {
       query: z.string().describe("검색어 (모듈명, 신호명, 레지스터명, 키워드 등)"),
       pipeline_id: z.string().optional().describe("파이프라인 ID 필터 (예: tt_20260221, tt_20260516). 생략 시 전체 검색"),
@@ -260,11 +345,11 @@ function createMcpServer() {
       try {
         const requestedMax = args.max_results || 50;
         console.log("[TOOL] search_rtl: query=" + args.query + " pipeline_id=" + (args.pipeline_id||"all") + " topic=" + (args.topic||"all") + " max=" + requestedMax);
-        const body = { query: args.query, source: "rtl_parsed", max_results: Math.min(requestedMax * 3, 200) };
+        const body = { query: args.query, max_results: Math.min(requestedMax * 3, 200) };
         if (args.pipeline_id) body.pipeline_id = args.pipeline_id;
         if (args.topic) body.topic = args.topic;
 
-        const resp = await ragApi("POST", "/search-archive", body);
+        const resp = await ragApi("POST", "/search-rtl", body);
         const execution_time_ms = Date.now() - startTime;
         if (resp.error) return { content: [{ type: "text", text: "오류: " + resp.error }], isError: true };
 

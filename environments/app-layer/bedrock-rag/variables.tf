@@ -33,9 +33,9 @@ variable "embedding_model_arn" {
 }
 
 variable "foundation_model_arn" {
-  description = "ARN of foundation model for generation (Claude 3.5 Haiku via US inference profile)"
+  description = "Inference profile ID of foundation model for RetrieveAndGenerate (Claude Haiku 4.5, US cross-region profile). NOTE: claude-3-5-haiku-20241022 was deactivated as Legacy (30-day inactivity); use an ACTIVE inference profile. RetrieveAndGenerate requires an inference profile, not a raw on-demand foundation-model ARN."
   type        = string
-  default     = "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-5-haiku-20241022-v1:0"
+  default     = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 }
 
 # OpenSearch Configuration
