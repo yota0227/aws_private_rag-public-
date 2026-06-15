@@ -9,7 +9,7 @@ resource "aws_security_group" "lambda" {
 
   name        = "lambda-private-rag-${var.environment}"
   description = "Lambda document processor - Private RAG VPC (Seoul Frontend)"
-  vpc_id      = local.frontend_vpc_id  # Private RAG VPC (10.10.0.0/16)
+  vpc_id      = local.frontend_vpc_id # Private RAG VPC (10.10.0.0/16)
 
   # No inbound rules needed for Lambda
 
@@ -106,6 +106,10 @@ resource "aws_iam_role_policy" "lambda_s3" {
 }
 
 # IAM Policy for Lambda - OpenSearch Access (Cross-Region: us-east-1)
+# [Req 19.4 — KEEP] 본 AOSS 접근은 document-processor(lambda-document-processor-seoul-prod)가
+# 일반 문서 RAG 인덱스(bos-ai-vectors / "bos-ai-documents")에 적재·검색하기 위한 것이다.
+# 이는 rag_query(Bedrock KB 계열) 경로이며 RTL 검색(rtl-parser-lambda → Qdrant)과 무관하다.
+# v9.5 RTL Qdrant 단일화 범위에서 제외하고 유지한다 (제거 시 문서 RAG가 깨짐).
 resource "aws_iam_role_policy" "lambda_opensearch" {
   name = "lambda-opensearch-access"
   role = aws_iam_role.lambda.id
@@ -379,29 +383,29 @@ resource "aws_lambda_function" "document_processor" {
 
   # VPC Configuration - Private RAG VPC (Seoul Frontend)
   vpc_config {
-    subnet_ids         = local.frontend_private_subnet_ids  # 10.10.1.0/24, 10.10.2.0/24
+    subnet_ids         = local.frontend_private_subnet_ids # 10.10.1.0/24, 10.10.2.0/24
     security_group_ids = [aws_security_group.lambda.id]
   }
 
   # Environment Variables
   environment {
     variables = {
-      OPENSEARCH_ENDPOINT  = data.aws_opensearchserverless_collection.virginia.collection_endpoint
-      OPENSEARCH_INDEX     = "bos-ai-documents"
-      BEDROCK_MODEL_ID     = "amazon.titan-embed-text-v1"
-      BEDROCK_REGION       = "us-east-1"
-      S3_BUCKET_VIRGINIA   = "bos-ai-documents-us"
-      S3_BUCKET_SEOUL      = "bos-ai-documents-seoul-v3"
-      SECRET_NAME          = "opensearch/bos-ai-rag-prod"
-      LAMBDA_REGION        = "ap-northeast-2"
-      BACKEND_REGION       = "us-east-1"
-      BEDROCK_KB_ID            = module.bedrock_rag.knowledge_base_id
+      OPENSEARCH_ENDPOINT       = data.aws_opensearchserverless_collection.virginia.collection_endpoint
+      OPENSEARCH_INDEX          = "bos-ai-documents"
+      BEDROCK_MODEL_ID          = "amazon.titan-embed-text-v1"
+      BEDROCK_REGION            = "us-east-1"
+      S3_BUCKET_VIRGINIA        = "bos-ai-documents-us"
+      S3_BUCKET_SEOUL           = "bos-ai-documents-seoul-v3"
+      SECRET_NAME               = "opensearch/bos-ai-rag-prod"
+      LAMBDA_REGION             = "ap-northeast-2"
+      BACKEND_REGION            = "us-east-1"
+      BEDROCK_KB_ID             = module.bedrock_rag.knowledge_base_id
       BEDROCK_KB_DATA_SOURCE_ID = var.bedrock_kb_data_source_id
-      FOUNDATION_MODEL_ARN     = var.foundation_model_arn
-      DYNAMODB_TABLE           = aws_dynamodb_table.extraction_tasks.name
-      CLAIM_DB_TABLE           = aws_dynamodb_table.claim_db.name
-      SEARCH_TYPE              = var.search_type
-      SEARCH_RESULTS_COUNT     = tostring(var.search_results_count)
+      FOUNDATION_MODEL_ARN      = var.foundation_model_arn
+      DYNAMODB_TABLE            = aws_dynamodb_table.extraction_tasks.name
+      CLAIM_DB_TABLE            = aws_dynamodb_table.claim_db.name
+      SEARCH_TYPE               = var.search_type
+      SEARCH_RESULTS_COUNT      = tostring(var.search_results_count)
     }
   }
 

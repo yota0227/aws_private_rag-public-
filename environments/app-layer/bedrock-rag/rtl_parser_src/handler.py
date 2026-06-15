@@ -47,8 +47,14 @@ DYNAMODB_EXTRACTION_TABLE = os.environ.get("DYNAMODB_EXTRACTION_TABLE", "rag-ext
 CLAIM_DB_TABLE = os.environ.get("CLAIM_DB_TABLE", "")
 BEDROCK_REGION = os.environ.get("BEDROCK_REGION", "us-east-1")
 NEPTUNE_ENDPOINT = os.environ.get("NEPTUNE_ENDPOINT", "")
+# Neptune은 Virginia(us-east-1)에 위치. Lambda는 Seoul에서 실행되므로
+# SigV4 서명 region을 Neptune 리전으로 명시해야 IAM DB 인증이 통과한다.
+NEPTUNE_REGION = os.environ.get("NEPTUNE_REGION", "us-east-1")
 TITAN_MODEL_ID = "amazon.titan-embed-text-v2:0"
-MAX_TOKENS = 8000
+# Titan Embeddings v2 한도는 8192 토큰. tiktoken(cl100k_base)과 Titan 토크나이저가
+# 달라 tiktoken 기준 8000이 Titan 기준 ~9789로 초과될 수 있다(RTL 특수문자 많음).
+# 안전 마진을 두어 6000으로 설정(Titan 기준 ~7300, 8192 이내).
+MAX_TOKENS = 6000
 
 # 파서별 Feature Flag 환경 변수 이름 (Requirements 26.1, 26.2)
 # 기본값 모두 "true" — 모든 파서가 기본 활성화
@@ -88,8 +94,68 @@ PARSER_SIGNAL_PATH_ENABLED = _is_parser_enabled("PARSER_SIGNAL_PATH_ENABLED")
 
 # AWS 클라이언트
 s3_client = boto3.client("s3")
-dynamodb = boto3.resource("dynamodb")
+# DynamoDB resource — connect/read timeout 명시 (timeout 없으면 VPC endpoint 응답 hang 시 함수 전체가 대기)
+from botocore.config import Config as _BotoConfig
+_ddb_config = _BotoConfig(
+    connect_timeout=5,
+    read_timeout=5,
+    retries={"max_attempts": 1},
+)
+dynamodb = boto3.resource("dynamodb", region_name="ap-northeast-2", config=_ddb_config)
 bedrock_runtime = boto3.client("bedrock-runtime", region_name=BEDROCK_REGION)
+
+# Neptune neptunedata 클라이언트 캐시 (SigV4 서명 자동 처리)
+_neptune_client = None
+
+
+def _get_neptune_client():
+    """Neptune neptunedata 클라이언트를 lazy 생성하여 재사용한다.
+
+    boto3 neptunedata 클라이언트는 SigV4 서명을 자동 처리하므로
+    수동 AWS4Auth 서명(서명 불일치 403 문제)을 피할 수 있다.
+    Neptune은 Virginia(us-east-1)에 위치하므로 region/endpoint를 명시한다.
+    """
+    global _neptune_client
+    if _neptune_client is None and NEPTUNE_ENDPOINT:
+        from botocore.config import Config
+        cfg = Config(
+            connect_timeout=5,
+            read_timeout=20,
+            retries={"total_max_attempts": 1, "mode": "standard"},
+        )
+        _neptune_client = boto3.client(
+            "neptunedata",
+            region_name=NEPTUNE_REGION,
+            endpoint_url=f"https://{NEPTUNE_ENDPOINT}:8182",
+            config=cfg,
+        )
+    return _neptune_client
+
+
+def _init_qdrant_api_key():
+    """Secrets Manager에서 Qdrant API 키를 읽어 qdrant_client 모듈에 주입.
+
+    qdrant_client는 QDRANT_API_KEY 환경변수를 읽지만, 운영 환경에서는
+    키를 Secrets Manager(QDRANT_API_KEY_SECRET_ARN)에 보관하므로
+    cold start 시 1회 로드하여 모듈 전역에 주입한다.
+    누락 시 api-key 헤더가 빠져 Qdrant가 401 Unauthorized를 반환한다.
+    """
+    secret_arn = os.environ.get("QDRANT_API_KEY_SECRET_ARN", "")
+    if not secret_arn:
+        return
+    try:
+        sm = boto3.client("secretsmanager", region_name="ap-northeast-2")
+        resp = sm.get_secret_value(SecretId=secret_arn)
+        api_key = resp.get("SecretString", "")
+        if api_key:
+            import qdrant_client as _qc
+            _qc.QDRANT_API_KEY = api_key
+            logger.info(json.dumps({"event": "qdrant_api_key_loaded"}))
+    except Exception as e:
+        logger.error(json.dumps({"event": "qdrant_api_key_load_error", "error": str(e)}))
+
+
+_init_qdrant_api_key()
 
 
 # ---------------------------------------------------------------------------
@@ -420,6 +486,9 @@ def _search_rtl(event):
     results = result.get("results", [])
     total_hits = result.get("total_hits", 0)
 
+    # Req 18: used_in_n1 boost (dedup 이전 적용 → 중복 중 N1 버전 우선 채택)
+    results = _apply_used_in_n1_boost(results)
+
     # v9: Dedup
     results = _dedup_search_results(results, max_results)
 
@@ -434,6 +503,26 @@ def _search_rtl(event):
 # ---------------------------------------------------------------------------
 # 검색 결과 중복 제거 (v9 dedup)
 # ---------------------------------------------------------------------------
+
+def _apply_used_in_n1_boost(results):
+    """Req 18: used_in_n1=true 후보 score에 USED_IN_N1_BOOST 곱연산 후 재정렬.
+
+    기존 query-type boost(qdrant score)와 곱연산으로 합성한다 (Req 18.5).
+    동점 시 used_in_n1=true 후보를 우선한다 (Req 18.4).
+    boost가 1.0이면 점수 변화 없음(no-op), 정렬만 안정화.
+    """
+    if not results:
+        return results
+    for r in results:
+        if r.get("used_in_n1"):
+            r["score"] = r.get("score", 0) * USED_IN_N1_BOOST
+    # boosted score 내림차순, 동점이면 used_in_n1=true 우선
+    results.sort(
+        key=lambda r: (r.get("score", 0), 1 if r.get("used_in_n1") else 0),
+        reverse=True,
+    )
+    return results
+
 
 def _dedup_search_results(results, max_results):
     """Remove duplicate search results based on content fingerprint.
@@ -552,7 +641,10 @@ def _publish_parser_metric(metric_name, value, unit, parser_name, cloudwatch=Non
 # ---------------------------------------------------------------------------
 
 EMBED_CONCURRENCY = 5  # Bedrock Titan TPS 한도 내 병렬 호출 수
-QDRANT_BATCH_SIZE = 50  # Qdrant batch upsert 크기
+QDRANT_BATCH_SIZE = 15  # Qdrant batch upsert 크기 (1024-dim 벡터 다수 시 payload 과대로 broken pipe 발생 → 15로 제한)
+
+# Req 18.3: used_in_n1(N1 빌드 부분집합) 검색 boost 배수 (기본 2.0)
+USED_IN_N1_BOOST = float(os.environ.get("USED_IN_N1_BOOST", "2.0"))
 
 
 def _batch_embed_and_index(items: list):
@@ -665,7 +757,7 @@ def _process_text_file(bucket: str, key: str):
         summary = chunk
         embedding = _generate_embedding(truncate_to_tokens(summary, MAX_TOKENS))
         if embedding:
-            _index_to_opensearch(metadata, embedding)
+            _index_to_qdrant(metadata, embedding)
 
     _flush_index_buffer()
 
@@ -775,7 +867,7 @@ def _process_filelist(bucket: str, key: str):
 
     embedding = _generate_embedding(truncate_to_tokens(hierarchy_text, MAX_TOKENS))
     if embedding:
-        _index_to_opensearch(metadata, embedding)
+        _index_to_qdrant(metadata, embedding)
 
     # 개별 디렉토리별 claim도 생성 (검색 가능하도록)
     for parent_dir, modules in hierarchy_tree.items():
@@ -796,7 +888,7 @@ def _process_filelist(bucket: str, key: str):
             }
             dir_embedding = _generate_embedding(truncate_to_tokens(claim_text, MAX_TOKENS))
             if dir_embedding:
-                _index_to_opensearch(dir_metadata, dir_embedding)
+                _index_to_qdrant(dir_metadata, dir_embedding)
 
     _flush_index_buffer()
 
@@ -854,7 +946,7 @@ def _process_rtl_file(bucket: str, key: str):
     # 임베딩 생성 및 OpenSearch 인덱싱
     summary = generate_parsed_summary(metadata)
     truncated = truncate_to_tokens(summary, MAX_TOKENS)
-    _index_to_opensearch(metadata, truncated)
+    _index_to_qdrant(metadata, truncated)
 
     # Neptune Graph DB 관계 적재 (Phase 6)
     _load_to_neptune(metadata)
@@ -874,7 +966,7 @@ def _process_rtl_file(bucket: str, key: str):
                 claim.setdefault("parser_source", "package_extractor")
                 claim_summary = claim.get("claim_text", "")
                 claim_truncated = truncate_to_tokens(claim_summary, MAX_TOKENS)
-                _index_to_opensearch(claim, claim_truncated)
+                _index_to_qdrant(claim, claim_truncated)
             logger.info(json.dumps({
                 "event": "parser_execution_result",
                 "parser_name": "package_extractor",
@@ -901,7 +993,7 @@ def _process_rtl_file(bucket: str, key: str):
                     claim.setdefault("parser_source", "package_extractor")
                     claim_summary = claim.get("claim_text", "")
                     claim_truncated = truncate_to_tokens(claim_summary, MAX_TOKENS)
-                    _index_to_opensearch(claim, claim_truncated)
+                    _index_to_qdrant(claim, claim_truncated)
                 if mod_param_claims:
                     logger.info(json.dumps({
                         "event": "parser_execution_result",
@@ -936,7 +1028,7 @@ def _process_rtl_file(bucket: str, key: str):
                 claim.setdefault("parser_source", "port_classifier")
                 claim_summary = claim.get("claim_text", "")
                 claim_truncated = truncate_to_tokens(claim_summary, MAX_TOKENS)
-                _index_to_opensearch(claim, claim_truncated)
+                _index_to_qdrant(claim, claim_truncated)
             if port_claims:
                 logger.info(json.dumps({
                     "event": "parser_execution_result",
@@ -971,7 +1063,7 @@ def _process_rtl_file(bucket: str, key: str):
             claim.setdefault("parser_source", "generate_block_parser")
             claim_summary = claim.get("claim_text", "")
             claim_truncated = truncate_to_tokens(claim_summary, MAX_TOKENS)
-            _index_to_opensearch(claim, claim_truncated)
+            _index_to_qdrant(claim, claim_truncated)
         if gen_claims:
             logger.info(json.dumps({
                 "event": "parser_execution_result",
@@ -999,7 +1091,7 @@ def _process_rtl_file(bucket: str, key: str):
             claim.setdefault("parser_source", "always_block_parser")
             claim_summary = claim.get("claim_text", "")
             claim_truncated = truncate_to_tokens(claim_summary, MAX_TOKENS)
-            _index_to_opensearch(claim, claim_truncated)
+            _index_to_qdrant(claim, claim_truncated)
         if always_claims:
             logger.info(json.dumps({
                 "event": "parser_execution_result",
@@ -1055,7 +1147,7 @@ def _process_rtl_file(bucket: str, key: str):
             claim.setdefault("parser_source", "wire_declaration_parser")
             claim_summary = claim.get("claim_text", "")
             claim_truncated = truncate_to_tokens(claim_summary, MAX_TOKENS)
-            _index_to_opensearch(claim, claim_truncated)
+            _index_to_qdrant(claim, claim_truncated)
         if wire_claims:
             logger.info(json.dumps({
                 "event": "parser_execution_result",
@@ -1089,7 +1181,7 @@ def _process_rtl_file(bucket: str, key: str):
             claim.setdefault("parser_source", "port_binding_parser")
             claim_summary = claim.get("claim_text", "")
             claim_truncated = truncate_to_tokens(claim_summary, MAX_TOKENS)
-            _index_to_opensearch(claim, claim_truncated)
+            _index_to_qdrant(claim, claim_truncated)
 
         # Neptune CONNECTS_TO 엣지 적재
         _load_port_bindings_to_neptune(raw_bindings, module_name)
@@ -1124,7 +1216,7 @@ def _process_rtl_file(bucket: str, key: str):
             claim.setdefault("parser_source", "dfx_auto_extractor")
             claim_summary = claim.get("claim_text", "")
             claim_truncated = truncate_to_tokens(claim_summary, MAX_TOKENS)
-            _index_to_opensearch(claim, claim_truncated)
+            _index_to_qdrant(claim, claim_truncated)
         if dfx_claims:
             logger.info(json.dumps({
                 "event": "parser_execution_result",
@@ -1156,7 +1248,7 @@ def _process_rtl_file(bucket: str, key: str):
                 f"[{edge.get('category', 'general')}]"
             )
             edge_truncated = truncate_to_tokens(edge_summary, MAX_TOKENS)
-            _index_to_opensearch(edge, edge_truncated)
+            _index_to_qdrant(edge, edge_truncated)
         if sp_edges:
             logger.info(json.dumps({
                 "event": "parser_execution_result",
@@ -1179,7 +1271,7 @@ def _process_rtl_file(bucket: str, key: str):
         for sub_record in sub_records:
             sub_summary = sub_record.get("parsed_summary", "")
             sub_truncated = truncate_to_tokens(sub_summary, MAX_TOKENS)
-            _index_to_opensearch(sub_record, sub_truncated)
+            _index_to_qdrant(sub_record, sub_truncated)
         if sub_records:
             logger.info(json.dumps({
                 "event": "sub_records_indexed",
@@ -1472,20 +1564,41 @@ def truncate_to_tokens(text: str, max_tokens: int = MAX_TOKENS) -> str:
 # ---------------------------------------------------------------------------
 
 def _generate_embedding(text: str) -> Optional[list]:
-    """Titan Embeddings v2로 벡터 임베딩 생성 (1024 dim)."""
-    try:
-        body = json.dumps({"inputText": text, "dimensions": 1024, "normalize": True})
-        response = bedrock_runtime.invoke_model(
-            modelId=TITAN_MODEL_ID,
-            body=body,
-            contentType="application/json",
-            accept="application/json",
-        )
-        result = json.loads(response["body"].read())
-        return result.get("embedding")
-    except Exception as e:
-        logger.error(json.dumps({"event": "embedding_error", "error": str(e)}))
-        return None
+    """Titan Embeddings v2로 벡터 임베딩 생성 (1024 dim).
+
+    Titan 토크나이저와 tiktoken이 달라 truncate 후에도 8192 토큰을 초과할 수 있다.
+    ValidationException(too many tokens) 발생 시 절반으로 줄여 재시도한다.
+    """
+    attempt_text = text
+    for _attempt in range(3):
+        try:
+            body = json.dumps({"inputText": attempt_text, "dimensions": 1024, "normalize": True})
+            response = bedrock_runtime.invoke_model(
+                modelId=TITAN_MODEL_ID,
+                body=body,
+                contentType="application/json",
+                accept="application/json",
+            )
+            result = json.loads(response["body"].read())
+            return result.get("embedding")
+        except Exception as e:
+            err = str(e)
+            # 토큰 초과 시 입력을 줄여 재시도 (토크나이저 불일치 흡수)
+            if "Too many input tokens" in err or "ValidationException" in err:
+                new_len = int(len(attempt_text) * 0.7)
+                if new_len < 100:
+                    logger.error(json.dumps({"event": "embedding_error", "error": err, "final": True}))
+                    return None
+                logger.warning(json.dumps({
+                    "event": "embedding_retry_truncate",
+                    "old_chars": len(attempt_text),
+                    "new_chars": new_len,
+                }))
+                attempt_text = attempt_text[:new_len]
+                continue
+            logger.error(json.dumps({"event": "embedding_error", "error": err}))
+            return None
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1496,7 +1609,15 @@ def _generate_embedding(text: str) -> Optional[list]:
 _INDEX_BUFFER = []  # List of (metadata, embed_text) — embedding은 flush에서 병렬 생성
 
 
-def _index_to_opensearch(metadata: dict, embedding_or_text):
+def _is_used_in_n1(s3_key: str) -> bool:
+    """Req 18: S3 키에 '/used_in_n1/' 세그먼트 포함 여부로 N1 부분집합 판정.
+
+    filelist 경로가 S3 키에 1:1 보존되므로 basename 매칭 불필요.
+    """
+    return "/used_in_n1/" in (s3_key or "")
+
+
+def _index_to_qdrant(metadata: dict, embedding_or_text):
     """문서를 buffer에 추가. flush에서 병렬 임베딩 + 배치 인덱싱.
 
     Args:
@@ -1508,6 +1629,9 @@ def _index_to_opensearch(metadata: dict, embedding_or_text):
     """
     if embedding_or_text is None:
         return
+    # Req 18: 모든 인덱싱 레코드에 used_in_n1 태깅 (단일 chokepoint, ALL records 보장)
+    if "used_in_n1" not in metadata:
+        metadata["used_in_n1"] = _is_used_in_n1(metadata.get("file_path", ""))
     _INDEX_BUFFER.append((metadata, embedding_or_text))
 
 
@@ -1579,6 +1703,7 @@ def _flush_index_buffer():
                 "dst": metadata.get("dst", ""),
                 "category": metadata.get("category", ""),
                 "raw_text": metadata.get("raw_text", ""),
+                "used_in_n1": bool(metadata.get("used_in_n1", False)),
             }
             points_batch.append((payload, emb))
         if points_batch:
@@ -1593,6 +1718,7 @@ def _flush_index_buffer():
         "total_items": len(_INDEX_BUFFER),
         "indexed": indexed_total,
         "parallel_embeds": len(items_to_embed),
+        "used_in_n1_count": sum(1 for m, _ in _INDEX_BUFFER if m.get("used_in_n1")),
     }))
     _INDEX_BUFFER.clear()
 
@@ -1606,20 +1732,25 @@ def _store_claim_to_dynamodb(metadata: dict):
     if not CLAIM_DB_TABLE:
         return
 
+    # 임시 진단: 매 호출의 metadata 키와 claim_text 길이를 로깅 (DynamoDB 0건 이슈 추적)
+    logger.info(json.dumps({
+        "event": "claim_db_attempt",
+        "keys": sorted(list(metadata.keys()))[:15],
+        "claim_text_len": len(metadata.get("claim_text", "")),
+        "analysis_type": metadata.get("analysis_type", ""),
+        "parser_source": metadata.get("parser_source", ""),
+    }))
+
     # claim 필드가 없으면 저장하지 않음 (module_parse 레코드는 제외)
     claim_text = metadata.get("claim_text", "")
     if not claim_text:
         return
 
     try:
-        from datetime import datetime, timezone
-        from botocore.config import Config
         import uuid
 
-        # DynamoDB VPC endpoint 미설정 환경 대비: 짧은 timeout (graceful degradation)
-        ddb_config = Config(connect_timeout=3, read_timeout=5, retries={'max_attempts': 0})
-        ddb_resource = boto3.resource('dynamodb', region_name='ap-northeast-2', config=ddb_config)
-        table = ddb_resource.Table(CLAIM_DB_TABLE)
+        # 모듈 레벨 dynamodb resource 재사용 (warm Lambda에서 TCP 연결 재사용)
+        table = dynamodb.Table(CLAIM_DB_TABLE)
         now = datetime.now(timezone.utc).isoformat()
 
         claim_id = metadata.get("claim_id") or str(uuid.uuid4())
@@ -1644,6 +1775,12 @@ def _store_claim_to_dynamodb(metadata: dict):
         }
 
         table.put_item(Item=item)
+        logger.info(json.dumps({
+            "event": "claim_db_write_ok",
+            "claim_id": claim_id,
+            "pipeline_id": item.get("pipeline_id", ""),
+            "table": CLAIM_DB_TABLE,
+        }))
     except Exception as e:
         logger.warning(json.dumps({
             "event": "claim_db_write_error",
@@ -1655,6 +1792,64 @@ def _store_claim_to_dynamodb(metadata: dict):
 # ---------------------------------------------------------------------------
 # Neptune Graph DB 관계 적재
 # ---------------------------------------------------------------------------
+
+def _execute_neptune_queries(queries: list, context_label: str, module_name: str):
+    """Neptune openCypher 쿼리 배치를 boto3 neptunedata 클라이언트로 실행한다.
+
+    - boto3 neptunedata 클라이언트가 SigV4 서명을 자동 처리한다 (서명 불일치 403 방지).
+    - 연속 실패가 임계치를 넘으면 (인증/네트워크 전면 장애로 판단) 조기 중단하여
+      Lambda timeout(300초) 낭비를 방지한다.
+
+    Args:
+        queries: [{"query": "...", "parameters": {...}}, ...] 형식의 openCypher 쿼리 목록
+        context_label: 로깅용 컨텍스트 (module_load / port_binding_load)
+        module_name: 로깅용 모듈명
+
+    Returns:
+        (success_count, fail_count)
+    """
+    client = _get_neptune_client()
+    if client is None:
+        return 0, 0
+
+    success_count = 0
+    fail_count = 0
+    consecutive_fail = 0
+    MAX_CONSECUTIVE_FAIL = 5
+
+    for q in queries:
+        try:
+            cypher = q.get("query", "")
+            params = q.get("parameters", {})
+            # neptunedata는 parameters를 JSON 문자열로 받는다
+            kwargs = {"openCypherQuery": cypher}
+            if params:
+                kwargs["parameters"] = json.dumps(params)
+            client.execute_open_cypher_query(**kwargs)
+            success_count += 1
+            consecutive_fail = 0
+        except Exception as qe:
+            fail_count += 1
+            consecutive_fail += 1
+            if consecutive_fail <= 2:
+                logger.warning(json.dumps({
+                    "event": "neptune_query_error",
+                    "context": context_label,
+                    "query": q.get("query", "")[:120],
+                    "error": str(qe)[:300],
+                }))
+            if consecutive_fail >= MAX_CONSECUTIVE_FAIL:
+                logger.error(json.dumps({
+                    "event": "neptune_load_aborted",
+                    "context": context_label,
+                    "module_name": module_name,
+                    "reason": f"{MAX_CONSECUTIVE_FAIL} consecutive failures",
+                    "queries_attempted": success_count + fail_count,
+                }))
+                break
+
+    return success_count, fail_count
+
 
 def _load_to_neptune(metadata: dict):
     """파싱된 메타데이터에서 관계를 추출하여 Neptune Graph DB에 노드/엣지로 적재.
@@ -1671,21 +1866,6 @@ def _load_to_neptune(metadata: dict):
         return
 
     try:
-        import requests
-        from requests_aws4auth import AWS4Auth
-
-        session = boto3.Session()
-        credentials = session.get_credentials().get_frozen_credentials()
-        region = session.region_name or "ap-northeast-2"
-        auth = AWS4Auth(
-            credentials.access_key,
-            credentials.secret_key,
-            region,
-            "neptune-db",
-            session_token=credentials.token,
-        )
-
-        neptune_url = f"https://{NEPTUNE_ENDPOINT}:8182/openCypher"
         module_name = metadata.get("module_name", "")
         file_path = metadata.get("file_path", "")
 
@@ -1693,7 +1873,8 @@ def _load_to_neptune(metadata: dict):
             logger.warning("module_name이 비어있어 Neptune 적재를 건너뜁니다")
             return
 
-        # openCypher 쿼리 배치 구성
+        # openCypher 쿼리 배치 구성 — UNWIND로 묶어 Neptune 왕복 최소화.
+        # (모듈당 수십 개 개별 쿼리를 최대 4개로 축소하여 단일 Neptune 인스턴스 과부하 방지)
         queries = []
 
         # (a) Module 노드 생성 (MERGE로 중복 방지)
@@ -1705,7 +1886,8 @@ def _load_to_neptune(metadata: dict):
             "parameters": {"name": module_name, "file_path": file_path},
         })
 
-        # (b) Port 노드 + HAS_PORT 엣지 생성
+        # (b) Port 노드 + HAS_PORT 엣지 — UNWIND 배치
+        port_rows = []
         for port_entry in metadata.get("port_list", []):
             # port_entry 형식: "direction name" (예: "input clk")
             parts = port_entry.split(None, 1)
@@ -1713,81 +1895,70 @@ def _load_to_neptune(metadata: dict):
                 direction, port_name = parts
             else:
                 direction, port_name = "", port_entry
+            port_rows.append({"port_name": port_name, "direction": direction})
+        if port_rows:
             queries.append({
                 "query": (
                     "MERGE (m:Module {name: $module_name}) "
-                    "MERGE (p:Port {name: $port_name, module: $module_name}) "
-                    "SET p.direction = $direction "
+                    "WITH m UNWIND $rows AS row "
+                    "MERGE (p:Port {name: row.port_name, module: $module_name}) "
+                    "SET p.direction = row.direction "
                     "MERGE (m)-[:HAS_PORT]->(p)"
                 ),
-                "parameters": {
-                    "module_name": module_name,
-                    "port_name": port_name,
-                    "direction": direction,
-                },
+                "parameters": {"module_name": module_name, "rows": port_rows},
             })
 
-        # (c) Parameter 노드 + PROPAGATES_TO 엣지 준비
+        # (c) Parameter 노드 + HAS_PORT 엣지 — UNWIND 배치
+        param_rows = []
         for param_entry in metadata.get("parameter_list", []):
             # param_entry 형식: "NAME=VALUE" (예: "DATA_WIDTH=32")
             if "=" in param_entry:
                 param_name, default_value = param_entry.split("=", 1)
             else:
                 param_name, default_value = param_entry, ""
+            param_rows.append({
+                "param_name": param_name.strip(),
+                "default_value": default_value.strip(),
+            })
+        if param_rows:
             queries.append({
                 "query": (
                     "MERGE (m:Module {name: $module_name}) "
-                    "MERGE (p:Parameter {name: $param_name, module: $module_name}) "
-                    "SET p.default_value = $default_value "
+                    "WITH m UNWIND $rows AS row "
+                    "MERGE (p:Parameter {name: row.param_name, module: $module_name}) "
+                    "SET p.default_value = row.default_value "
                     "MERGE (m)-[:HAS_PORT]->(p)"
                 ),
-                "parameters": {
-                    "module_name": module_name,
-                    "param_name": param_name.strip(),
-                    "default_value": default_value.strip(),
-                },
+                "parameters": {"module_name": module_name, "rows": param_rows},
             })
 
-        # (d) Instance → INSTANTIATES 엣지 생성
+        # (d) Instance → INSTANTIATES 엣지 — UNWIND 배치
+        inst_rows = []
         for inst_entry in metadata.get("instance_list", []):
             # inst_entry 형식: "instance_name: module_type" (예: "u_phy: UCIE_PHY")
             if ": " in inst_entry:
                 _inst_name, inst_module_type = inst_entry.split(": ", 1)
             else:
                 continue
+            inst_rows.append({
+                "target_module": inst_module_type.strip(),
+                "instance_name": _inst_name.strip(),
+            })
+        if inst_rows:
             queries.append({
                 "query": (
                     "MERGE (m:Module {name: $module_name}) "
-                    "MERGE (t:Module {name: $target_module}) "
-                    "MERGE (m)-[:INSTANTIATES {instance_name: $instance_name}]->(t)"
+                    "WITH m UNWIND $rows AS row "
+                    "MERGE (t:Module {name: row.target_module}) "
+                    "MERGE (m)-[:INSTANTIATES {instance_name: row.instance_name}]->(t)"
                 ),
-                "parameters": {
-                    "module_name": module_name,
-                    "target_module": inst_module_type.strip(),
-                    "instance_name": _inst_name.strip(),
-                },
+                "parameters": {"module_name": module_name, "rows": inst_rows},
             })
 
-        # 배치 실행 — 개별 쿼리 실패 시 나머지 계속 처리
-        success_count = 0
-        fail_count = 0
-        for q in queries:
-            try:
-                resp = requests.post(
-                    neptune_url,
-                    auth=auth,
-                    json=q,
-                    timeout=10,
-                )
-                resp.raise_for_status()
-                success_count += 1
-            except Exception as qe:
-                fail_count += 1
-                logger.warning(json.dumps({
-                    "event": "neptune_query_error",
-                    "query": q.get("query", "")[:100],
-                    "error": str(qe),
-                }))
+        # 배치 실행 — Session 재사용 + fast-fail
+        success_count, fail_count = _execute_neptune_queries(
+            queries, "module_load", module_name
+        )
 
         logger.info(json.dumps({
             "event": "neptune_load_complete",
@@ -1833,24 +2004,11 @@ def _load_port_bindings_to_neptune(bindings: list, module_name: str):
         return
 
     try:
-        import requests
-        from requests_aws4auth import AWS4Auth
-
-        session = boto3.Session()
-        credentials = session.get_credentials().get_frozen_credentials()
-        region = session.region_name or "ap-northeast-2"
-        auth = AWS4Auth(
-            credentials.access_key,
-            credentials.secret_key,
-            region,
-            "neptune-db",
-            session_token=credentials.token,
-        )
-
-        neptune_url = f"https://{NEPTUNE_ENDPOINT}:8182/openCypher"
-
-        # openCypher 쿼리 배치 구성
-        queries = []
+        # 행(row) 수집 — UNWIND로 묶어 Neptune 왕복 최소화.
+        # (모듈당 수백 개 개별 쿼리를 최대 3개로 축소: Port nodes / Signal nodes / CONNECTS_TO edges)
+        port_rows = []      # Port 노드용
+        signal_rows = []    # Signal 노드용 (대표 + constituent 포함)
+        edge_rows = []      # CONNECTS_TO 엣지용 (대표 + constituent 포함)
 
         for binding in bindings:
             instance_name = binding.get("instance_name", "")
@@ -1870,121 +2028,100 @@ def _load_port_bindings_to_neptune(bindings: list, module_name: str):
 
             # Port 노드 ID: {instance_name}.{port_name}
             port_node_id = f"{instance_name}.{port_name}"
+            width = bit_range if bit_range else ""
 
-            # (a) Port 노드 생성/MERGE (Req 31.2, 31.8)
-            queries.append({
-                "query": (
-                    "MERGE (p:Port {name: $port_node_id}) "
-                    "SET p.instance_name = $instance_name, "
-                    "p.module_type = $module_type, "
-                    "p.port_name = $port_name, "
-                    "p.direction = $direction, "
-                    "p.width = $width"
-                ),
-                "parameters": {
-                    "port_node_id": port_node_id,
-                    "instance_name": instance_name,
-                    "module_type": module_type,
-                    "port_name": port_name,
-                    "direction": "unknown",
-                    "width": bit_range if bit_range else "",
-                },
+            # (a) Port 노드 (Req 31.2, 31.8)
+            port_rows.append({
+                "port_node_id": port_node_id,
+                "instance_name": instance_name,
+                "module_type": module_type,
+                "port_name": port_name,
+                "direction": "unknown",
+                "width": width,
             })
 
-            # (b) Signal 노드 생성/MERGE (Req 31.3)
-            queries.append({
-                "query": (
-                    "MERGE (s:Signal {name: $signal_name, scope: $scope}) "
-                    "SET s.width = $width"
-                ),
-                "parameters": {
-                    "signal_name": signal_expr,
-                    "scope": module_name,
-                    "width": bit_range if bit_range else "",
-                },
+            # (b) 대표 Signal 노드 (Req 31.3)
+            signal_rows.append({
+                "signal_name": signal_expr,
+                "scope": module_name,
+                "width": width,
             })
 
-            # (c) CONNECTS_TO 엣지 생성: Port → Signal (Req 31.1, 31.4)
-            queries.append({
-                "query": (
-                    "MATCH (p:Port {name: $port_node_id}) "
-                    "MATCH (s:Signal {name: $signal_name, scope: $scope}) "
-                    "MERGE (p)-[r:CONNECTS_TO]->(s) "
-                    "SET r.bit_range = $bit_range, "
-                    "r.source_file = $source_file, "
-                    "r.line_number = $line_number, "
-                    "r.is_concatenation = $is_concatenation"
-                ),
-                "parameters": {
-                    "port_node_id": port_node_id,
-                    "signal_name": signal_expr,
-                    "scope": module_name,
-                    "bit_range": bit_range if bit_range else "",
-                    "source_file": source_file,
-                    "line_number": line_number,
-                    "is_concatenation": is_concatenation,
-                },
+            # (c) 대표 CONNECTS_TO 엣지 (Req 31.1, 31.4)
+            edge_rows.append({
+                "port_node_id": port_node_id,
+                "signal_name": signal_expr,
+                "scope": module_name,
+                "bit_range": width,
+                "source_file": source_file,
+                "line_number": line_number,
+                "is_concatenation": is_concatenation,
+                "is_constituent": False,
             })
 
-            # (d) Concatenation 바인딩: constituent_signals 보조 엣지 (Req 31.5)
+            # (d) Concatenation 바인딩: constituent_signals 보조 노드/엣지 (Req 31.5)
             if is_concatenation and constituent_signals:
                 for constituent in constituent_signals:
-                    # 보조 Signal 노드 생성/MERGE
-                    queries.append({
-                        "query": (
-                            "MERGE (s:Signal {name: $signal_name, scope: $scope}) "
-                            "SET s.width = $width"
-                        ),
-                        "parameters": {
-                            "signal_name": constituent,
-                            "scope": module_name,
-                            "width": "",
-                        },
+                    signal_rows.append({
+                        "signal_name": constituent,
+                        "scope": module_name,
+                        "width": "",
                     })
-                    # 보조 CONNECTS_TO 엣지 (is_constituent=true)
-                    queries.append({
-                        "query": (
-                            "MATCH (p:Port {name: $port_node_id}) "
-                            "MATCH (s:Signal {name: $signal_name, scope: $scope}) "
-                            "MERGE (p)-[r:CONNECTS_TO]->(s) "
-                            "SET r.bit_range = $bit_range, "
-                            "r.source_file = $source_file, "
-                            "r.line_number = $line_number, "
-                            "r.is_concatenation = $is_concatenation, "
-                            "r.is_constituent = $is_constituent"
-                        ),
-                        "parameters": {
-                            "port_node_id": port_node_id,
-                            "signal_name": constituent,
-                            "scope": module_name,
-                            "bit_range": "",
-                            "source_file": source_file,
-                            "line_number": line_number,
-                            "is_concatenation": True,
-                            "is_constituent": True,
-                        },
+                    edge_rows.append({
+                        "port_node_id": port_node_id,
+                        "signal_name": constituent,
+                        "scope": module_name,
+                        "bit_range": "",
+                        "source_file": source_file,
+                        "line_number": line_number,
+                        "is_concatenation": True,
+                        "is_constituent": True,
                     })
 
-        # 배치 실행 — 개별 쿼리 실패 시 나머지 계속 처리
-        success_count = 0
-        fail_count = 0
-        for q in queries:
-            try:
-                resp = requests.post(
-                    neptune_url,
-                    auth=auth,
-                    json=q,
-                    timeout=10,
-                )
-                resp.raise_for_status()
-                success_count += 1
-            except Exception as qe:
-                fail_count += 1
-                logger.warning(json.dumps({
-                    "event": "neptune_port_binding_query_error",
-                    "query": q.get("query", "")[:100],
-                    "error": str(qe),
-                }))
+        # UNWIND 배치 쿼리 구성
+        queries = []
+        if port_rows:
+            queries.append({
+                "query": (
+                    "UNWIND $rows AS row "
+                    "MERGE (p:Port {name: row.port_node_id}) "
+                    "SET p.instance_name = row.instance_name, "
+                    "p.module_type = row.module_type, "
+                    "p.port_name = row.port_name, "
+                    "p.direction = row.direction, "
+                    "p.width = row.width"
+                ),
+                "parameters": {"rows": port_rows},
+            })
+        if signal_rows:
+            queries.append({
+                "query": (
+                    "UNWIND $rows AS row "
+                    "MERGE (s:Signal {name: row.signal_name, scope: row.scope}) "
+                    "SET s.width = row.width"
+                ),
+                "parameters": {"rows": signal_rows},
+            })
+        if edge_rows:
+            queries.append({
+                "query": (
+                    "UNWIND $rows AS row "
+                    "MATCH (p:Port {name: row.port_node_id}) "
+                    "MATCH (s:Signal {name: row.signal_name, scope: row.scope}) "
+                    "MERGE (p)-[r:CONNECTS_TO]->(s) "
+                    "SET r.bit_range = row.bit_range, "
+                    "r.source_file = row.source_file, "
+                    "r.line_number = row.line_number, "
+                    "r.is_concatenation = row.is_concatenation, "
+                    "r.is_constituent = row.is_constituent"
+                ),
+                "parameters": {"rows": edge_rows},
+            })
+
+        # 배치 실행 — Session 재사용 + fast-fail
+        success_count, fail_count = _execute_neptune_queries(
+            queries, "port_binding_load", module_name
+        )
 
         logger.info(json.dumps({
             "event": "neptune_port_bindings_load_complete",

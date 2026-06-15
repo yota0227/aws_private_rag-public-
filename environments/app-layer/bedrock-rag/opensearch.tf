@@ -87,6 +87,13 @@ output "opensearch_security_group_id" {
 
 # ---------------------------------------------------------------------------
 # RTL OpenSearch Index 데이터 액세스 정책 (Phase 1 - Requirements 3.1, 3.5, 3.6)
+#
+# [Req 19.8 — DECOMMISSION 대상 (게이트)] 본 정책은 RTL 전용 AOSS 인덱스
+# `rtl-knowledge-base-index`에 대한 write(rtl_parser_lambda)·read(lambda/bedrock) 권한이다.
+# v9.5에서 RTL은 Qdrant로 단일화되어 이 인덱스/정책은 더 이상 사용되지 않는다.
+# ⚠️ 삭제는 Task 30(Qdrant 단독 동작 검증) 통과 후에만 수행한다 (검증 전 삭제 금지, 롤백 보존).
+# Bedrock KB(bos-ai-vectors 컬렉션 자체)와 document-processor의 "bos-ai-documents" 인덱스는
+# 별개이며 유지 대상이다 — 본 정책만 제거하면 되고 컬렉션은 건드리지 않는다.
 # ---------------------------------------------------------------------------
 
 resource "aws_opensearchserverless_access_policy" "rtl_index" {
@@ -102,7 +109,7 @@ resource "aws_opensearchserverless_access_policy" "rtl_index" {
         {
           ResourceType = "index"
           Resource     = ["index/bos-ai-vectors/rtl-knowledge-base-index"]
-          Permission   = [
+          Permission = [
             "aoss:CreateIndex",
             "aoss:WriteDocument",
             "aoss:UpdateIndex",
@@ -118,7 +125,7 @@ resource "aws_opensearchserverless_access_policy" "rtl_index" {
         {
           ResourceType = "index"
           Resource     = ["index/bos-ai-vectors/rtl-knowledge-base-index"]
-          Permission   = [
+          Permission = [
             "aoss:ReadDocument",
             "aoss:DescribeIndex",
           ]

@@ -106,3 +106,8 @@ __pycache__/
 # Lambda deployment packages (built locally)
 *-deployment-package.zip
 lambda_current.zip
+
+# Session scratch/temp files (do NOT commit — may contain secrets: SSM output, env dumps, b64 patches)
+.tmp_*
+lambda_env_*.json
+plan_out.txt

@@ -102,7 +102,7 @@ endmodule
 
     @patch('handler.s3_client')
     @patch('handler._generate_embedding', return_value=[0.1] * 1024)
-    @patch('handler._index_to_opensearch')
+    @patch('handler._index_to_qdrant')
     @patch('handler._load_to_neptune')
     @patch('handler._record_parse_event')
     @patch('handler._get_cloudwatch_client', return_value=None)
@@ -131,7 +131,7 @@ endmodule
 
     @patch('handler.s3_client')
     @patch('handler._generate_embedding', return_value=[0.1] * 1024)
-    @patch('handler._index_to_opensearch')
+    @patch('handler._index_to_qdrant')
     @patch('handler._load_to_neptune')
     @patch('handler._record_parse_event')
     @patch('handler._get_cloudwatch_client', return_value=None)
@@ -166,7 +166,7 @@ class TestStructuredLogging:
 
     @patch('handler.s3_client')
     @patch('handler._generate_embedding', return_value=[0.1] * 1024)
-    @patch('handler._index_to_opensearch')
+    @patch('handler._index_to_qdrant')
     @patch('handler._load_to_neptune')
     @patch('handler._record_parse_event')
     @patch('handler._get_cloudwatch_client', return_value=None)
@@ -217,7 +217,7 @@ endmodule
 
     @patch('handler.s3_client')
     @patch('handler._generate_embedding', return_value=[0.1] * 1024)
-    @patch('handler._index_to_opensearch')
+    @patch('handler._index_to_qdrant')
     @patch('handler._load_to_neptune')
     @patch('handler._record_parse_event')
     @patch('handler._get_cloudwatch_client', return_value=None)
@@ -434,7 +434,7 @@ class TestHandlerIntegrationWiring:
 
     @patch('handler.s3_client')
     @patch('handler._generate_embedding', return_value=[0.1] * 1024)
-    @patch('handler._index_to_opensearch')
+    @patch('handler._index_to_qdrant')
     @patch('handler._load_to_neptune')
     @patch('handler._record_parse_event')
     @patch('handler._get_cloudwatch_client', return_value=None)
@@ -474,12 +474,12 @@ endmodule
 
         handler._process_rtl_file("test-bucket", "rtl-sources/ordered_test.sv")
 
-        # Verify _index_to_opensearch was called (at least for the module parse)
+        # Verify _index_to_qdrant was called (at least for the module parse)
         assert mock_index.call_count >= 1
 
     @patch('handler.s3_client')
     @patch('handler._generate_embedding', return_value=[0.1] * 1024)
-    @patch('handler._index_to_opensearch')
+    @patch('handler._index_to_qdrant')
     @patch('handler._load_to_neptune')
     @patch('handler._record_parse_event')
     @patch('handler._get_cloudwatch_client', return_value=None)

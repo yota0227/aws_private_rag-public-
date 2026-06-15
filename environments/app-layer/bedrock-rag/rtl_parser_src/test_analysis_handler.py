@@ -24,8 +24,8 @@ with patch("boto3.client"), patch("boto3.resource"):
 def _reset_env(monkeypatch):
     """Set minimal env vars for all tests."""
     monkeypatch.setenv("RTL_S3_BUCKET", "test-bucket")
-    monkeypatch.setenv("RTL_OPENSEARCH_ENDPOINT", "https://test-os.aoss.amazonaws.com")
-    monkeypatch.setenv("RTL_OPENSEARCH_INDEX", "test-index")
+    monkeypatch.setenv("QDRANT_ENDPOINT", "http://test-qdrant:6333")
+    monkeypatch.setenv("QDRANT_COLLECTION", "test-rtl-kb")
     monkeypatch.setenv("BEDROCK_REGION", "us-east-1")
     monkeypatch.setenv("DYNAMODB_EXTRACTION_TABLE", "test-extraction-tasks")
 
@@ -145,7 +145,7 @@ class TestHierarchyHandler:
     """handle_hierarchy_extraction with mocked OpenSearch/S3."""
 
     @patch.object(ah, "_update_dynamodb_status")
-    @patch.object(ah, "_opensearch_scroll_query", return_value=[])
+    @patch.object(ah, "_scroll_query", return_value=[])
     def test_empty_modules_returns_zero(self, mock_query, mock_status):
         event = {"pipeline_id": "tt_20260221"}
         result = ah.handle_hierarchy_extraction(event)
@@ -155,7 +155,7 @@ class TestHierarchyHandler:
     @patch.object(ah, "_update_dynamodb_status")
     @patch.object(ah, "_index_document", return_value=True)
     @patch.object(ah, "s3_client")
-    @patch.object(ah, "_opensearch_scroll_query")
+    @patch.object(ah, "_scroll_query")
     def test_builds_hierarchy_from_modules(self, mock_query, mock_s3,
                                            mock_index, mock_status):
         mock_query.return_value = [
@@ -183,7 +183,7 @@ class TestTopicHandler:
     """handle_topic_classification with mocked dependencies."""
 
     @patch.object(ah, "_update_dynamodb_status")
-    @patch.object(ah, "_opensearch_scroll_query", return_value=[])
+    @patch.object(ah, "_scroll_query", return_value=[])
     def test_empty_docs_returns_zero(self, mock_query, mock_status):
         event = {"pipeline_id": "tt_20260221"}
         result = ah.handle_topic_classification(event)
@@ -193,7 +193,7 @@ class TestTopicHandler:
     @patch.object(ah, "_update_dynamodb_status")
     @patch.object(ah, "_update_document", return_value=True)
     @patch.object(ah, "_index_document", return_value=True)
-    @patch.object(ah, "_opensearch_scroll_query")
+    @patch.object(ah, "_scroll_query")
     def test_classifies_noc_module(self, mock_query, mock_index,
                                    mock_update, mock_status):
         mock_query.return_value = [
@@ -252,7 +252,7 @@ class TestNewStageDispatch:
 class TestClaimGenerationHandler:
     @patch.object(ah, "_update_dynamodb_status")
     @patch.object(ah, "_index_document", return_value=True)
-    @patch.object(ah, "_opensearch_scroll_query")
+    @patch.object(ah, "_scroll_query")
     @patch("analysis_handler.generate_claims")
     def test_generates_and_indexes_claims(self, mock_gen, mock_query,
                                           mock_index, mock_status):
@@ -275,7 +275,7 @@ class TestClaimGenerationHandler:
         mock_index.assert_called()
 
     @patch.object(ah, "_update_dynamodb_status")
-    @patch.object(ah, "_opensearch_scroll_query", return_value=[])
+    @patch.object(ah, "_scroll_query", return_value=[])
     def test_no_modules_returns_zero_claims(self, mock_query, mock_status):
         event = {"pipeline_id": "tt_20260221"}
         result = ah.handle_claim_generation(event)
@@ -291,7 +291,7 @@ class TestHddGenerationHandler:
     @patch.object(ah, "_update_dynamodb_status")
     @patch.object(ah, "_index_document", return_value=True)
     @patch.object(ah, "s3_client")
-    @patch.object(ah, "_opensearch_scroll_query")
+    @patch.object(ah, "_scroll_query")
     @patch("analysis_handler.generate_hdd_section")
     def test_generates_and_stores_hdd(self, mock_gen, mock_query, mock_s3,
                                       mock_index, mock_status):
@@ -328,7 +328,7 @@ class TestHddGenerationHandler:
 class TestVariantDeltaHandler:
     @patch.object(ah, "_update_dynamodb_status")
     @patch.object(ah, "_index_document", return_value=True)
-    @patch.object(ah, "_opensearch_scroll_query")
+    @patch.object(ah, "_scroll_query")
     def test_computes_delta(self, mock_query, mock_index, mock_status):
         mock_query.side_effect = lambda pid, atype, **kwargs: {
             ("tt_20260101", "module_parse"): [
