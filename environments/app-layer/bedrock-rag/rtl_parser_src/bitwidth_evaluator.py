@@ -75,6 +75,8 @@ class SafeIntEvaluator(ast.NodeVisitor):
         ast.Mult: lambda a, b: a * b,
         ast.Div: lambda a, b: a // b,       # integer division
         ast.FloorDiv: lambda a, b: a // b,   # also accept //
+        ast.LShift: lambda a, b: a << b,     # bit shift (e.g., 1<<N width)
+        ast.RShift: lambda a, b: a >> b,
     }
 
     def visit_BinOp(self, node: ast.BinOp) -> int:

@@ -111,3 +111,6 @@ lambda_current.zip
 .tmp_*
 lambda_env_*.json
 plan_out.txt
+
+# DLQ reprocess artifacts (generated)
+dlq_reprocess_keys.txt

@@ -909,7 +909,7 @@ def _process_rtl_file(bucket: str, key: str):
 
     try:
         response = s3_client.get_object(Bucket=bucket, Key=key)
-        rtl_content = response["Body"].read().decode("utf-8")
+        rtl_content = response["Body"].read().decode("utf-8", errors="replace")
     except Exception as e:
         _record_error(key, f"S3 GetObject 실패: {e}")
         raise
@@ -1123,8 +1123,19 @@ def _process_rtl_file(bucket: str, key: str):
             if bw_match:
                 high_expr = bw_match.group(1)
                 low_expr = bw_match.group(2)
-                high_val = evaluate_bitwidth(high_expr, param_context)
-                low_val = evaluate_bitwidth(low_expr, param_context)
+                # bitwidth 해석은 best-effort 보강 기능 — 미지원 식/예외가 발생해도
+                # 해당 포트만 건너뛰고 파일 파싱은 계속한다 (파일 전체 실패 방지).
+                try:
+                    high_val = evaluate_bitwidth(high_expr, param_context)
+                    low_val = evaluate_bitwidth(low_expr, param_context)
+                except Exception as bw_err:
+                    logger.debug(json.dumps({
+                        "event": "bitwidth_eval_skip",
+                        "module_name": module_name,
+                        "expr": f"{high_expr}:{low_expr}"[:80],
+                        "error": str(bw_err)[:200],
+                    }))
+                    continue
                 if isinstance(high_val, int) and isinstance(low_val, int):
                     resolved = port_entry[:bw_match.start()] + f"[{high_val}:{low_val}]" + port_entry[bw_match.end():]
                     port_list[i] = resolved
