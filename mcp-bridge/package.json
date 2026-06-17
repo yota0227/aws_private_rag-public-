@@ -4,11 +4,14 @@
   "description": "MCP SSE Bridge - Obot에서 Seoul Private RAG API Gateway를 MCP tool로 사용",
   "type": "commonjs",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test"
   },
   "dependencies": {
-    "@aws-sdk/client-quicksight": "^3.0.0",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "express": "^4.21.0"
+  },
+  "devDependencies": {
+    "fast-check": "^3.23.1"
   }
 }

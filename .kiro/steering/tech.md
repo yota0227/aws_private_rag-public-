@@ -10,7 +10,7 @@
 ## AWS Services
 
 - Bedrock (Claude + Titan Embeddings) — AI model and embedding generation
-- OpenSearch Serverless — vector database
+- Qdrant — vector database (RTL/SoC 설계 데이터 벡터 인덱스)
 - Lambda (Python 3.12) — document processing
 - API Gateway (Private REST) — RAG API entry point
 - S3 with cross-region replication (Seoul → Virginia)
@@ -94,8 +94,9 @@ Lambda 코드 변경 후 배포 시 반드시 확인:
    - `terraform plan -target="aws_lambda_function.rtl_parser"`
    - `terraform apply -target="aws_lambda_function.rtl_parser" -auto-approve`
 4. **Lambda 환경변수 확인** (빠뜨리면 인덱싱 안 됨):
-   - `RTL_OPENSEARCH_ENDPOINT` — OpenSearch Serverless 엔드포인트
-   - `RTL_OPENSEARCH_INDEX` — 인덱스명 (rtl-knowledge-base-index)
+   - `QDRANT_ENDPOINT` — Qdrant 엔드포인트
+   - `QDRANT_COLLECTION` — 컬렉션명 (rtl-knowledge-base)
+   - `QDRANT_API_KEY_SECRET_ARN` — Qdrant API 키 (Secrets Manager ARN)
    - `CLAIM_TABLE_NAME` — DynamoDB 테이블 (bos-ai-claim-db-prod)
    - `BEDROCK_REGION` — Bedrock 리전 (us-east-1)
    - `NEPTUNE_ENDPOINT` — Neptune 엔드포인트 (선택)
@@ -103,7 +104,7 @@ Lambda 코드 변경 후 배포 시 반드시 확인:
    - `py scripts/reindex_all_rtl.py --pipeline-id tt_20260221 --batch-size 50`
    - 9465개 파일, 약 4분 소요 (Lambda invoke), 실제 파싱 완료까지 10~20분
 6. **인덱싱 완료 확인**:
-   - Lambda 로그: `"RTL_OPENSEARCH_ENDPOINT not set, skipping indexing"` 경고 없어야 함
+   - Lambda 로그: `"QDRANT_ENDPOINT not set"` 경고 없어야 함
    - MCP `search_rtl`로 검색 테스트
 7. **산출물 생성**: MCP `generate_hdd_section` 또는 API 호출
 

@@ -2,9 +2,11 @@
   "mcpServers": {
     "bos-ai-rag": {
       "url": "https://mcp.bossemi-ai.com/mcp",
-      "autoApprove": [
-        "search_rtl"
-      ]
+      "autoApprove": ["search_rtl"]
+    },
+    "bos-ai-rag-dev": {
+      "url": "http://localhost:3101/mcp",
+      "autoApprove": ["search_rtl"]
     }
   }
 }
