@@ -43,6 +43,17 @@ resource "aws_security_group" "rtl_parser_lambda" {
     prefix_list_ids = ["pl-78a54011"]
   }
 
+  # Outbound: HTTPS to DynamoDB via DynamoDB Gateway Endpoint
+  # (claim_db / extraction_tasks write — Gateway Endpoint는 prefix list 경유이므로
+  #  VPC CIDR egress로 커버되지 않아 별도 규칙 필수)
+  egress {
+    description     = "HTTPS to DynamoDB via Gateway Endpoint"
+    from_port       = 443
+    to_port         = 443
+    protocol        = "tcp"
+    prefix_list_ids = ["pl-48a54021"]
+  }
+
   # Outbound: Qdrant REST API to Virginia Backend VPC via VPC Peering
   egress {
     description = "Qdrant REST API to Virginia Backend VPC via VPC Peering"
@@ -368,7 +379,7 @@ resource "aws_lambda_function" "rtl_parser" {
   source_code_hash = filebase64sha256("rtl-parser-deployment-package.zip")
   runtime          = "python3.12"
   memory_size      = 2048
-  timeout          = 300
+  timeout          = 600
 
   # Neptune(단일 인스턴스) 과부하 방지를 위해 동시 실행 수 제한.
   # 재인덱싱 시 수백 개 동시 invoke가 Neptune을 압도하면 openCypher read timeout 발생.
