@@ -26,6 +26,7 @@ docs/
 | 4 | `.kiro/specs/4_multi-file-upload/` | `docs/4_multi-file-upload/` | (rag-upload-guide 참조) |
 | 5 | `.kiro/specs/5_rag-search-optimization/` | `docs/5_rag-search-optimization/` | (구현 중) |
 | QS | `.kiro/specs/quicksight-private-integration/` | `docs/8_quicksight-private-integration/` | quicksight-guide, quick-suite-adoption-plan |
+| MCP | `.kiro/specs/mcp-tool-optimization/` | `docs/Phase03_rag-application/02_mcp-bridge/` | mcp-admin-guide |
 | E-RAG | `.kiro/specs/enhanced-rag-optimization/` | `docs/enhanced-rag-optimization/` | rtl-upload-guide |
 | - | - | `docs/common/` | naming-conventions, tagging-strategy, emergency-contacts |
 

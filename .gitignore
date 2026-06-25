@@ -112,5 +112,9 @@ lambda_current.zip
 lambda_env_*.json
 plan_out.txt
 
+# MCP Bridge
+mcp-bridge/node_modules/
+mcp-bridge/package-lock.json
+
 # DLQ reprocess artifacts (generated)
 dlq_reprocess_keys.txt
