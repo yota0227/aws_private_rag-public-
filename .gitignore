@@ -118,3 +118,35 @@ mcp-bridge/package-lock.json
 
 # DLQ reprocess artifacts (generated)
 dlq_reprocess_keys.txt
+
+# Root-level debug/scratch outputs (lambda logs, search outputs, test events)
+lambda_*.txt
+lambda_*.json
+search_*.json
+test_event*.json
+test_response*.json
+err*.txt
+gpio_databook.txt
+dlq_timeout_keys.txt
+dw_apb_gpio_rag_embedding_strategy.md
+
+# Root-level binary/large docs (uploaded to S3, not repo)
+*.pdf
+
+# Terraform plan outputs (may contain infra details)
+plan_*.txt
+environments/**/apply-*.sh
+
+# Scratch source dirs (local dev, not deployable)
+src/
+sample/
+
+# pyproject.toml (local dev tooling, not part of Lambda)
+pyproject.toml
+
+# spec_parser tests (local, not production)
+tests/spec_parser/
+
+# mcp-bridge-toolguide node deps
+mcp-bridge-toolguide/node_modules/
+mcp-bridge-toolguide/package-lock.json
