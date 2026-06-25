@@ -30,6 +30,10 @@ resource "aws_iam_role" "mcp_server" {
 
 # =============================================================================
 # IAM Policy - Lambda InvokeFunction (Requirement 12.1)
+#
+# 두 브리지가 각각 다른 Lambda를 직접 invoke한다 (권한 분리):
+#   - RTL/NPU 브리지(:3000)      -> lambda-document-processor-seoul-prod
+#   - Tool Guide 브리지(:3001)   -> lambda-tool-guide-parser-seoul-dev
 # =============================================================================
 
 resource "aws_iam_role_policy" "mcp_lambda_invoke" {
@@ -40,11 +44,20 @@ resource "aws_iam_role_policy" "mcp_lambda_invoke" {
     Version = "2012-10-17"
     Statement = [
       {
+        Sid    = "RTLDocumentProcessorInvoke"
         Effect = "Allow"
         Action = [
           "lambda:InvokeFunction"
         ]
         Resource = "arn:aws:lambda:ap-northeast-2:${data.aws_caller_identity.current.account_id}:function:lambda-document-processor-seoul-prod"
+      },
+      {
+        Sid    = "ToolGuideParserInvoke"
+        Effect = "Allow"
+        Action = [
+          "lambda:InvokeFunction"
+        ]
+        Resource = "arn:aws:lambda:ap-northeast-2:${data.aws_caller_identity.current.account_id}:function:lambda-tool-guide-parser-seoul-dev"
       }
     ]
   })
@@ -191,6 +204,18 @@ resource "aws_security_group_rule" "mcp_inbound_frontend_vpc" {
   cidr_blocks       = ["10.10.0.0/16"]
   security_group_id = aws_security_group.mcp_server.id
   description       = "MCP Server from Frontend VPC (API Gateway/Lambda)"
+}
+
+# Inbound: TCP 3001 from Frontend VPC — Tool Guide bridge (separate from RTL :3000)
+resource "aws_security_group_rule" "mcp_inbound_toolguide" {
+  provider          = aws.seoul
+  type              = "ingress"
+  from_port         = 3001
+  to_port           = 3001
+  protocol          = "tcp"
+  cidr_blocks       = ["10.10.0.0/16"]
+  security_group_id = aws_security_group.mcp_server.id
+  description       = "Tool Guide MCP bridge from Frontend VPC (API Gateway /toolguide)"
 }
 
 # Outbound: TCP 443 to 0.0.0.0/0 (Lambda VPC Endpoint, Secrets Manager) — Req 14.2

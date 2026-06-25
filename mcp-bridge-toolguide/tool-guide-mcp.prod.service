@@ -1,0 +1,19 @@
+[Unit]
+Description=BOS-AI Tool Guide MCP Bridge (port 3001, prod, separate from RTL :3000)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/tool-guide-mcp
+Environment=PORT=3001
+Environment=AWS_REGION=ap-northeast-2
+Environment=TOOL_GUIDE_LAMBDA=lambda-tool-guide-parser-seoul-dev
+ExecStart=/usr/local/bin/node /opt/tool-guide-mcp/server.js
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

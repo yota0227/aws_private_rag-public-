@@ -1,0 +1,15 @@
+{
+  "name": "bos-ai-toolguide-mcp-bridge",
+  "version": "1.0.0",
+  "description": "Tool Guide RAG MCP Bridge (port 3101) - NPU/RTL RAG(:3100)와 권한 분리된 독립 MCP 서비스. Lambda(tool-guide-parser)를 직접 invoke해 Qdrant tool-guide-knowledge-base를 검색.",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@aws-sdk/client-lambda": "^3.0.0",
+    "express": "^4.21.0",
+    "zod": "^3.23.8"
+  }
+}

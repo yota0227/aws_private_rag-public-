@@ -1,0 +1,17 @@
+[Unit]
+Description=BOS-AI Tool Guide RAG MCP Bridge (port 3101, separate from RTL RAG :3100)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/bos-ai-toolguide-bridge
+ExecStart=/root/.nvm/versions/node/v22.16.0/bin/node server.js
+Restart=always
+RestartSec=5
+Environment=PORT=3101
+Environment=AWS_REGION=ap-northeast-2
+Environment=TOOL_GUIDE_LAMBDA=lambda-tool-guide-parser-seoul-dev
+
+[Install]
+WantedBy=multi-user.target

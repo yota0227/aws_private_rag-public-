@@ -136,6 +136,19 @@ resource "aws_security_group_rule" "nginx_outbound_apigw" {
   description       = "HTTPS to API Gateway VPC Endpoint (10.10.1.21/10.10.2.75)"
 }
 
+# Outbound to Tool Guide MCP bridge on MCP EC2 (:3001 direct proxy)
+# 참고: RTL용 :3000 egress는 과거 수동(콘솔)으로 추가된 drift라 TF state에 없음.
+resource "aws_security_group_rule" "nginx_outbound_toolguide" {
+  provider          = aws.seoul
+  type              = "egress"
+  from_port         = 3001
+  to_port           = 3001
+  protocol          = "tcp"
+  cidr_blocks       = ["10.10.0.0/16"]
+  security_group_id = aws_security_group.nginx.id
+  description       = "To Tool Guide MCP bridge on MCP EC2 (10.10.1.10:3001)"
+}
+
 # =============================================================================
 # Launch Template + EC2
 # =============================================================================
