@@ -1,7 +1,11 @@
 {
   "mcpServers": {
     "bos-ai-rag": {
-      "url": "http://192.128.20.241:3100/sse"
+      "type": "http",
+      "url": "http://llm.corp.bos-semi.com/mcp/",
+      "headers": {
+        "x-litellm-api-key": "Bearer sk-DaKf0PPPhu0Ix1A0K8iUEA"
+      }
     }
   }
 }

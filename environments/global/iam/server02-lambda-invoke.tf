@@ -22,7 +22,8 @@ resource "aws_iam_user" "server02_mcp_dev" {
   }
 }
 
-# 최소 권한 정책: lambda-rtl-parser-seoul-dev invoke만 허용
+# 최소 권한 정책: RTL parser + Tool Guide parser Lambda invoke만 허용
+# - RTL 브리지(:3100)와 Tool Guide 브리지(:3101)는 각각 다른 Lambda를 직접 invoke
 resource "aws_iam_user_policy" "server02_mcp_dev_lambda" {
   provider = aws
   name     = "server02-mcp-dev-lambda-invoke"
@@ -39,6 +40,16 @@ resource "aws_iam_user_policy" "server02_mcp_dev_lambda" {
         ]
         Resource = [
           "arn:aws:lambda:ap-northeast-2:533335672315:function:lambda-rtl-parser-seoul-dev"
+        ]
+      },
+      {
+        Sid    = "ToolGuideParserLambdaInvoke"
+        Effect = "Allow"
+        Action = [
+          "lambda:InvokeFunction"
+        ]
+        Resource = [
+          "arn:aws:lambda:ap-northeast-2:533335672315:function:lambda-tool-guide-parser-seoul-dev"
         ]
       }
     ]

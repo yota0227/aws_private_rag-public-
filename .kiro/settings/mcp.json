@@ -4,9 +4,9 @@
       "url": "https://mcp.bossemi-ai.com/mcp",
       "autoApprove": ["search_rtl"]
     },
-    "bos-ai-rag-dev": {
+    "bos-ai-tool-guide-dev": {
       "url": "http://localhost:3101/mcp",
-      "autoApprove": ["search_rtl"]
+      "autoApprove": ["tool_guide_search"]
     }
   }
 }

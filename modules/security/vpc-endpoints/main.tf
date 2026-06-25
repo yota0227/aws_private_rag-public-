@@ -41,7 +41,8 @@ data "aws_iam_policy_document" "bedrock_runtime_endpoint_policy" {
     ]
 
     resources = [
-      "arn:aws:bedrock:${var.region}::foundation-model/*"
+      "arn:aws:bedrock:*::foundation-model/*",
+      "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:inference-profile/*"
     ]
 
     condition {
