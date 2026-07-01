@@ -6,7 +6,7 @@
     },
     "bos-ai-tool-guide-dev": {
       "url": "http://localhost:3101/mcp",
-      "autoApprove": ["tool_guide_search"]
+      "autoApprove": ["ip_doc_search"]
     }
   }
 }

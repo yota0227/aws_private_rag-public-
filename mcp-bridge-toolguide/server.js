@@ -1,8 +1,10 @@
 /**
- * BOS-AI Tool Guide RAG — MCP Bridge (separate service, port 3101)
+ * BOS-AI IP Document RAG — MCP Bridge (separate service, port 3101)
  *
  * 이 브리지는 NPU/RTL RAG MCP(:3100)와 **완전히 분리된** 독립 MCP 서비스다.
- * 권한 분리(pipeline=tool-guide)를 위해 별도 포트/프로세스/도구 집합으로 운영한다.
+ * 권한 분리(pipeline=ip-doc-rag)를 위해 별도 포트/프로세스/도구 집합으로 운영한다.
+ *
+ * Corpus: IP 레지스터 데이터북, EDA 툴 가이드 등 IP Document (PDF/MD 1,061개, 235k 벡터)
  *
  * 아키텍처:
  *   Kiro/Obot --Streamable HTTP /mcp--> 이 브리지(:3101)
@@ -12,8 +14,8 @@
  *                          (query 임베딩 -> Qdrant tool-guide-knowledge-base 검색)
  *
  * 노출 도구 (RTL MCP와 이름이 겹치지 않음 - R5.2):
- *   - tool_guide_search : 심볼/명령어 검색 (query <= 256자)
- *   - tool_guide_query  : 자연어 질의     (query <= 8192자)
+ *   - ip_doc_search : 심볼/명령어/레지스터 검색 (query <= 256자)
+ *   - ip_doc_query  : 자연어 질의              (query <= 8192자)
  *
  * Spec: .kiro/specs/eda-tool-guide-rag/ (C5 Tool_Guide_MCP, 가정 4)
  */
@@ -83,7 +85,7 @@ function renderResults(query, resp) {
       "\"" + query + "\": " + (resp.message || "검색 결과가 없습니다.") +
       "\n→ 근거가 없으므로 답변은 '근거 없음 — 모름'으로 하라. 추측 금지.";
   }
-  let text = GROUNDING_NOTICE + "Tool Guide 검색 결과 (" + results.length + "건):\n";
+  let text = GROUNDING_NOTICE + "IP Document 검색 결과 (" + results.length + "건):\n";
   results.forEach(function (r, i) {
     text += "\n[" + (i + 1) + "] " + (r.tool_name || "(unknown)") +
             " " + (r.tool_version || "") + " | " + (r.object_type || "");
@@ -98,13 +100,13 @@ function renderResults(query, resp) {
 }
 
 function createMcpServer() {
-  const mcp = new McpServer({ name: "bos-ai-tool-guide-rag", version: "1.0.0" });
+  const mcp = new McpServer({ name: "bos-ai-ip-doc-rag", version: "1.0.0" });
 
   mcp.tool(
-    "tool_guide_search",
-    "[목적] EDA 툴 가이드(Document RAG)에서 명령어/옵션/심볼을 검색합니다. " +
+    "ip_doc_search",
+    "[목적] IP Document RAG(Document RAG)에서 명령어/옵션/심볼/레지스터를 검색합니다. " +
       "RTL/SoC 설계 데이터(search_rtl)나 업로드 문서 일반 질의(rag_query)와 분리된 " +
-      "전용 Tool Guide corpus만 조회합니다. [입력] query(필수, 최대 256자): 명령어/옵션/심볼명. " +
+      "전용 IP Document corpus만 조회합니다. [입력] query(필수, 최대 256자): 명령어/옵션/심볼명. " +
       "tool_name(선택): 툴 필터. tool_version(선택): 버전 필터. " +
       "[예시] query=\"elaborate\", tool_name=\"VCS\" -> VCS의 elaborate 명령 설명/옵션 반환. " +
       "[중요] 반환된 검색 결과(인용 출처)에 명시된 내용만으로 답하라. 결과에 없으면 '모름'이라고 답하고 추측하지 말 것(할루시네이션 0).",
@@ -127,15 +129,15 @@ function createMcpServer() {
         if (resp.error) return { content: [{ type: "text", text: "오류: " + resp.error + " " + (resp.message || "") }], isError: true };
         return { content: [{ type: "text", text: renderResults(q, resp) }] };
       } catch (err) {
-        return { content: [{ type: "text", text: "Tool Guide 검색 실패: " + err.message }], isError: true };
+        return { content: [{ type: "text", text: "IP Document 검색 실패: " + err.message }], isError: true };
       }
     }
   );
 
   mcp.tool(
-    "tool_guide_query",
-    "[목적] EDA 툴 가이드(Document RAG)에 자연어로 질문해 사용법을 근거(출처)와 함께 받습니다. " +
-      "RTL 설계 데이터(search_rtl)와 분리된 전용 Tool Guide corpus만 조회합니다. " +
+    "ip_doc_query",
+    "[목적] IP Document RAG(Document RAG)에 자연어로 질문해 사용법을 근거(출처)와 함께 받습니다. " +
+      "RTL 설계 데이터(search_rtl)와 분리된 전용 IP Document corpus만 조회합니다. " +
       "[입력] query(필수, 최대 8192자): 자연어 질문. tool_name/tool_version(선택): 범위 한정. " +
       "[예시] query=\"VCS에서 design을 elaborate하는 옵션 알려줘\" -> 근거 인용과 함께 답변. " +
       "[중요] 반환된 검색 결과(인용 출처)에 명시된 내용만으로 답하라. 결과에 없으면 '모름'이라고 답하고 추측하지 말 것(할루시네이션 0).",
@@ -158,7 +160,7 @@ function createMcpServer() {
         if (resp.error) return { content: [{ type: "text", text: "오류: " + resp.error + " " + (resp.message || "") }], isError: true };
         return { content: [{ type: "text", text: renderResults(q, resp) }] };
       } catch (err) {
-        return { content: [{ type: "text", text: "Tool Guide 질의 실패: " + err.message }], isError: true };
+        return { content: [{ type: "text", text: "IP Document 질의 실패: " + err.message }], isError: true };
       }
     }
   );
@@ -240,7 +242,7 @@ app.post("/messages", (req, res) => {
 app.get("/health", (req, res) => {
   res.json({
     status: "ok",
-    service: "tool-guide-mcp",
+    service: "ip-doc-rag-mcp",
     lambda: TOOL_GUIDE_LAMBDA,
     streamableSessions: Object.keys(streamableSessions).length,
     sseSessions: Object.keys(sseSessions).length,
@@ -252,7 +254,7 @@ server.keepAliveTimeout = 65000;
 server.headersTimeout = 66000;
 
 server.listen(PORT, () => {
-  console.log("=== BOS-AI Tool Guide RAG MCP Bridge ===");
+  console.log("=== BOS-AI IP Document RAG MCP Bridge ===");
   console.log("  Streamable HTTP: http://localhost:" + PORT + "/mcp");
   console.log("  Health:          http://localhost:" + PORT + "/health");
   console.log("  Lambda:          " + TOOL_GUIDE_LAMBDA);
