@@ -104,11 +104,13 @@ function createMcpServer() {
 
   mcp.tool(
     "ip_doc_search",
-    "[목적] IP Document RAG(Document RAG)에서 명령어/옵션/심볼/레지스터를 검색합니다. " +
-      "RTL/SoC 설계 데이터(search_rtl)나 업로드 문서 일반 질의(rag_query)와 분리된 " +
-      "전용 IP Document corpus만 조회합니다. [입력] query(필수, 최대 256자): 명령어/옵션/심볼명. " +
-      "tool_name(선택): 툴 필터. tool_version(선택): 버전 필터. " +
-      "[예시] query=\"elaborate\", tool_name=\"VCS\" -> VCS의 elaborate 명령 설명/옵션 반환. " +
+    "[목적] IP Document(IP 데이터북·레지스터맵·EDA 툴 가이드)에서 명령어/옵션/심볼/레지스터명을 키워드 검색합니다. " +
+      "[이 도구를 쓸 때] IP/주변장치 레지스터(예: GICD_CHIPR, local_chip_addr), 레지스터 비트필드/오프셋/리셋값, " +
+      "IP 데이터북 용어, EDA 툴 명령/옵션(예: VCS elaborate) — 즉 '문서화된 IP/툴 스펙'을 찾을 때. " +
+      "[다른 도구를 쓸 때] RTL 설계 데이터(모듈명·포트·신호·인스턴스·계층)는 search_rtl을, " +
+      "업로드된 HDD/스펙 PDF 자연어 질의는 rag_query를 쓰세요(이 도구는 IP Document corpus 전용). " +
+      "[입력] query(필수, 최대 256자): 명령어/옵션/심볼/레지스터명. tool_name(선택): 툴/IP 필터. tool_version(선택): 버전 필터. " +
+      "[예시] query=\"local_chip_addr\" -> 해당 레지스터 설명/비트필드 반환. " +
       "[중요] 반환된 검색 결과(인용 출처)에 명시된 내용만으로 답하라. 결과에 없으면 '모름'이라고 답하고 추측하지 말 것(할루시네이션 0).",
     {
       query: z.string().describe("검색어 (명령어/옵션/심볼명, 최대 256자)"),
@@ -136,10 +138,12 @@ function createMcpServer() {
 
   mcp.tool(
     "ip_doc_query",
-    "[목적] IP Document RAG(Document RAG)에 자연어로 질문해 사용법을 근거(출처)와 함께 받습니다. " +
-      "RTL 설계 데이터(search_rtl)와 분리된 전용 IP Document corpus만 조회합니다. " +
+    "[목적] IP Document(IP 데이터북·레지스터맵·EDA 툴 가이드)에 자연어로 질문해 근거(출처) 인용과 함께 답을 받습니다. " +
+      "[이 도구를 쓸 때] IP/주변장치 레지스터의 용도·초기화 시퀀스·비트필드 의미, EDA 툴 사용법 등 " +
+      "'문서화된 IP/툴 스펙'을 자연어로 물을 때 (예: 'GIC720에서 multichip init에 쓰는 주소는?'). " +
+      "[다른 도구를 쓸 때] RTL 설계 데이터(모듈·포트·신호)는 search_rtl, 사내 업로드 HDD/스펙 문서 질의는 rag_query를 쓰세요. " +
       "[입력] query(필수, 최대 8192자): 자연어 질문. tool_name/tool_version(선택): 범위 한정. " +
-      "[예시] query=\"VCS에서 design을 elaborate하는 옵션 알려줘\" -> 근거 인용과 함께 답변. " +
+      "[예시] query=\"local_chip_addr=0일 때 multichip init 주소\" -> 근거 인용과 함께 답변. " +
       "[중요] 반환된 검색 결과(인용 출처)에 명시된 내용만으로 답하라. 결과에 없으면 '모름'이라고 답하고 추측하지 말 것(할루시네이션 0).",
     {
       query: z.string().describe("자연어 질의 (최대 8192자)"),
